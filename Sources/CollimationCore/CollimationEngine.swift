@@ -76,14 +76,23 @@ public final class CollimationEngine: ObservableObject {
     @Published public var frameSequence: UInt64 = 0
     @Published public var fps: Double = 0
 
+    @Published public var serialPorts: [String] = []
+    @Published public var selectedSerialPort = ""
+    @Published public private(set) var isMountConnected = false
+    @Published public private(set) var isMountBusy = false
+    @Published public var mountStatus = "No mount"
+    @Published public private(set) var guideCalibration: GuideCalibration?
+
     public let roiSizes = [256, 512, 1024, 2048, 0]
     public static let minZoom = 0.25
     public static let maxZoom = 8.0
+    public var isMountCalibrated: Bool { guideCalibration?.isValid == true }
 
     nonisolated private let session = CaptureSession()
     nonisolated private let pipeline = FramePipeline()
     nonisolated private let coalescer = FrameCoalescer(label: "collimation.process")
     nonisolated private let fpsMeter = FPSMeter()
+    nonisolated private let mount = EQ6Mount()
     private var device: CameraDevice?
     private var applyingControls = false
     private var lastSentExposure: Int?
@@ -92,10 +101,24 @@ public final class CollimationEngine: ObservableObject {
     private var sensorHeight = CameraDescriptor.simulator.sensorHeight
     nonisolated private let stabilization = StabilizationController()
     private var cancellables = Set<AnyCancellable>()
+    private var mountTask: Task<Void, Never>?
+    private var mountHoldsROI = false
+    private static let serialPortDefaultsKey = "mount.serialPort"
 
     public init() {
         refreshDevices()
         selectedDeviceID = DeviceCatalog.preferredDeviceID(in: devices)
+        refreshSerialPorts()
+        if let saved = UserDefaults.standard.string(forKey: Self.serialPortDefaultsKey), !saved.isEmpty {
+            selectedSerialPort = saved
+            if !serialPorts.contains(saved) {
+                serialPorts.insert(saved, at: 0)
+            }
+        }
+        if let calibration = GuideCalibrationStore.load(), calibration.isValid {
+            guideCalibration = calibration
+            mountStatus = "Calibrated — connect the mount to center"
+        }
         coalescer.handler = { [weak self] frame in
             self?.analyze(frame)
         }
@@ -115,20 +138,19 @@ public final class CollimationEngine: ObservableObject {
             .store(in: &cancellables)
         $autoCenter
             .combineLatest($roiSize)
-            .sink { [weak self] autoCenter, roiSize in
-                guard let self else { return }
-                self.pipeline.configure(
-                    autoCenter: autoCenter,
-                    roiSize: roiSize,
-                    sensorWidth: self.sensorWidth,
-                    sensorHeight: self.sensorHeight
-                )
+            .sink { [weak self] _, _ in
+                self?.applyPipelineConfig()
+            }
+            .store(in: &cancellables)
+        $selectedSerialPort
+            .sink { path in
+                UserDefaults.standard.set(path, forKey: Self.serialPortDefaultsKey)
             }
             .store(in: &cancellables)
     }
 
     deinit {
-        stopCapture()
+        shutdown()
     }
 
     /// Stops grabbing and closes the camera. Safe to call from any thread,
@@ -136,6 +158,12 @@ public final class CollimationEngine: ObservableObject {
     nonisolated public func stopCapture() {
         coalescer.cancel()
         session.stop()
+    }
+
+    /// Stops capture and closes the mount serial port. Call from app termination.
+    nonisolated public func shutdown() {
+        stopCapture()
+        mount.disconnect()
     }
 
     public var selectedDevice: CameraDescriptor? {
@@ -168,12 +196,7 @@ public final class CollimationEngine: ObservableObject {
             exposureMicroseconds = Double(clampedExposure)
             gain = Double(newDevice.controls.gain)
             applyingControls = false
-            pipeline.configure(
-                autoCenter: autoCenter,
-                roiSize: roiSize,
-                sensorWidth: sensorWidth,
-                sensorHeight: sensorHeight
-            )
+            applyPipelineConfig()
             pipeline.reset()
             lastSentExposure = Int(exposureMicroseconds)
             lastSentGain = Int(gain)
@@ -357,6 +380,267 @@ public final class CollimationEngine: ObservableObject {
         case .idle:
             statusText = "Live"
         }
+    }
+
+    public func refreshSerialPorts() {
+        var ports = SerialPortScanner.availablePaths()
+        let saved = UserDefaults.standard.string(forKey: Self.serialPortDefaultsKey) ?? selectedSerialPort
+        if !saved.isEmpty, !ports.contains(saved) {
+            ports.insert(saved, at: 0)
+        }
+        serialPorts = ports
+        if selectedSerialPort.isEmpty {
+            selectedSerialPort = ports.first ?? saved
+        } else if !ports.contains(selectedSerialPort), !saved.isEmpty {
+            selectedSerialPort = saved
+        }
+    }
+
+    public func connectMount() {
+        errorMessage = nil
+        refreshSerialPorts()
+        let path = selectedSerialPort
+        guard !path.isEmpty else {
+            presentError(MountError.noPortSelected)
+            return
+        }
+        guard !isMountBusy else { return }
+        isMountBusy = true
+        mountStatus = "Opening \(URL(fileURLWithPath: path).lastPathComponent)…"
+        let mount = mount
+        Task {
+            do {
+                let name = try await Task.detached {
+                    try mount.connect(path: path)
+                    return mount.protocolName
+                }.value
+                isMountConnected = true
+                isMountBusy = false
+                mountStatus = isMountCalibrated
+                    ? "Connected — \(name), tracking off"
+                    : "Connected — \(name), tracking off. Calibrate before centering."
+            } catch {
+                isMountConnected = false
+                isMountBusy = false
+                mountStatus = "Not connected"
+                presentError(error)
+            }
+        }
+    }
+
+    public func disconnectMount() {
+        mountTask?.cancel()
+        mountTask = nil
+        mount.disconnect()
+        isMountConnected = false
+        isMountBusy = false
+        mountHoldsROI = false
+        applyPipelineConfig()
+        mountStatus = isMountCalibrated ? "Calibrated — mount disconnected" : "No mount"
+    }
+
+    public func calibrateMount() {
+        guard !isMountBusy else { return }
+        mountTask?.cancel()
+        mountTask = Task { await self.runCalibration() }
+    }
+
+    public func centerStar() {
+        guard !isMountBusy else { return }
+        mountTask?.cancel()
+        mountTask = Task { await self.runCentering() }
+    }
+
+    private func runCalibration() async {
+        do {
+            try beginMountWork("Calibrating — measuring east…", holdROI: true)
+            let duration = MountGuide.calibrationPulseMs
+            let beforeEast = try await waitForCentroid()
+            try await sendPulse(.east, milliseconds: duration)
+            let afterEast = try await waitForSettledCentroid()
+            let eastRate = MountGuide.rate(before: beforeEast, after: afterEast, durationMs: Double(duration))
+            if hypot(eastRate.x, eastRate.y) * Double(duration) < MountGuide.minCalibrationMovePixels {
+                throw MountError.calibrationTooSmall("east")
+            }
+
+            mountStatus = "Calibrating — returning from east…"
+            try await sendPulse(.west, milliseconds: duration)
+            _ = try await waitForSettledCentroid()
+
+            mountStatus = "Calibrating — measuring north…"
+            let beforeNorth = try await waitForCentroid()
+            try await sendPulse(.north, milliseconds: duration)
+            let afterNorth = try await waitForSettledCentroid()
+            let northRate = MountGuide.rate(before: beforeNorth, after: afterNorth, durationMs: Double(duration))
+            if hypot(northRate.x, northRate.y) * Double(duration) < MountGuide.minCalibrationMovePixels {
+                throw MountError.calibrationTooSmall("north")
+            }
+
+            mountStatus = "Calibrating — returning from north…"
+            try await sendPulse(.south, milliseconds: duration)
+            _ = try await waitForSettledCentroid()
+
+            let calibration = GuideCalibration(
+                eastRate: eastRate,
+                northRate: northRate,
+                sampleDurationMs: duration
+            )
+            guard calibration.isValid else { throw MountError.calibrationTooSmall("mount axes") }
+            try GuideCalibrationStore.save(calibration)
+            guideCalibration = calibration
+            endMountWork(String(
+                format: "Calibrated — east %.3f px/ms, north %.3f px/ms",
+                hypot(eastRate.x, eastRate.y),
+                hypot(northRate.x, northRate.y)
+            ))
+        } catch is CancellationError {
+            endMountWork("Calibration cancelled")
+        } catch {
+            endMountWork("Calibration failed")
+            presentError(error)
+        }
+    }
+
+    private func runCentering() async {
+        do {
+            guard let calibration = guideCalibration, calibration.isValid else {
+                throw MountError.notCalibrated
+            }
+            try beginMountWork("Centering on sensor…", holdROI: false)
+            var lastError = 0.0
+            for step in 1...MountGuide.maxCenterIterations {
+                try Task.checkCancellation()
+                let centroid = try await waitForCentroid()
+                let target = sensorCenter()
+                let error = centroid - target
+                lastError = MountGuide.errorLength(error)
+                if MountGuide.isCentered(errorPixels: error) {
+                    followStarWithROI()
+                    endMountWork(String(format: "Centered — %.1f px from sensor center", lastError))
+                    return
+                }
+
+                guard let times = calibration.pulses(toMoveStarBy: target - centroid) else {
+                    throw MountError.notCalibrated
+                }
+                let pulses = GuidePulsePlanner.pulses(eastMs: times.eastMs, northMs: times.northMs)
+                if pulses.isEmpty {
+                    followStarWithROI()
+                    endMountWork(String(format: "Centered — %.1f px from sensor center", lastError))
+                    return
+                }
+
+                mountStatus = String(
+                    format: "Centering %d/%d — %.1f px from sensor center",
+                    step,
+                    MountGuide.maxCenterIterations,
+                    lastError
+                )
+                for pulse in pulses {
+                    try Task.checkCancellation()
+                    try await sendPulse(pulse.direction, milliseconds: pulse.milliseconds)
+                }
+                _ = try await waitForSettledCentroid()
+                followStarWithROI()
+            }
+
+            let centroid = try await waitForCentroid()
+            lastError = MountGuide.errorLength(centroid - sensorCenter())
+            followStarWithROI()
+            if MountGuide.isCentered(errorPixels: centroid - sensorCenter()) {
+                endMountWork(String(format: "Centered — %.1f px from sensor center", lastError))
+            } else {
+                endMountWork(String(format: "Stopped after %d pulses — %.1f px from sensor center", MountGuide.maxCenterIterations, lastError))
+            }
+        } catch is CancellationError {
+            endMountWork("Centering cancelled")
+        } catch {
+            endMountWork("Centering failed")
+            presentError(error)
+        }
+    }
+
+    private func beginMountWork(_ status: String, holdROI: Bool) throws {
+        guard isMountConnected else { throw MountError.notConnected }
+        guard isConnected else { throw CameraError.notConnected }
+        isMountBusy = true
+        mountStatus = status
+        mountHoldsROI = holdROI
+        applyPipelineConfig()
+    }
+
+    private func endMountWork(_ status: String) {
+        mountHoldsROI = false
+        applyPipelineConfig()
+        isMountBusy = false
+        mountStatus = status
+        mountTask = nil
+    }
+
+    private func sendPulse(_ direction: GuideDirection, milliseconds: Int) async throws {
+        try Task.checkCancellation()
+        try await mount.pulse(direction, milliseconds: milliseconds)
+    }
+
+    private func waitForSettledCentroid() async throws -> SIMD2<Double> {
+        try await sleepMilliseconds(MountGuide.settleMilliseconds)
+        return try await waitForCentroid(minNewFrames: 2, timeout: 4)
+    }
+
+    private func waitForCentroid(minNewFrames: Int = 1, timeout: TimeInterval = 4) async throws -> SIMD2<Double> {
+        let startSeq = frameSequence
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            try Task.checkCancellation()
+            if frameSequence >= startSeq + UInt64(minNewFrames),
+               tracking.state == .tracking,
+               let centroid = tracking.centroidOnSensor
+            {
+                return centroid
+            }
+            try await Task.sleep(nanoseconds: 40_000_000)
+        }
+        if tracking.state == .tracking, let centroid = tracking.centroidOnSensor {
+            return centroid
+        }
+        throw MountError.noStar
+    }
+
+    private func sensorCenter() -> SIMD2<Double> {
+        let width = overlay.sensorWidth > 0 ? overlay.sensorWidth : sensorWidth
+        let height = overlay.sensorHeight > 0 ? overlay.sensorHeight : sensorHeight
+        return MountGuide.frameCenter(width: width, height: height)
+    }
+
+    private func followStarWithROI() {
+        guard roiSize > 0, let center = tracking.centroidOnSensor else { return }
+        session.requestROI(
+            Alignment.centeredROI(
+                around: center,
+                size: roiSize,
+                sensorWidth: sensorWidth,
+                sensorHeight: sensorHeight
+            )
+        )
+    }
+
+    private func sleepMilliseconds(_ ms: Int) async throws {
+        guard ms > 0 else { return }
+        try await Task.sleep(nanoseconds: UInt64(ms) * 1_000_000)
+    }
+
+    private func applyPipelineConfig() {
+        pipeline.configure(
+            autoCenter: autoCenter && !mountHoldsROI,
+            roiSize: roiSize,
+            sensorWidth: sensorWidth,
+            sensorHeight: sensorHeight
+        )
+    }
+
+    private func presentError(_ error: Error) {
+        if error is CancellationError { return }
+        errorMessage = error.localizedDescription
     }
 
     private func handleError(_ error: Error) {

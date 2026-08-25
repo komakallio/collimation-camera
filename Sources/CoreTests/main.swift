@@ -24,6 +24,15 @@ struct CoreTests {
         failures += run("digital stabilize pan", testDigitalStabilizePan)
         failures += run("digital stabilize hold", testDigitalStabilizeHold)
         failures += run("digital stabilize disable", testDigitalStabilizeDisable)
+        failures += run("guide solve orthogonal", testGuideSolveOrthogonal)
+        failures += run("guide solve rotated", testGuideSolveRotated)
+        failures += run("guide solve singular", testGuideSolveSingular)
+        failures += run("guide pulse planner", testGuidePulsePlanner)
+        failures += run("guide center threshold", testGuideCenterThreshold)
+        failures += run("lx200 pulse command", testLX200PulseCommand)
+        failures += run("skywatcher hex24", testSkyWatcherHex24)
+        failures += run("synscan fixed rate", testSynScanFixedRate)
+        failures += run("guide calibration store", testGuideCalibrationStore)
 
         if failures == 0 {
             print("All tests passed.")
@@ -507,4 +516,108 @@ private func testDigitalStabilizeDisable() throws {
         zoom: 1
     )
     try expect(off.lockNormalized == nil && off.centroid == nil, "disable clears pose")
+}
+
+private func testGuideSolveOrthogonal() throws {
+    let calibration = GuideCalibration(
+        eastRate: SIMD2(0.01, 0),
+        northRate: SIMD2(0, 0.02),
+        sampleDurationMs: 800
+    )
+    try expect(calibration.isValid, "valid")
+    let times = calibration.pulses(toMoveStarBy: SIMD2(-10, 5))
+    try expect(times != nil, "solved")
+    try expect(abs((times?.eastMs ?? 0) - (-1000)) < 1e-6, "east \(times?.eastMs ?? 0)")
+    try expect(abs((times?.northMs ?? 0) - 250) < 1e-6, "north \(times?.northMs ?? 0)")
+}
+
+private func testGuideSolveRotated() throws {
+    // Camera rotated 90°: east moves +Y, north moves -X.
+    let calibration = GuideCalibration(
+        eastRate: SIMD2(0, 0.01),
+        northRate: SIMD2(-0.01, 0),
+        sampleDurationMs: 800
+    )
+    let times = calibration.pulses(toMoveStarBy: SIMD2(5, 10))
+    try expect(times != nil, "solved")
+    try expect(abs((times?.eastMs ?? 0) - 1000) < 1e-6, "east \(times?.eastMs ?? 0)")
+    try expect(abs((times?.northMs ?? 0) - (-500)) < 1e-6, "north \(times?.northMs ?? 0)")
+}
+
+private func testGuideSolveSingular() throws {
+    let calibration = GuideCalibration(
+        eastRate: SIMD2(0.01, 0),
+        northRate: SIMD2(0.02, 0),
+        sampleDurationMs: 800
+    )
+    try expect(!calibration.isValid, "parallel axes")
+    try expect(calibration.pulses(toMoveStarBy: SIMD2(1, 1)) == nil, "no solution")
+}
+
+private func testGuidePulsePlanner() throws {
+    try expect(GuidePulsePlanner.pulses(eastMs: 20, northMs: -20).isEmpty, "below min")
+    let west = GuidePulsePlanner.pulses(eastMs: -400, northMs: 0)
+    try expect(west == [GuidePulse(direction: .west, milliseconds: 400)], "west \(west)")
+    let north = GuidePulsePlanner.pulses(eastMs: 0, northMs: 150)
+    try expect(north == [GuidePulse(direction: .north, milliseconds: 150)], "north \(north)")
+    let split = GuidePulsePlanner.pulses(eastMs: 12_000, northMs: 0)
+    try expect(split == [GuidePulse(direction: .east, milliseconds: 9000)], "clamp per step \(split)")
+    let both = GuidePulsePlanner.pulses(eastMs: 100, northMs: -120)
+    try expect(both == [
+        GuidePulse(direction: .east, milliseconds: 100),
+        GuidePulse(direction: .south, milliseconds: 120)
+    ], "both axes \(both)")
+}
+
+private func testGuideCenterThreshold() throws {
+    let center = MountGuide.frameCenter(width: 512, height: 256)
+    try expect(abs(center.x - 255.5) < 1e-9, "x \(center.x)")
+    try expect(abs(center.y - 127.5) < 1e-9, "y \(center.y)")
+    try expect(MountGuide.isCentered(errorPixels: SIMD2(1.5, 1.0)), "inside")
+    try expect(!MountGuide.isCentered(errorPixels: SIMD2(2.0, 0.1)), "outside")
+    let sensor = MountGuide.frameCenter(width: 6252, height: 4176)
+    try expect(abs(sensor.x - 3125.5) < 1e-9, "sensor x \(sensor.x)")
+    try expect(abs(sensor.y - 2087.5) < 1e-9, "sensor y \(sensor.y)")
+    let rate = MountGuide.rate(before: SIMD2(10, 10), after: SIMD2(18, 6), durationMs: 800)
+    try expect(abs(rate.x - 0.01) < 1e-12, "rate x")
+    try expect(abs(rate.y - (-0.005)) < 1e-12, "rate y")
+}
+
+private func testLX200PulseCommand() throws {
+    try expect(LX200PulseGuide.command(.north, milliseconds: 500) == ":Mgn0500#", "north")
+    try expect(LX200PulseGuide.command(.east, milliseconds: 150) == ":Mge0150#", "east")
+    try expect(LX200PulseGuide.command(.west, milliseconds: 12_000) == ":Mgw9999#", "clamp")
+}
+
+private func testSkyWatcherHex24() throws {
+    try expect(SkyWatcherEncoding.hex24(0x123456) == "563412", "encode")
+    try expect(SkyWatcherEncoding.parseHex24("563412") == 0x123456, "decode")
+    try expect(SkyWatcherEncoding.parseHex24("=563412\r") == 0x123456, "decode wrapped")
+}
+
+private func testSynScanFixedRate() throws {
+    try expect(
+        SynScanGuide.fixedRateCommand(direction: .east, rate: 1) == Data([0x50, 2, 16, 36, 1, 0, 0, 0]),
+        "east start"
+    )
+    try expect(
+        SynScanGuide.fixedRateCommand(direction: .south, rate: 0) == Data([0x50, 2, 17, 37, 0, 0, 0, 0]),
+        "south stop"
+    )
+}
+
+private func testGuideCalibrationStore() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appendingPathComponent(GuideCalibrationStore.fileName)
+    let original = GuideCalibration(
+        eastRate: SIMD2(0.012, -0.001),
+        northRate: SIMD2(0.002, 0.011),
+        sampleDurationMs: 800,
+        calibratedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    try GuideCalibrationStore.save(original, to: url)
+    let loaded = GuideCalibrationStore.load(from: url)
+    try expect(loaded == original, "round-trip \(String(describing: loaded))")
 }

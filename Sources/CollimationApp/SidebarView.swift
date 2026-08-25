@@ -69,6 +69,7 @@ struct SidebarView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 cameraSection
+                mountSection
                 roiSection
                 stretchSection
                 collimationSection
@@ -128,6 +129,70 @@ struct SidebarView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var mountSection: some View {
+        GroupBox("Mount") {
+            VStack(alignment: .leading, spacing: 8) {
+                if engine.serialPorts.isEmpty {
+                    Text("No serial ports")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Picker("Port", selection: $engine.selectedSerialPort) {
+                        ForEach(engine.serialPorts, id: \.self) { path in
+                            Text(URL(fileURLWithPath: path).lastPathComponent).tag(path)
+                        }
+                    }
+                    .labelsHidden()
+                    .disabled(engine.isMountConnected || engine.isMountBusy)
+                }
+
+                HStack {
+                    Button(engine.isMountConnected ? "Disconnect" : "Connect") {
+                        if engine.isMountConnected {
+                            engine.disconnectMount()
+                        } else {
+                            engine.connectMount()
+                        }
+                    }
+                    .disabled((engine.serialPorts.isEmpty && !engine.isMountConnected) || engine.isMountBusy)
+                    Button("Refresh") { engine.refreshSerialPorts() }
+                        .disabled(engine.isMountConnected || engine.isMountBusy)
+                }
+
+                HStack {
+                    Button("Calibrate") { engine.calibrateMount() }
+                        .disabled(!canCalibrateMount)
+                        .help("Pulse-guide east and north, measure how the star moves in the image, and save that mapping.")
+                    Button("Center") { engine.centerStar() }
+                        .disabled(!canCenterStar)
+                        .help("Pulse-guide the mount until the centroid sits at the center of the sensor.")
+                }
+
+                Text(engine.mountStatus)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let calibration = engine.guideCalibration, calibration.isValid {
+                    Text(calibration.calibratedAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .onAppear { engine.refreshSerialPorts() }
+    }
+
+    private var canCalibrateMount: Bool {
+        engine.isMountConnected
+            && engine.isConnected
+            && !engine.isMountBusy
+            && engine.tracking.state == .tracking
+    }
+
+    private var canCenterStar: Bool {
+        canCalibrateMount && engine.isMountCalibrated
     }
 
     private var roiSection: some View {

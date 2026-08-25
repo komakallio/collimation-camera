@@ -12,7 +12,7 @@ struct CollimationApp: App {
             ContentView()
                 .environmentObject(engine)
                 .onAppear {
-                    appDelegate.stopCapture = { engine.stopCapture() }
+                    appDelegate.stopCapture = { engine.shutdown() }
                 }
         }
         .defaultSize(width: 1280, height: 820)
@@ -31,6 +31,17 @@ struct CollimationApp: App {
                     .keyboardShortcut("f", modifiers: [.command])
                 Toggle("Stabilize View", isOn: $engine.stabilize)
                     .keyboardShortcut("l", modifiers: [.command])
+            }
+            CommandMenu("Mount") {
+                Button(engine.isMountConnected ? "Disconnect Mount" : "Connect Mount") {
+                    if engine.isMountConnected { engine.disconnectMount() } else { engine.connectMount() }
+                }
+                Button("Calibrate Mount") { engine.calibrateMount() }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
+                    .disabled(!engine.isMountConnected || engine.isMountBusy || engine.tracking.state != .tracking)
+                Button("Center Star") { engine.centerStar() }
+                    .keyboardShortcut("g", modifiers: [.command])
+                    .disabled(!engine.isMountConnected || !engine.isMountCalibrated || engine.isMountBusy || engine.tracking.state != .tracking)
             }
             CommandMenu("View") {
                 Toggle("Collimation Overlay", isOn: $engine.showOverlay)
@@ -81,7 +92,7 @@ struct ContentView: View {
             }
             .background(Color.black)
         }
-        .alert("Camera error", isPresented: Binding(
+        .alert("Error", isPresented: Binding(
             get: { engine.errorMessage != nil },
             set: { if !$0 { engine.errorMessage = nil } }
         )) {
