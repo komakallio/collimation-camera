@@ -1,0 +1,14 @@
+.build/
+.swiftpm/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+.DS_Store
+Vendor/PlayerOne/*.dylib
+Vendor/PlayerOne/*.so
+Vendor/PlayerOne/*.dll
+Vendor/PlayerOne/*.zip
+Vendor/PlayerOne/SDK/
+frame.png
+frame.pgm
+*.app/
+dist/

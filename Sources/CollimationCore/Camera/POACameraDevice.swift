@@ -1,0 +1,152 @@
+import Foundation
+import POACameraC
+
+final class POACameraDevice: CameraDevice {
+    private let native: POANative
+    private let cameraID: Int32
+    private var opened = false
+    private var streaming = false
+    private(set) var descriptor: CameraDescriptor
+    private(set) var controls = CameraControls()
+    private(set) var currentROI = ROI(x: 0, y: 0, width: 512, height: 512)
+    private(set) var supportedBins: [Int] = [1, 2, 4]
+    private var format: POAImgFormat = POA_RAW16
+    private var grabBuffer = Data()
+
+    init(native: POANative, cameraID: Int32) {
+        self.native = native
+        self.cameraID = cameraID
+        self.descriptor = CameraDescriptor(
+            id: "poa-\(cameraID)",
+            name: "Player One",
+            sensorWidth: 6252,
+            sensorHeight: 4176,
+            pixelSizeMicrons: 3.76,
+            isSimulator: false,
+            hardwareID: cameraID
+        )
+    }
+
+    func open() throws {
+        try native.open(cameraID)
+        try native.initialize(cameraID)
+        opened = true
+        if let props = native.properties(cameraID) {
+            descriptor = CameraDescriptor(
+                id: "poa-\(cameraID)",
+                name: cString(props.cameraModelName),
+                sensorWidth: Int(props.maxWidth),
+                sensorHeight: Int(props.maxHeight),
+                pixelSizeMicrons: props.pixelSize,
+                isSimulator: false,
+                hardwareID: cameraID
+            )
+            var bins: [Int] = []
+            withUnsafeBytes(of: props.bins) { raw in
+                for v in raw.bindMemory(to: Int32.self) where v > 0 {
+                    bins.append(Int(v))
+                }
+            }
+            if !bins.isEmpty { supportedBins = bins }
+        }
+        if let range = native.intRange(cameraID, POA_EXPOSURE) {
+            controls.exposureRange = range
+        }
+        if let range = native.intRange(cameraID, POA_GAIN) {
+            controls.gainRange = range
+        }
+        try? native.setFormat(cameraID, POA_RAW16)
+        format = (try? native.currentFormat(cameraID)) ?? POA_RAW16
+        let roi = Alignment.centeredROI(
+            around: SIMD2(Double(descriptor.sensorWidth) / 2, Double(descriptor.sensorHeight) / 2),
+            size: 512,
+            sensorWidth: descriptor.sensorWidth,
+            sensorHeight: descriptor.sensorHeight
+        )
+        try applyROI(roi)
+        try applyExposure(controls.exposureMicroseconds)
+        try applyGain(controls.gain)
+    }
+
+    func close() {
+        if streaming { native.stopVideo(cameraID) }
+        streaming = false
+        if opened { native.close(cameraID) }
+        opened = false
+    }
+
+    func applyExposure(_ microseconds: Int) throws {
+        let clamped = min(max(microseconds, controls.exposureRange.lowerBound), controls.exposureRange.upperBound)
+        try native.setInt(cameraID, POA_EXPOSURE, clamped)
+        controls.exposureMicroseconds = clamped
+    }
+
+    func applyGain(_ gain: Int) throws {
+        let clamped = min(max(gain, controls.gainRange.lowerBound), controls.gainRange.upperBound)
+        try native.setInt(cameraID, POA_GAIN, clamped)
+        controls.gain = clamped
+    }
+
+    func applyROI(_ roi: ROI) throws {
+        let wasStreaming = streaming
+        if wasStreaming { stopVideo() }
+        try native.setBin(cameraID, roi.binning)
+        try native.setSize(cameraID, width: roi.width, height: roi.height)
+        try native.setStartPos(cameraID, x: roi.x, y: roi.y)
+        currentROI = try native.currentROI(cameraID)
+        if wasStreaming { try startVideo() }
+    }
+
+    func startVideo() throws {
+        guard opened else { throw CameraError.notConnected }
+        try native.startVideo(cameraID)
+        streaming = true
+    }
+
+    func stopVideo() {
+        native.stopVideo(cameraID)
+        streaming = false
+    }
+
+    func grabFrame(timeoutMs: Int) throws -> Frame {
+        guard opened else { throw CameraError.notConnected }
+        let bytesPerPixel = format == POA_RAW16 ? 2 : 1
+        let size = currentROI.width * currentROI.height * bytesPerPixel
+        if grabBuffer.count < size {
+            grabBuffer = Data(count: size)
+        }
+        try grabBuffer.withUnsafeMutableBytes { raw in
+            guard let base = raw.bindMemory(to: UInt8.self).baseAddress else {
+                throw CameraError.poa(code: -1, message: "Failed to allocate frame buffer")
+            }
+            try native.grab(cameraID, buffer: base, size: size, timeoutMs: timeoutMs)
+        }
+        var pixels = [UInt16](repeating: 0, count: currentROI.width * currentROI.height)
+        grabBuffer.withUnsafeBytes { raw in
+            if format == POA_RAW16 {
+                let src = raw.bindMemory(to: UInt16.self)
+                for i in 0..<pixels.count {
+                    pixels[i] = src[i]
+                }
+            } else {
+                let src = raw.bindMemory(to: UInt8.self)
+                for i in 0..<pixels.count {
+                    pixels[i] = UInt16(src[i]) << 8
+                }
+            }
+        }
+        return Frame(
+            width: currentROI.width,
+            height: currentROI.height,
+            pixels: pixels,
+            roi: currentROI
+        )
+    }
+
+    private func cString<T>(_ tuple: T) -> String {
+        withUnsafeBytes(of: tuple) { raw in
+            guard let base = raw.baseAddress?.assumingMemoryBound(to: CChar.self) else { return "" }
+            return String(cString: base)
+        }
+    }
+}

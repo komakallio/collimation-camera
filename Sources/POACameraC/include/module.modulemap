@@ -1,0 +1,4 @@
+module POACameraC {
+    header "PlayerOneCamera.h"
+    export *
+}
