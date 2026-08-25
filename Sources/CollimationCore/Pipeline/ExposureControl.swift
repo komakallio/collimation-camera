@@ -30,11 +30,9 @@ public enum ExposureControl {
         return clamp(Int(next.rounded()))
     }
 
-    /// Brightest-pixel estimate: star peak if present, otherwise the 99.9th percentile.
+    /// Brightest-pixel estimate from unstretched 16-bit ADU (not the displayed stretch).
     public static func peakNormalized(histogram: Histogram, detectionPeak: UInt16?) -> Double {
-        if let detectionPeak, detectionPeak > 0 {
-            return Double(detectionPeak) / 65535.0
-        }
-        return histogram.percentile(0.999)
+        let raw = max(histogram.maxADU, detectionPeak ?? 0)
+        return Double(raw) / 65535.0
     }
 }

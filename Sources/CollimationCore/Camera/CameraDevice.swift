@@ -45,7 +45,7 @@ public struct CameraControls: Equatable, Sendable {
 
     public init(
         exposureMicroseconds: Int = 50_000,
-        gain: Int = 100,
+        gain: Int = 0,
         exposureRange: ClosedRange<Int> = ExposureControl.range,
         gainRange: ClosedRange<Int> = 0...400
     ) {

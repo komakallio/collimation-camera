@@ -32,6 +32,8 @@ public final class SimulatorCamera: CameraDevice {
         opened = true
         startedAt = Date()
         lastGrab = Date()
+        try applyGain(controls.gain)
+        try applyExposure(controls.exposureMicroseconds)
     }
 
     public func close() {

@@ -381,6 +381,20 @@ private func testAutoExposure() throws {
     try expect(doubled == 20_000, "scale 0.80/0.40 -> 2x (\(doubled))")
     let atTarget = ExposureControl.adjustedMicroseconds(current: 8_000, peakNormalized: 0.80)
     try expect(atTarget == 8_000, "already at target (\(atTarget))")
+
+    var pixels = [UInt16](repeating: 1_000, count: 64 * 64)
+    pixels[0] = 16_384
+    let histogram = Histogram.compute(from: Frame(
+        width: 64,
+        height: 64,
+        pixels: pixels,
+        roi: ROI(x: 0, y: 0, width: 64, height: 64)
+    ))
+    let raw = ExposureControl.peakNormalized(histogram: histogram, detectionPeak: nil)
+    try expect(abs(raw - 16_384.0 / 65535.0) < 1e-12, "raw ADU peak \(raw)")
+    let stretchedLook = StretchParams(black: 0, white: 1, midtones: 0.15).apply(normalizedValue: raw)
+    try expect(stretchedLook > raw, "stretch would lift the display")
+    try expect(abs(raw - ExposureControl.peakNormalized(histogram: histogram, detectionPeak: 16_384)) < 1e-12, "detection peak is raw")
 }
 
 private func testDigitalStabilizePan() throws {

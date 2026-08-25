@@ -58,7 +58,7 @@ public final class CollimationEngine: ObservableObject {
     @Published public var errorMessage: String?
 
     @Published public var exposureMicroseconds: Double = 50_000
-    @Published public var gain: Double = 100
+    @Published public var gain: Double = 0
     @Published public var exposureRange: ClosedRange<Double> = Double(ExposureControl.minMicroseconds)...Double(ExposureControl.maxMicroseconds)
     @Published public var gainRange: ClosedRange<Double> = 0...400
 
