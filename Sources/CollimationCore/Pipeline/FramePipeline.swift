@@ -4,6 +4,7 @@ struct ProcessedFrame: Sendable {
     var histogram: Histogram
     var tracking: TrackingStatus
     var coma: ComaResult?
+    var fwhm: FWHMResult?
     var overlay: OverlayModel
 }
 
@@ -12,7 +13,9 @@ final class FramePipeline: @unchecked Sendable {
     private var tracker = Tracker()
     private let detector = StarDetector()
     private let analyzer = ComaAnalyzer()
+    private let fwhmEstimator = FWHMEstimator()
     private var smoothedComa: ComaResult?
+    private var smoothedFWHM: FWHMResult?
     private var autoCenter = true
     private var roiSize = 512
     private var sensorWidth = CameraDescriptor.simulator.sensorWidth
@@ -31,6 +34,7 @@ final class FramePipeline: @unchecked Sendable {
         lock.lock()
         tracker.reset()
         smoothedComa = nil
+        smoothedFWHM = nil
         lock.unlock()
     }
 
@@ -70,6 +74,19 @@ final class FramePipeline: @unchecked Sendable {
             result = smoothedComa
         }
 
+        var fwhm: FWHMResult?
+        if next.state == .tracking, let centroid = next.centroidInFrame {
+            if let measured = fwhmEstimator.measure(frame: frame, centroid: centroid) {
+                fwhm = fwhmEstimator.smooth(previous: smoothedFWHM, current: measured)
+                smoothedFWHM = fwhm
+            } else {
+                fwhm = smoothedFWHM
+            }
+        } else {
+            smoothedFWHM = nil
+            fwhm = nil
+        }
+
         let overlay = OverlayModel(
             imageWidth: frame.width,
             imageHeight: frame.height,
@@ -82,6 +99,6 @@ final class FramePipeline: @unchecked Sendable {
             sensorHeight: sensorHeight,
             roi: frame.roi
         )
-        return ProcessedFrame(histogram: histogram, tracking: next, coma: result, overlay: overlay)
+        return ProcessedFrame(histogram: histogram, tracking: next, coma: result, fwhm: fwhm, overlay: overlay)
     }
 }

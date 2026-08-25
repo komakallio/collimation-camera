@@ -77,34 +77,7 @@ struct ContentView: View {
         } detail: {
             ZStack {
                 LiveView(engine: engine)
-                if engine.showOverlay {
-                    OverlayView(overlay: engine.overlay, zoom: engine.zoom)
-                }
-                VStack {
-                    HStack {
-                        stateChip
-                        Spacer()
-                        Text(String(format: "%.0f%%  ·  %.1f fps", engine.zoom * 100, engine.fps))
-                            .font(.caption.monospacedDigit())
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(.black.opacity(0.45), in: Capsule())
-                            .foregroundStyle(.white)
-                    }
-                    Spacer()
-                    HStack {
-                        Spacer()
-                        if engine.overlay.sensorWidth > 0, engine.overlay.sensorHeight > 0 {
-                            ROIMapView(
-                                sensorWidth: engine.overlay.sensorWidth,
-                                sensorHeight: engine.overlay.sensorHeight,
-                                roi: engine.overlay.roi,
-                                centroidInFrame: engine.overlay.centroid
-                            )
-                        }
-                    }
-                }
-                .padding(10)
+                liveChrome
             }
             .background(Color.black)
         }
@@ -121,6 +94,56 @@ struct ContentView: View {
                 engine.connect()
             }
         }
+    }
+
+    @ViewBuilder
+    private var liveChrome: some View {
+        if engine.stabilize {
+            TimelineView(.periodic(from: .now, by: 1.0 / 60.0)) { _ in
+                chrome(pose: engine.renderStateSlot.peek())
+            }
+        } else {
+            chrome(pose: nil)
+        }
+    }
+
+    private func chrome(pose: RenderState?) -> some View {
+        ZStack {
+            if engine.showOverlay {
+                OverlayView(
+                    overlay: engine.overlay,
+                    zoom: engine.zoom,
+                    lockNormalized: pose?.stabilizeLock,
+                    liveCentroid: pose?.stabilizeCentroid
+                )
+            }
+            VStack {
+                HStack {
+                    stateChip
+                    Spacer()
+                    Text(String(format: "%.0f%%  ·  %.1f fps", engine.zoom * 100, engine.fps))
+                        .font(.caption.monospacedDigit())
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.black.opacity(0.45), in: Capsule())
+                        .foregroundStyle(.white)
+                }
+                Spacer()
+                HStack {
+                    Spacer()
+                    if engine.overlay.sensorWidth > 0, engine.overlay.sensorHeight > 0 {
+                        ROIMapView(
+                            sensorWidth: engine.overlay.sensorWidth,
+                            sensorHeight: engine.overlay.sensorHeight,
+                            roi: engine.overlay.roi,
+                            centroidInFrame: pose?.stabilizeCentroid ?? engine.overlay.centroid
+                        )
+                    }
+                }
+            }
+            .padding(10)
+        }
+        .allowsHitTesting(false)
     }
 
     private var stateChip: some View {

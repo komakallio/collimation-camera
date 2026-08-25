@@ -83,6 +83,8 @@ final class LiveMTKView: MTKView {
 struct OverlayView: View {
     let overlay: OverlayModel
     let zoom: Double
+    var lockNormalized: SIMD2<Double>? = nil
+    var liveCentroid: SIMD2<Double>? = nil
 
     var body: some View {
         Canvas { context, size in
@@ -92,8 +94,8 @@ struct OverlayView: View {
                 viewWidth: size.width,
                 viewHeight: size.height,
                 zoom: zoom,
-                lockNormalized: overlay.stabilizeLock,
-                stabilizeCentroid: overlay.stabilizeCentroid
+                lockNormalized: lockNormalized ?? overlay.stabilizeLock,
+                stabilizeCentroid: liveCentroid ?? overlay.stabilizeCentroid
             )
             let rect = layout.imageRect
             let imageRect = CGRect(x: rect.x, y: rect.y, width: rect.width, height: rect.height)
@@ -101,7 +103,7 @@ struct OverlayView: View {
             let cx = layout.viewPoint(image: SIMD2(Double(overlay.imageWidth) / 2, Double(overlay.imageHeight) / 2))
             drawCrosshair(context: &context, at: CGPoint(x: cx.x, y: cx.y), color: .white.opacity(0.55))
 
-            if let centroid = overlay.centroid {
+            if let centroid = liveCentroid ?? overlay.centroid {
                 let p = layout.viewPoint(image: centroid)
                 drawCrosshair(context: &context, at: CGPoint(x: p.x, y: p.y), color: Color(red: 0.3, green: 0.9, blue: 0.4), size: 14)
             }

@@ -71,6 +71,7 @@ public final class CollimationEngine: ObservableObject {
     @Published public var histogram = Histogram()
     @Published public var tracking = TrackingStatus()
     @Published public var coma: ComaResult?
+    @Published public var fwhm: FWHMResult?
     @Published public var overlay = OverlayModel()
     @Published public var frameSequence: UInt64 = 0
     @Published public var fps: Double = 0
@@ -89,7 +90,7 @@ public final class CollimationEngine: ObservableObject {
     private var lastSentGain: Int?
     private var sensorWidth = CameraDescriptor.simulator.sensorWidth
     private var sensorHeight = CameraDescriptor.simulator.sensorHeight
-    private var stabilizer = DigitalStabilizer()
+    nonisolated private let stabilization = StabilizationController()
     private var cancellables = Set<AnyCancellable>()
 
     public init() {
@@ -190,9 +191,10 @@ public final class CollimationEngine: ObservableObject {
         isConnected = false
         tracking = TrackingStatus()
         coma = nil
+        fwhm = nil
         overlay = OverlayModel()
         frameSlot.clear()
-        stabilizer.reset()
+        stabilization.reset()
         updateStabilization()
         statusText = "Disconnected"
     }
@@ -285,33 +287,44 @@ public final class CollimationEngine: ObservableObject {
     }
 
     public func updateStabilization() {
-        let pose = stabilizer.update(
+        stabilization.configure(
             enabled: stabilize,
-            centroid: overlay.centroid,
             tracking: tracking.state,
-            imageWidth: overlay.imageWidth,
-            imageHeight: overlay.imageHeight,
             viewWidth: viewWidth,
             viewHeight: viewHeight,
             zoom: zoom
         )
+        if let centroid = overlay.centroid, overlay.imageWidth > 0 {
+            stabilization.seed(
+                frameCentroid: centroid,
+                roi: overlay.roi,
+                imageWidth: overlay.imageWidth,
+                imageHeight: overlay.imageHeight
+            )
+        }
+        let pose = stabilization.pose()
         if overlay.stabilizeLock != pose.lockNormalized || overlay.stabilizeCentroid != pose.centroid {
             overlay.stabilizeLock = pose.lockNormalized
             overlay.stabilizeCentroid = pose.centroid
         }
-        renderStateSlot.store(
-            RenderState(
-                stretch: stretch,
-                zoom: zoom,
-                stabilizeLock: pose.lockNormalized,
-                stabilizeCentroid: pose.centroid
-            )
-        )
+        renderStateSlot.update { state in
+            state.stretch = stretch
+            state.zoom = zoom
+            state.stabilizeLock = pose.lockNormalized
+            state.stabilizeCentroid = pose.centroid
+        }
     }
 
     private nonisolated func ingest(_ frame: Frame) {
         frameSlot.store(frame)
         _ = fpsMeter.tick()
+        if stabilization.isEnabled {
+            let pose = stabilization.process(frame)
+            renderStateSlot.update { state in
+                state.stabilizeLock = pose.lockNormalized
+                state.stabilizeCentroid = pose.centroid
+            }
+        }
         coalescer.submit(frame)
     }
 
@@ -331,6 +344,7 @@ public final class CollimationEngine: ObservableObject {
         histogram = processed.histogram
         tracking = processed.tracking
         coma = processed.coma
+        fwhm = processed.fwhm
         overlay = processed.overlay
         updateStabilization()
         switch processed.tracking.state {

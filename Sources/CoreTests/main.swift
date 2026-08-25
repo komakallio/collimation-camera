@@ -10,7 +10,9 @@ struct CoreTests {
         failures += run("mtf identity", testMTFIdentityAtHalf)
         failures += run("arcsinh stretch", testArcsinhStretch)
         failures += run("star detection", testStarDetection)
+        failures += run("moment centroid", testMomentCentroid)
         failures += run("empty sky", testEmptySky)
+        failures += run("star fwhm", testStarFWHM)
         failures += run("circle fit", testCircleFit)
         failures += run("coma horizontal", testComaHorizontal)
         failures += run("coma vertical", testComaVertical)
@@ -133,10 +135,92 @@ private func testStarDetection() throws {
     try expect(detection.snr > 10, "snr \(detection.snr)")
 }
 
+private func testMomentCentroid() throws {
+    let scene = DonutScene(
+        sensorWidth: 256,
+        sensorHeight: 256,
+        starPosition: SIMD2(180, 96),
+        outerRadius: 28,
+        innerRadius: 10,
+        comaOffset: .zero,
+        intensityAsymmetry: 0,
+        noiseSigma: 12,
+        seeingJitter: 0
+    )
+    var renderer = DonutRenderer(scene: scene)
+    var rng = RNG(seed: 7)
+    let roi = ROI(x: 0, y: 0, width: 256, height: 256)
+    let frame = renderer.render(roi: roi, jitter: .zero, rng: &rng)
+    let detector = StarDetector()
+    guard let seeded = detector.momentCentroid(in: frame, around: SIMD2(176, 92)) else {
+        throw Expectation(description: "expected windowed centroid")
+    }
+    try expect(abs(seeded.x - 180) < 6, "seeded x \(seeded.x)")
+    try expect(abs(seeded.y - 96) < 6, "seeded y \(seeded.y)")
+
+    guard let full = detector.momentCentroid(in: frame, around: nil) else {
+        throw Expectation(description: "expected full-frame centroid")
+    }
+    try expect(abs(full.x - 180) < 8, "full x \(full.x)")
+    try expect(abs(full.y - 96) < 8, "full y \(full.y)")
+
+    renderer.scene.starPosition = SIMD2(188, 90)
+    let moved = renderer.render(roi: roi, jitter: .zero, rng: &rng)
+    guard let next = detector.momentCentroid(in: moved, around: seeded) else {
+        throw Expectation(description: "expected refined centroid")
+    }
+    try expect(abs(next.x - 188) < 6, "moved x \(next.x)")
+    try expect(abs(next.y - 90) < 6, "moved y \(next.y)")
+}
+
 private func testEmptySky() throws {
     let pixels = [UInt16](repeating: 900, count: 128 * 128)
     let frame = Frame(width: 128, height: 128, pixels: pixels, roi: ROI(x: 0, y: 0, width: 128, height: 128))
     try expect(StarDetector().detect(in: frame) == nil, "false positive")
+}
+
+private func testStarFWHM() throws {
+    let sigma = 4.0
+    let expected = 2.0 * sqrt(2.0 * log(2.0)) * sigma
+    let width = 128
+    let height = 128
+    let cx = 63.5
+    let cy = 63.5
+    var pixels = [UInt16](repeating: 800, count: width * height)
+    for y in 0..<height {
+        for x in 0..<width {
+            let dx = Double(x) - cx
+            let dy = Double(y) - cy
+            let amp = 40_000.0 * exp(-(dx * dx + dy * dy) / (2 * sigma * sigma))
+            pixels[y * width + x] = UInt16(min(65535, 800 + amp))
+        }
+    }
+    let frame = Frame(
+        width: width,
+        height: height,
+        pixels: pixels,
+        roi: ROI(x: 0, y: 0, width: width, height: height, binning: 1)
+    )
+    guard let fwhm = FWHMEstimator().measure(frame: frame, centroid: SIMD2(cx, cy)) else {
+        throw Expectation(description: "expected FWHM")
+    }
+    try expect(abs(fwhm.framePixels - expected) < 0.6, "FWHM px \(fwhm.framePixels) vs \(expected)")
+    try expect(abs(fwhm.sensorPixels - fwhm.framePixels) < 1e-12, "bin1 sensor")
+    let scale = 206.264806247 * 3.76 / 1600.0
+    try expect(abs(TelescopeOptics.arcsecondsPerUnbinnedPixel - scale) < 1e-12, "plate scale")
+    try expect(abs(fwhm.arcseconds - fwhm.sensorPixels * scale) < 1e-9, "arcsec \(fwhm.arcseconds)")
+
+    let binned = Frame(
+        width: width,
+        height: height,
+        pixels: pixels,
+        roi: ROI(x: 0, y: 0, width: width, height: height, binning: 2)
+    )
+    guard let fwhm2 = FWHMEstimator().measure(frame: binned, centroid: SIMD2(cx, cy)) else {
+        throw Expectation(description: "expected binned FWHM")
+    }
+    try expect(abs(fwhm2.sensorPixels - fwhm2.framePixels * 2) < 1e-12, "bin2 sensor")
+    try expect(abs(fwhm2.arcseconds - fwhm2.sensorPixels * scale) < 1e-9, "bin2 arcsec")
 }
 
 private func testCircleFit() throws {

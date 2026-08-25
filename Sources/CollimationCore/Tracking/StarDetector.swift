@@ -168,4 +168,53 @@ public struct StarDetector: Sendable {
         guard area > 0, flux > 0 else { return nil }
         return Blob(centroid: SIMD2(sumX / flux, sumY / flux), peak: peak, flux: flux, area: area)
     }
+
+    /// Intensity-weighted centroid in a window. Cheap enough to run on every live frame
+    /// for digital stabilization; skips the flood-fill used by `detect`.
+    public func momentCentroid(
+        in frame: Frame,
+        around seed: SIMD2<Double>?,
+        halfWindow: Int = 192
+    ) -> SIMD2<Double>? {
+        let width = frame.width
+        let height = frame.height
+        guard width > 0, height > 0 else { return nil }
+
+        let cx = seed.map { Int($0.x.rounded()) } ?? width / 2
+        let cy = seed.map { Int($0.y.rounded()) } ?? height / 2
+        let hw = seed == nil ? max(width, height) : max(32, min(halfWindow, max(width, height)))
+        let x0 = max(0, cx - hw)
+        let y0 = max(0, cy - hw)
+        let x1 = min(width, cx + hw + 1)
+        let y1 = min(height, cy + hw + 1)
+        guard x1 > x0, y1 > y0 else { return nil }
+
+        var peak: UInt16 = 0
+        for y in y0..<y1 {
+            let row = y * width
+            for x in x0..<x1 {
+                let value = frame.pixels[row + x]
+                if value > peak { peak = value }
+            }
+        }
+        guard peak > 0 else { return nil }
+        let threshold = UInt16(max(1, Int(Double(peak) * 0.35)))
+
+        var sumX = 0.0
+        var sumY = 0.0
+        var flux = 0.0
+        for y in y0..<y1 {
+            let row = y * width
+            for x in x0..<x1 {
+                let value = frame.pixels[row + x]
+                if value < threshold { continue }
+                let weight = Double(value)
+                flux += weight
+                sumX += Double(x) * weight
+                sumY += Double(y) * weight
+            }
+        }
+        guard flux > 0 else { return nil }
+        return SIMD2(sumX / flux, sumY / flux)
+    }
 }

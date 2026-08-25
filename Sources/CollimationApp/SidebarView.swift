@@ -204,6 +204,8 @@ struct SidebarView: View {
                         metric("Coma", value: comaText)
                         metric("Direction", value: directionText)
                         metric("Asymmetry", value: asymmetryText)
+                        metric("FWHM", value: fwhmText)
+                            .help("Full width at half maximum. 1600 mm focal length, 3.76 µm pixels.")
                         metric("SNR", value: snrText)
                     }
                     Spacer()
@@ -234,6 +236,14 @@ struct SidebarView: View {
     private var asymmetryText: String {
         guard let coma = engine.coma else { return "—" }
         return String(format: "%.2f", coma.sectorAsymmetry)
+    }
+
+    private var fwhmText: String {
+        if engine.tracking.state == .lost || engine.tracking.state == .searching {
+            return "—"
+        }
+        guard let fwhm = engine.fwhm else { return "—" }
+        return String(format: "%.2f″  (%.1f px)", fwhm.arcseconds, fwhm.sensorPixels)
     }
 
     private var snrText: String {

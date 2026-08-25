@@ -32,6 +32,12 @@ public final class RenderStateSlot: @unchecked Sendable {
         lock.unlock()
     }
 
+    public func update(_ body: (inout RenderState) -> Void) {
+        lock.lock()
+        body(&state)
+        lock.unlock()
+    }
+
     public func peek() -> RenderState {
         lock.lock()
         defer { lock.unlock() }
