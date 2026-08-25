@@ -4,8 +4,8 @@ macOS app for collimating a telescope against an artificial star with a Player O
 
 ## Features
 
-- Live view with Metal stretch (16-bit texture, black/white/gamma on the GPU)
-- ROI sizes 128 / 256 / 512 / 1024 / full, plus display zoom (25%–800%, pinch/scroll)
+- Live view with Metal stretch (16-bit texture, black/white/midtones MTF on the GPU)
+- ROI sizes 256 / 512 / 1024 / 2048 / full, plus display zoom (25%–800%, pinch/scroll)
 - Auto-center the ROI on the star; full-frame binned search if it leaves the ROI
 - Manual and auto stretch (histogram percentiles)
 - Numeric coma: concentricity of the outer ring vs. the secondary shadow, plus sector asymmetry
@@ -20,22 +20,23 @@ macOS app for collimating a telescope against an artificial star with a Player O
 ## Build and run
 
 ```bash
-# Simulator live view
 swift run CollimationApp
+```
 
+`swift run` starts an unbundled binary. The app still takes over the menu bar and Dock as **Collimation Camera**. For a normal Dock icon and Info.plist, package it:
+
+```bash
+scripts/package-app.sh
+open "dist/Collimation Camera.app"
+```
+
+```bash
 # Unit tests (synthetic donuts with known coma)
 swift run core-tests
 
 # Grab one frame
 swift run capture-cli --list
 swift run capture-cli --simulator --output frame.png
-```
-
-Package a `.app` bundle (ad-hoc signed):
-
-```bash
-scripts/package-app.sh
-open "dist/Collimation Camera.app"
 ```
 
 ## Player One SDK

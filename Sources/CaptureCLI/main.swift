@@ -78,7 +78,7 @@ struct CaptureCLI {
         let denom = max(stretch.white - stretch.black, 1e-6)
         for i in 0..<frame.pixels.count {
             let linear = min(max((Double(frame.pixels[i]) / 65535.0 - stretch.black) / denom, 0), 1)
-            let v = UInt8(min(255, (pow(linear, stretch.gamma) * 255).rounded()))
+            let v = UInt8(min(255, (StretchParams.mtf(linear, midtones: stretch.midtones) * 255).rounded()))
             let o = i * 4
             rgba[o] = v
             rgba[o + 1] = v

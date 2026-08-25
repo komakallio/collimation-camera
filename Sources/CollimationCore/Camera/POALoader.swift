@@ -150,6 +150,35 @@ final class POANative: @unchecked Sendable {
         return lo...hi
     }
 
+    func setFloat(_ id: Int32, _ config: POAConfig, _ value: Double, auto: Bool = false) throws {
+        var v = POAConfigValue()
+        v.floatValue = value
+        try check(setConfig(id, config, v, auto ? POA_TRUE : POA_FALSE))
+    }
+
+    func getFloat(_ id: Int32, _ config: POAConfig) throws -> Double {
+        var v = POAConfigValue()
+        var isAuto = POA_FALSE
+        try check(getConfig(id, config, &v, &isAuto))
+        return v.floatValue
+    }
+
+    func setExposure(id: Int32, microseconds: Int) throws {
+        let seconds = Double(microseconds) / 1_000_000.0
+        do {
+            try setFloat(id, POA_EXP, seconds)
+        } catch {
+            try setInt(id, POA_EXPOSURE, microseconds)
+        }
+    }
+
+    func getExposureMicroseconds(_ id: Int32) -> Int? {
+        if let seconds = try? getFloat(id, POA_EXP), seconds > 0 {
+            return Int((seconds * 1_000_000).rounded())
+        }
+        return try? getInt(id, POA_EXPOSURE)
+    }
+
     func setStartPos(_ id: Int32, x: Int, y: Int) throws {
         try check(setImageStartPos(id, Int32(x), Int32(y)))
     }
@@ -182,8 +211,28 @@ final class POANative: @unchecked Sendable {
         _ = stopExposure(id)
     }
 
-    func grab(_ id: Int32, buffer: UnsafeMutablePointer<UInt8>, size: Int, timeoutMs: Int) throws {
-        try check(getImageData(id, buffer, size, Int32(timeoutMs)))
+    func waitUntilFrameReady(_ id: Int32, timeoutMs: Int, isCancelled: () -> Bool = { false }) throws {
+        let deadline = Date().addingTimeInterval(Double(max(timeoutMs, 1)) / 1000.0)
+        while Date() < deadline {
+            if isCancelled() { throw CameraError.timeout }
+            var ready = POA_FALSE
+            try check(imageReady(id, &ready))
+            if ready == POA_TRUE { return }
+            usleep(200)
+        }
+        throw CameraError.timeout
+    }
+
+    func grab(
+        _ id: Int32,
+        buffer: UnsafeMutablePointer<UInt8>,
+        size: Int,
+        timeoutMs: Int,
+        isCancelled: @escaping () -> Bool = { false }
+    ) throws {
+        try waitUntilFrameReady(id, timeoutMs: timeoutMs, isCancelled: isCancelled)
+        if isCancelled() { throw CameraError.timeout }
+        try check(getImageData(id, buffer, size, 200))
     }
 
     func currentFormat(_ id: Int32) throws -> POAImgFormat {

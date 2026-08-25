@@ -76,7 +76,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             imageHeight: texture.height,
             viewWidth: viewSize.width,
             viewHeight: viewSize.height,
-            zoom: state.zoom
+            zoom: state.zoom,
+            lockNormalized: state.stabilizeLock,
+            stabilizeCentroid: state.stabilizeCentroid
         )
         let rect = layout.imageRect
         let ndc = toNDC(
@@ -91,7 +93,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         var uniforms = StretchUniforms(
             black: Float(state.stretch.black),
             white: Float(max(state.stretch.white, state.stretch.black + 0.0005)),
-            gamma: Float(state.stretch.gamma),
+            midtones: Float(min(max(state.stretch.midtones, 1e-4), 1 - 1e-4)),
             nearest: state.zoom >= 1 ? 1 : 0
         )
 
@@ -153,7 +155,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private struct StretchUniforms {
         var black: Float
         var white: Float
-        var gamma: Float
+        var midtones: Float
         var nearest: Float
     }
 
@@ -169,7 +171,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     struct StretchUniforms {
         float black;
         float white;
-        float gamma;
+        float midtones;
         float nearest;
     };
 
@@ -206,7 +208,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             raw = mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y) / 65535.0;
         }
         float t = saturate((raw - u.black) / max(u.white - u.black, 1e-6));
-        t = pow(t, u.gamma);
+        float m = u.midtones;
+        if (t > 0.0 && t < 1.0 && abs(m - 0.5) > 1e-6) {
+            t = saturate(((m - 1.0) * t) / ((2.0 * m - 1.0) * t - m));
+        }
         return float4(t, t, t, 1);
     }
     """

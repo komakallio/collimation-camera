@@ -103,22 +103,25 @@ struct SidebarView: View {
                         .disabled(engine.isConnected)
                 }
 
-                labeledSlider(
-                    title: "Exposure",
-                    value: $engine.exposureMicroseconds,
-                    range: engine.exposureRange,
-                    format: exposureLabel(engine.exposureMicroseconds)
-                ) {
-                    engine.applyExposure()
+                HStack(alignment: .bottom, spacing: 8) {
+                    CommitSlider(
+                        title: "Exposure",
+                        value: logExposureBinding,
+                        range: logExposureRange,
+                        format: exposureLabel(engine.exposureMicroseconds),
+                        onCommit: { engine.applyExposure() }
+                    )
+                    Button("Auto") { engine.autoExpose() }
+                        .disabled(!engine.isConnected)
+                        .help("Set exposure so the brightest pixels sit near 80% of saturation")
                 }
-                labeledSlider(
+                CommitSlider(
                     title: "Gain",
                     value: $engine.gain,
                     range: engine.gainRange,
-                    format: String(format: "%.0f", engine.gain)
-                ) {
-                    engine.applyGain()
-                }
+                    format: String(format: "%.0f", engine.gain),
+                    onCommit: { engine.applyGain() }
+                )
 
                 Text(engine.statusText)
                     .font(.caption)
@@ -131,10 +134,10 @@ struct SidebarView: View {
         GroupBox("ROI & zoom") {
             VStack(alignment: .leading, spacing: 8) {
                 Picker("ROI", selection: $engine.roiSize) {
-                    Text("128").tag(128)
                     Text("256").tag(256)
                     Text("512").tag(512)
                     Text("1024").tag(1024)
+                    Text("2048").tag(2048)
                     Text("Full").tag(0)
                 }
                 .pickerStyle(.segmented)
@@ -143,6 +146,8 @@ struct SidebarView: View {
                 }
 
                 Toggle("Auto-center star", isOn: $engine.autoCenter)
+                Toggle("Stabilize view", isOn: $engine.stabilize)
+                    .help("Nudge the live view so the detected centroid stays still in the window")
                 Button("Search full frame") { engine.searchNow() }
                     .disabled(!engine.isConnected)
 
@@ -165,9 +170,9 @@ struct SidebarView: View {
             VStack(alignment: .leading, spacing: 8) {
                 HistogramView(histogram: engine.histogram, stretch: engine.stretch)
                     .frame(height: 56)
-                labeledSlider(title: "Black", value: $engine.stretch.black, range: 0...1, format: pct(engine.stretch.black), onEnd: {})
-                labeledSlider(title: "White", value: $engine.stretch.white, range: 0...1, format: pct(engine.stretch.white), onEnd: {})
-                labeledSlider(title: "Gamma", value: $engine.stretch.gamma, range: 0.15...4, format: String(format: "%.2f", engine.stretch.gamma), onEnd: {})
+                CommitSlider(title: "Black", value: $engine.stretch.black, range: 0...1, format: pct(engine.stretch.black))
+                CommitSlider(title: "White", value: $engine.stretch.white, range: 0...1, format: pct(engine.stretch.white))
+                CommitSlider(title: "Midtones", value: $engine.stretch.midtones, range: 0.01...0.99, format: String(format: "%.3f", engine.stretch.midtones))
                 Button("Auto stretch") { engine.autoStretch() }
                     .keyboardShortcut("a", modifiers: [.command])
             }
@@ -188,6 +193,10 @@ struct SidebarView: View {
                     CompassDial(degrees: engine.coma?.directionDegrees, magnitude: engine.coma?.magnitudeNormalized ?? 0)
                         .frame(width: 88, height: 88)
                 }
+                Button(engine.showOverlay ? "Hide overlay" : "Show overlay") {
+                    engine.showOverlay.toggle()
+                }
+                .help("Toggle crosshairs, fitted circles, and the coma arrow on the live view")
                 Text(qualityText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -246,13 +255,44 @@ struct SidebarView: View {
         }
     }
 
-    private func labeledSlider(
-        title: String,
-        value: Binding<Double>,
-        range: ClosedRange<Double>,
-        format: String,
-        onEnd: @escaping () -> Void
-    ) -> some View {
+    private var logExposureRange: ClosedRange<Double> {
+        log10(engine.exposureRange.lowerBound)...log10(engine.exposureRange.upperBound)
+    }
+
+    private var logExposureBinding: Binding<Double> {
+        Binding(
+            get: {
+                log10(min(max(engine.exposureMicroseconds, engine.exposureRange.lowerBound), engine.exposureRange.upperBound))
+            },
+            set: { engine.exposureMicroseconds = pow(10, $0) }
+        )
+    }
+
+    private func exposureLabel(_ us: Double) -> String {
+        let ms = us / 1000
+        if ms < 1 {
+            return String(format: "%.2f ms", ms)
+        }
+        if ms < 10 {
+            return String(format: "%.1f ms", ms)
+        }
+        return String(format: "%.0f ms", ms)
+    }
+
+    private func pct(_ value: Double) -> String {
+        String(format: "%.1f%%", value * 100)
+    }
+}
+
+private struct CommitSlider: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let format: String
+    var onCommit: () -> Void = {}
+    @State private var dragging = false
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text(title)
@@ -261,23 +301,14 @@ struct SidebarView: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
-            Slider(value: value, in: range, onEditingChanged: { editing in
-                if !editing { onEnd() }
+            Slider(value: $value, in: range, onEditingChanged: { editing in
+                if editing {
+                    dragging = true
+                } else if dragging {
+                    dragging = false
+                    onCommit()
+                }
             })
         }
-    }
-
-    private func exposureLabel(_ us: Double) -> String {
-        if us >= 1_000_000 {
-            return String(format: "%.2f s", us / 1_000_000)
-        }
-        if us >= 1000 {
-            return String(format: "%.1f ms", us / 1000)
-        }
-        return String(format: "%.0f µs", us)
-    }
-
-    private func pct(_ value: Double) -> String {
-        String(format: "%.1f%%", value * 100)
     }
 }

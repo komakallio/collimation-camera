@@ -46,7 +46,7 @@ public struct CameraControls: Equatable, Sendable {
     public init(
         exposureMicroseconds: Int = 50_000,
         gain: Int = 100,
-        exposureRange: ClosedRange<Int> = 32...2_000_000_000,
+        exposureRange: ClosedRange<Int> = ExposureControl.range,
         gainRange: ClosedRange<Int> = 0...400
     ) {
         self.exposureMicroseconds = exposureMicroseconds
@@ -70,6 +70,11 @@ public protocol CameraDevice: AnyObject {
     func startVideo() throws
     func stopVideo()
     func grabFrame(timeoutMs: Int) throws -> Frame
+    func cancelGrab()
+}
+
+extension CameraDevice {
+    public func cancelGrab() {}
 }
 
 public enum DeviceCatalog {
@@ -78,11 +83,16 @@ public enum DeviceCatalog {
     }
 
     public static func list() -> [CameraDescriptor] {
-        var devices = [CameraDescriptor.simulator]
+        var devices: [CameraDescriptor] = []
         if let native = POANative.shared {
             devices.append(contentsOf: native.enumerate())
         }
+        devices.append(.simulator)
         return devices
+    }
+
+    public static func preferredDeviceID(in devices: [CameraDescriptor]) -> String {
+        devices.first(where: { !$0.isSimulator })?.id ?? CameraDescriptor.simulator.id
     }
 
     public static func makeDevice(id: String) throws -> CameraDevice {

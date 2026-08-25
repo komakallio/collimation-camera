@@ -11,6 +11,7 @@ public final class CaptureSession: @unchecked Sendable {
     private var pendingROI: ROI?
     private var pendingExposure: Int?
     private var pendingGain: Int?
+    private let loopGroup = DispatchGroup()
 
     public init() {}
 
@@ -21,6 +22,7 @@ public final class CaptureSession: @unchecked Sendable {
     }
 
     public func start(device: CameraDevice) {
+        stop()
         stateLock.lock()
         self.device = device
         running = true
@@ -29,23 +31,29 @@ public final class CaptureSession: @unchecked Sendable {
         pendingGain = nil
         stateLock.unlock()
 
+        loopGroup.enter()
         queue.async { [weak self] in
+            defer { self?.loopGroup.leave() }
             self?.runLoop()
         }
     }
 
     public func stop() {
         stateLock.lock()
+        let shouldWait = running
         running = false
         let device = self.device
-        stateLock.unlock()
-        queue.sync {
-            device?.stopVideo()
-            device?.close()
-        }
-        stateLock.lock()
         self.device = nil
         stateLock.unlock()
+
+        device?.cancelGrab()
+        if shouldWait {
+            // Must not close the SDK while another thread is inside POAImageReady.
+            _ = loopGroup.wait(timeout: .now() + 3)
+        }
+        // Close only after the capture thread has left SDK calls.
+        device?.stopVideo()
+        device?.close()
     }
 
     public func requestROI(_ roi: ROI) {
@@ -93,17 +101,15 @@ public final class CaptureSession: @unchecked Sendable {
 
             do {
                 if let exposure {
-                    device.stopVideo()
                     try device.applyExposure(exposure)
-                    try device.startVideo()
                 }
                 if let gain {
                     try device.applyGain(gain)
                 }
-                if let roi {
+                if let roi, roi != device.currentROI {
                     try device.applyROI(roi)
                 }
-                let timeout = max(1500, device.controls.exposureMicroseconds / 1000 + 800)
+                let timeout = max(100, device.controls.exposureMicroseconds / 1000 + 400)
                 let frame = try device.grabFrame(timeoutMs: timeout)
                 onFrame?(frame)
             } catch CameraError.timeout {

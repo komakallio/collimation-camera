@@ -65,35 +65,63 @@ public struct DonutRenderer: Sendable {
         let innerEdge = max(1.0, innerR * 0.08)
         let comaAngle = scene.comaAngleRadians
         let bin = Double(roi.binning)
+        let background = UInt16(min(65535, max(0, scene.backgroundADU.rounded())))
 
-        for y in 0..<height {
-            for x in 0..<width {
-                let sx = Double(roi.x) + (Double(x) + 0.5) * bin
-                let sy = Double(roi.y) + (Double(y) + 0.5) * bin
-                let dxO = sx - origin.x
-                let dyO = sy - origin.y
-                let dO = sqrt(dxO * dxO + dyO * dyO)
-                let dxI = sx - innerCenter.x
-                let dyI = sy - innerCenter.y
-                let dI = sqrt(dxI * dxI + dyI * dyI)
+        let margin = outerR + 12
+        let minSX = origin.x - margin
+        let maxSX = origin.x + margin
+        let minSY = origin.y - margin
+        let maxSY = origin.y + margin
+        var x0 = Int(floor((minSX - Double(roi.x)) / bin))
+        var y0 = Int(floor((minSY - Double(roi.y)) / bin))
+        var x1 = Int(ceil((maxSX - Double(roi.x)) / bin))
+        var y1 = Int(ceil((maxSY - Double(roi.y)) / bin))
+        x0 = min(max(x0, 0), width)
+        y0 = min(max(y0, 0), height)
+        x1 = min(max(x1, 0), width)
+        y1 = min(max(y1, 0), height)
 
-                let outer = smoothstep(outerR + edge, outerR - edge, dO)
-                let hole = smoothstep(innerR - innerEdge, innerR + innerEdge, dI)
-                var signal = outer * hole
-                if signal > 0 {
-                    let theta = atan2(dyO, dxO)
-                    signal *= 1 + scene.intensityAsymmetry * cos(theta - comaAngle)
-                    // Soft radial peak in the middle of the annulus.
-                    let mid = (outerR + innerR) * 0.5
-                    let radial = exp(-0.5 * pow((dO - mid) / max(outerR * 0.28, 1), 2))
-                    signal *= 0.55 + 0.45 * radial
+        if scene.noiseSigma > 0 {
+            let amp = UInt16(min(200, max(1, scene.noiseSigma.rounded())))
+            for i in 0..<pixels.count {
+                let n = UInt16(rng.next() & 0x3F)
+                pixels[i] = background &+ (n % amp)
+            }
+        } else {
+            for i in 0..<pixels.count { pixels[i] = background }
+        }
+
+        if x1 > x0, y1 > y0 {
+            for y in y0..<y1 {
+                for x in x0..<x1 {
+                    let sx = Double(roi.x) + (Double(x) + 0.5) * bin
+                    let sy = Double(roi.y) + (Double(y) + 0.5) * bin
+                    let dxO = sx - origin.x
+                    let dyO = sy - origin.y
+                    let dO = sqrt(dxO * dxO + dyO * dyO)
+                    let dxI = sx - innerCenter.x
+                    let dyI = sy - innerCenter.y
+                    let dI = sqrt(dxI * dxI + dyI * dyI)
+
+                    let outer = smoothstep(outerR + edge, outerR - edge, dO)
+                    let hole = smoothstep(innerR - innerEdge, innerR + innerEdge, dI)
+                    var signal = outer * hole
+                    if signal > 0 {
+                        let theta = atan2(dyO, dxO)
+                        signal *= 1 + scene.intensityAsymmetry * cos(theta - comaAngle)
+                        let mid = (outerR + innerR) * 0.5
+                        let radial = exp(-0.5 * pow((dO - mid) / max(outerR * 0.28, 1), 2))
+                        signal *= 0.55 + 0.45 * radial
+                    } else {
+                        continue
+                    }
+
+                    var value = scene.backgroundADU + signal * scene.peakADU
+                    if scene.noiseSigma > 0 {
+                        value += rng.cheapNoise() * scene.noiseSigma
+                    }
+                    pixels[y * width + x] = UInt16(min(65535, max(0, value.rounded())))
                 }
-
-                var value = scene.backgroundADU + signal * scene.peakADU
-                if scene.noiseSigma > 0 {
-                    value += rng.gaussian() * scene.noiseSigma
-                }
-                pixels[y * width + x] = UInt16(min(65535, max(0, value.rounded())))
             }
         }
 
@@ -124,6 +152,10 @@ public struct RNG: Sendable {
 
     public mutating func uniform() -> Double {
         Double(next() >> 11) / Double(1 << 53)
+    }
+
+    public mutating func cheapNoise() -> Double {
+        Double(next() & 2047) / 1023.5 - 1
     }
 
     public mutating func gaussian() -> Double {

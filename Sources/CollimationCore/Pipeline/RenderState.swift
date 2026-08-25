@@ -4,10 +4,19 @@ import Foundation
 public struct RenderState: Sendable {
     public var stretch: StretchParams
     public var zoom: Double
+    public var stabilizeLock: SIMD2<Double>?
+    public var stabilizeCentroid: SIMD2<Double>?
 
-    public init(stretch: StretchParams = .default, zoom: Double = 1) {
+    public init(
+        stretch: StretchParams = .default,
+        zoom: Double = 1,
+        stabilizeLock: SIMD2<Double>? = nil,
+        stabilizeCentroid: SIMD2<Double>? = nil
+    ) {
         self.stretch = stretch
         self.zoom = zoom
+        self.stabilizeLock = stabilizeLock
+        self.stabilizeCentroid = stabilizeCentroid
     }
 }
 

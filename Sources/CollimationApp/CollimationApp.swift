@@ -1,14 +1,19 @@
+import AppKit
 import CollimationCore
 import SwiftUI
 
 @main
 struct CollimationApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var engine = CollimationEngine()
 
     var body: some Scene {
         WindowGroup("Collimation Camera") {
             ContentView()
                 .environmentObject(engine)
+                .onAppear {
+                    appDelegate.stopCapture = { engine.stopCapture() }
+                }
         }
         .defaultSize(width: 1280, height: 820)
         .commands {
@@ -20,10 +25,46 @@ struct CollimationApp: App {
                 .keyboardShortcut("k", modifiers: [.command])
                 Button("Auto Stretch") { engine.autoStretch() }
                     .keyboardShortcut("a", modifiers: [.command])
+                Button("Auto Exposure") { engine.autoExpose() }
+                    .keyboardShortcut("e", modifiers: [.command])
                 Button("Search Full Frame") { engine.searchNow() }
                     .keyboardShortcut("f", modifiers: [.command])
+                Toggle("Stabilize View", isOn: $engine.stabilize)
+                    .keyboardShortcut("l", modifiers: [.command])
+            }
+            CommandMenu("View") {
+                Toggle("Collimation Overlay", isOn: $engine.showOverlay)
+                    .keyboardShortcut("o", modifiers: [.command])
             }
         }
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Runs synchronously on quit so `libPlayerOneCamera` is not torn down
+    /// while the capture thread is still inside `POAImageReady`.
+    var stopCapture: (() -> Void)?
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // `swift run` launches an unbundled binary. Without this, macOS keeps
+        // Terminal as the active app and the menu bar never switches over.
+        ProcessInfo.processInfo.processName = "Collimation Camera"
+        NSApplication.shared.setActivationPolicy(.regular)
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        NSApp.windows.forEach { $0.makeKeyAndOrderFront(nil) }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        stopCapture?()
+        stopCapture = nil
+        return .terminateNow
     }
 }
 
@@ -36,7 +77,9 @@ struct ContentView: View {
         } detail: {
             ZStack {
                 LiveView(engine: engine)
-        OverlayView(overlay: engine.overlay, zoom: engine.zoom)
+                if engine.showOverlay {
+                    OverlayView(overlay: engine.overlay, zoom: engine.zoom)
+                }
                 VStack {
                     HStack {
                         stateChip

@@ -52,6 +52,7 @@ public final class SimulatorCamera: CameraDevice {
     }
 
     public func applyROI(_ roi: ROI) throws {
+        if roi == currentROI { return }
         currentROI = roi
     }
 
@@ -68,9 +69,15 @@ public final class SimulatorCamera: CameraDevice {
     public func grabFrame(timeoutMs: Int) throws -> Frame {
         _ = timeoutMs
         guard opened else { throw CameraError.notConnected }
+        let minInterval = 1.0 / 80.0
         let now = Date()
-        let dt = min(0.2, now.timeIntervalSince(lastGrab))
-        lastGrab = now
+        let wait = minInterval - now.timeIntervalSince(lastGrab)
+        if wait > 0.0005 {
+            Thread.sleep(forTimeInterval: min(wait, 0.05))
+        }
+        let grabbedAt = Date()
+        let dt = min(0.2, grabbedAt.timeIntervalSince(lastGrab))
+        lastGrab = grabbedAt
 
         lock.lock()
         defer { lock.unlock() }
@@ -88,10 +95,6 @@ public final class SimulatorCamera: CameraDevice {
         }
 
         let jitter = SIMD2(rng.gaussian(), rng.gaussian()) * renderer.scene.seeingJitter
-        let exposureDelay = min(0.05, Double(controls.exposureMicroseconds) / 1_000_000)
-        if exposureDelay > 0.002 {
-            Thread.sleep(forTimeInterval: min(exposureDelay, Double(timeoutMs) / 1000))
-        }
         return renderer.render(roi: currentROI, jitter: jitter, rng: &rng)
     }
 }

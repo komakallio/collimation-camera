@@ -41,6 +41,7 @@ struct LiveView: NSViewRepresentable {
         Task { @MainActor in
             engine.viewWidth = width
             engine.viewHeight = height
+            engine.updateStabilization()
         }
     }
 
@@ -90,7 +91,9 @@ struct OverlayView: View {
                 imageHeight: max(overlay.imageHeight, 1),
                 viewWidth: size.width,
                 viewHeight: size.height,
-                zoom: zoom
+                zoom: zoom,
+                lockNormalized: overlay.stabilizeLock,
+                stabilizeCentroid: overlay.stabilizeCentroid
             )
             let rect = layout.imageRect
             let imageRect = CGRect(x: rect.x, y: rect.y, width: rect.width, height: rect.height)

@@ -57,7 +57,7 @@ final class FramePipeline: @unchecked Sendable {
 
         var result: ComaResult?
         if next.state == .tracking,
-           min(frame.width, frame.height) <= 1024,
+           min(frame.width, frame.height) <= 2048,
            let detection,
            let analyzed = analyzer.analyze(frame: frame, detection: detection),
            analyzed.quality >= 0.4 {

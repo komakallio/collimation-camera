@@ -47,19 +47,67 @@ public struct ImageLayout: Equatable, Sendable {
     public var viewHeight: Double
     /// View pixels per image pixel. 1.0 is 1:1.
     public var zoom: Double
+    /// Extra translation in image pixels, applied after centering.
+    public var pan: SIMD2<Double>
 
-    public init(imageWidth: Int, imageHeight: Int, viewWidth: Double, viewHeight: Double, zoom: Double) {
+    public init(
+        imageWidth: Int,
+        imageHeight: Int,
+        viewWidth: Double,
+        viewHeight: Double,
+        zoom: Double,
+        pan: SIMD2<Double> = .zero
+    ) {
         self.imageWidth = max(1, imageWidth)
         self.imageHeight = max(1, imageHeight)
         self.viewWidth = viewWidth
         self.viewHeight = viewHeight
         self.zoom = max(0.01, zoom)
+        self.pan = pan
+    }
+
+    public init(
+        imageWidth: Int,
+        imageHeight: Int,
+        viewWidth: Double,
+        viewHeight: Double,
+        zoom: Double,
+        lockNormalized: SIMD2<Double>?,
+        stabilizeCentroid: SIMD2<Double>?
+    ) {
+        let pan: SIMD2<Double>
+        if let lockNormalized, let stabilizeCentroid {
+            pan = ImageLayout.pan(
+                locking: stabilizeCentroid,
+                toNormalized: lockNormalized,
+                imageWidth: imageWidth,
+                imageHeight: imageHeight,
+                viewWidth: viewWidth,
+                viewHeight: viewHeight,
+                zoom: zoom
+            )
+        } else {
+            pan = .zero
+        }
+        self.init(
+            imageWidth: imageWidth,
+            imageHeight: imageHeight,
+            viewWidth: viewWidth,
+            viewHeight: viewHeight,
+            zoom: zoom,
+            pan: pan
+        )
     }
 
     public var imageRect: (x: Double, y: Double, width: Double, height: Double) {
         let w = Double(imageWidth) * zoom
         let h = Double(imageHeight) * zoom
-        return ((viewWidth - w) / 2, (viewHeight - h) / 2, w, h)
+        return (
+            (viewWidth - w) / 2 + pan.x * zoom,
+            (viewHeight - h) / 2 + pan.y * zoom,
+            w,
+            h
+        )
     }
 
     public func viewPoint(image: SIMD2<Double>) -> SIMD2<Double> {
@@ -70,6 +118,27 @@ public struct ImageLayout: Equatable, Sendable {
     public func imagePoint(view: SIMD2<Double>) -> SIMD2<Double> {
         let r = imageRect
         return SIMD2((view.x - r.x) / zoom, (view.y - r.y) / zoom)
+    }
+
+    /// Image-pixel pan that places `centroid` at `lockNormalized` (0…1 in the view).
+    public static func pan(
+        locking centroid: SIMD2<Double>,
+        toNormalized lock: SIMD2<Double>,
+        imageWidth: Int,
+        imageHeight: Int,
+        viewWidth: Double,
+        viewHeight: Double,
+        zoom: Double
+    ) -> SIMD2<Double> {
+        let layout = ImageLayout(
+            imageWidth: imageWidth,
+            imageHeight: imageHeight,
+            viewWidth: viewWidth,
+            viewHeight: viewHeight,
+            zoom: zoom
+        )
+        let lockView = SIMD2(lock.x * viewWidth, lock.y * viewHeight)
+        return (lockView - layout.viewPoint(image: centroid)) / layout.zoom
     }
 
     public static func fitZoom(

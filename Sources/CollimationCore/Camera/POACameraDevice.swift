@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import POACameraC
 
@@ -12,6 +13,8 @@ final class POACameraDevice: CameraDevice {
     private(set) var supportedBins: [Int] = [1, 2, 4]
     private var format: POAImgFormat = POA_RAW16
     private var grabBuffer = Data()
+    private let grabLock = NSLock()
+    private var grabCancelled = false
 
     init(native: POANative, cameraID: Int32) {
         self.native = native
@@ -64,21 +67,24 @@ final class POACameraDevice: CameraDevice {
             sensorHeight: descriptor.sensorHeight
         )
         try applyROI(roi)
+        try? native.setInt(cameraID, POA_FRAME_LIMIT, 0)
         try applyExposure(controls.exposureMicroseconds)
         try applyGain(controls.gain)
+        if let actual = native.getExposureMicroseconds(cameraID) {
+            controls.exposureMicroseconds = actual
+        }
     }
 
-    func close() {
-        if streaming { native.stopVideo(cameraID) }
-        streaming = false
-        if opened { native.close(cameraID) }
-        opened = false
+    func cancelGrab() {
+        grabLock.lock()
+        grabCancelled = true
+        grabLock.unlock()
     }
 
     func applyExposure(_ microseconds: Int) throws {
         let clamped = min(max(microseconds, controls.exposureRange.lowerBound), controls.exposureRange.upperBound)
-        try native.setInt(cameraID, POA_EXPOSURE, clamped)
-        controls.exposureMicroseconds = clamped
+        try native.setExposure(id: cameraID, microseconds: clamped)
+        controls.exposureMicroseconds = native.getExposureMicroseconds(cameraID) ?? clamped
     }
 
     func applyGain(_ gain: Int) throws {
@@ -88,6 +94,7 @@ final class POACameraDevice: CameraDevice {
     }
 
     func applyROI(_ roi: ROI) throws {
+        if roi == currentROI { return }
         let wasStreaming = streaming
         if wasStreaming { stopVideo() }
         try native.setBin(cameraID, roi.binning)
@@ -104,12 +111,25 @@ final class POACameraDevice: CameraDevice {
     }
 
     func stopVideo() {
+        guard opened else { return }
         native.stopVideo(cameraID)
         streaming = false
     }
 
+    func close() {
+        cancelGrab()
+        guard opened else { return }
+        native.stopVideo(cameraID)
+        native.close(cameraID)
+        streaming = false
+        opened = false
+    }
+
     func grabFrame(timeoutMs: Int) throws -> Frame {
         guard opened else { throw CameraError.notConnected }
+        grabLock.lock()
+        grabCancelled = false
+        grabLock.unlock()
         let bytesPerPixel = format == POA_RAW16 ? 2 : 1
         let size = currentROI.width * currentROI.height * bytesPerPixel
         if grabBuffer.count < size {
@@ -119,19 +139,27 @@ final class POACameraDevice: CameraDevice {
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress else {
                 throw CameraError.poa(code: -1, message: "Failed to allocate frame buffer")
             }
-            try native.grab(cameraID, buffer: base, size: size, timeoutMs: timeoutMs)
+            try native.grab(cameraID, buffer: base, size: size, timeoutMs: timeoutMs) { [weak self] in
+                guard let self else { return true }
+                self.grabLock.lock()
+                let cancelled = self.grabCancelled
+                self.grabLock.unlock()
+                return cancelled
+            }
         }
-        var pixels = [UInt16](repeating: 0, count: currentROI.width * currentROI.height)
-        grabBuffer.withUnsafeBytes { raw in
-            if format == POA_RAW16 {
-                let src = raw.bindMemory(to: UInt16.self)
-                for i in 0..<pixels.count {
-                    pixels[i] = src[i]
-                }
-            } else {
-                let src = raw.bindMemory(to: UInt8.self)
-                for i in 0..<pixels.count {
-                    pixels[i] = UInt16(src[i]) << 8
+        let pixelCount = currentROI.width * currentROI.height
+        var pixels = [UInt16](repeating: 0, count: pixelCount)
+        pixels.withUnsafeMutableBytes { dest in
+            grabBuffer.withUnsafeBytes { src in
+                guard let d = dest.baseAddress, let s = src.baseAddress else { return }
+                if format == POA_RAW16 {
+                    memcpy(d, s, pixelCount * MemoryLayout<UInt16>.size)
+                } else {
+                    let bytes = src.bindMemory(to: UInt8.self)
+                    let out = dest.bindMemory(to: UInt16.self)
+                    for i in 0..<pixelCount {
+                        out[i] = UInt16(bytes[i]) << 8
+                    }
                 }
             }
         }

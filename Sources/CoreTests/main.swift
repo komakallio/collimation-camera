@@ -7,6 +7,7 @@ struct CoreTests {
         var failures = 0
         failures += run("histogram percentiles", testHistogramPercentiles)
         failures += run("auto stretch", testAutoStretch)
+        failures += run("mtf identity", testMTFIdentityAtHalf)
         failures += run("star detection", testStarDetection)
         failures += run("empty sky", testEmptySky)
         failures += run("circle fit", testCircleFit)
@@ -16,6 +17,10 @@ struct CoreTests {
         failures += run("tracker recenter", testTrackerRecenter)
         failures += run("tracker search", testTrackerSearch)
         failures += run("search recovery", testSearchRecovery)
+        failures += run("auto exposure", testAutoExposure)
+        failures += run("digital stabilize pan", testDigitalStabilizePan)
+        failures += run("digital stabilize hold", testDigitalStabilizeHold)
+        failures += run("digital stabilize disable", testDigitalStabilizeDisable)
 
         if failures == 0 {
             print("All tests passed.")
@@ -63,7 +68,17 @@ private func testAutoStretch() throws {
     let frame = Frame(width: 256, height: 256, pixels: pixels, roi: ROI(x: 0, y: 0, width: 256, height: 256))
     let stretch = StretchParams.auto(from: Histogram.compute(from: frame))
     try expect(stretch.white > stretch.black, "white > black")
-    try expect(stretch.gamma > 0.15 && stretch.gamma < 4, "gamma range")
+    try expect(stretch.midtones >= 0.01 && stretch.midtones <= 0.6, "midtones \(stretch.midtones)")
+}
+
+private func testMTFIdentityAtHalf() throws {
+    for x in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        try expect(abs(StretchParams.mtf(x, midtones: 0.5) - x) < 1e-9, "linear \(x)")
+    }
+    try expect(StretchParams.mtf(0, midtones: 0.2) == 0, "black")
+    try expect(StretchParams.mtf(1, midtones: 0.2) == 1, "white")
+    let lifted = StretchParams.mtf(0.25, midtones: 0.2)
+    try expect(lifted > 0.25, "m<0.5 lifts midtones (\(lifted))")
 }
 
 private func testStarDetection() throws {
@@ -244,4 +259,125 @@ private func testSearchRecovery() throws {
     try expect(status.state == TrackingState.tracking, "state")
     try expect(status.requestedROI?.binning == 1, "bin")
     try expect(status.requestedROI?.width == 256 || status.requestedROI?.width == 252, "width")
+}
+
+private func testAutoExposure() throws {
+    try expect(ExposureControl.clamp(10) == 100, "min 0.1 ms")
+    try expect(ExposureControl.clamp(5_000_000) == 100_000, "max 100 ms")
+    let doubled = ExposureControl.adjustedMicroseconds(current: 10_000, peakNormalized: 0.40)
+    try expect(doubled == 20_000, "scale 0.80/0.40 -> 2x (\(doubled))")
+    let atTarget = ExposureControl.adjustedMicroseconds(current: 8_000, peakNormalized: 0.80)
+    try expect(atTarget == 8_000, "already at target (\(atTarget))")
+}
+
+private func testDigitalStabilizePan() throws {
+    var stabilizer = DigitalStabilizer()
+    let first = stabilizer.update(
+        enabled: true,
+        centroid: SIMD2(50, 50),
+        tracking: .tracking,
+        imageWidth: 100,
+        imageHeight: 100,
+        viewWidth: 200,
+        viewHeight: 200,
+        zoom: 1
+    )
+    try expect(first.lockNormalized != nil, "lock on first tracking frame")
+    let layout0 = ImageLayout(
+        imageWidth: 100,
+        imageHeight: 100,
+        viewWidth: 200,
+        viewHeight: 200,
+        zoom: 1,
+        lockNormalized: first.lockNormalized,
+        stabilizeCentroid: first.centroid
+    )
+    let p0 = layout0.viewPoint(image: SIMD2(50, 50))
+    try expect(abs(p0.x - 100) < 1e-9 && abs(p0.y - 100) < 1e-9, "no jump when enabled")
+
+    let moved = stabilizer.update(
+        enabled: true,
+        centroid: SIMD2(55, 47),
+        tracking: .tracking,
+        imageWidth: 100,
+        imageHeight: 100,
+        viewWidth: 200,
+        viewHeight: 200,
+        zoom: 1
+    )
+    let layout1 = ImageLayout(
+        imageWidth: 100,
+        imageHeight: 100,
+        viewWidth: 200,
+        viewHeight: 200,
+        zoom: 1,
+        lockNormalized: moved.lockNormalized,
+        stabilizeCentroid: moved.centroid
+    )
+    let p1 = layout1.viewPoint(image: SIMD2(55, 47))
+    try expect(abs(p1.x - p0.x) < 1e-9 && abs(p1.y - p0.y) < 1e-9, "centroid stays in the window (\(p1.x), \(p1.y))")
+    try expect(abs(layout1.pan.x + 5) < 1e-9 && abs(layout1.pan.y - 3) < 1e-9, "pan \(layout1.pan)")
+}
+
+private func testDigitalStabilizeHold() throws {
+    var stabilizer = DigitalStabilizer()
+    _ = stabilizer.update(
+        enabled: true,
+        centroid: SIMD2(40, 60),
+        tracking: .tracking,
+        imageWidth: 100,
+        imageHeight: 100,
+        viewWidth: 200,
+        viewHeight: 200,
+        zoom: 2
+    )
+    let lost = stabilizer.update(
+        enabled: true,
+        centroid: nil,
+        tracking: .lost,
+        imageWidth: 100,
+        imageHeight: 100,
+        viewWidth: 200,
+        viewHeight: 200,
+        zoom: 2
+    )
+    try expect(lost.centroid == SIMD2(40, 60), "hold last centroid")
+    try expect(lost.lockNormalized != nil, "keep lock while lost")
+
+    let search = stabilizer.update(
+        enabled: true,
+        centroid: SIMD2(10, 10),
+        tracking: .searching,
+        imageWidth: 200,
+        imageHeight: 150,
+        viewWidth: 200,
+        viewHeight: 200,
+        zoom: 1
+    )
+    try expect(search.lockNormalized == nil && search.centroid == nil, "clear lock while searching")
+}
+
+private func testDigitalStabilizeDisable() throws {
+    var stabilizer = DigitalStabilizer()
+    _ = stabilizer.update(
+        enabled: true,
+        centroid: SIMD2(20, 20),
+        tracking: .tracking,
+        imageWidth: 64,
+        imageHeight: 64,
+        viewWidth: 128,
+        viewHeight: 128,
+        zoom: 1
+    )
+    let off = stabilizer.update(
+        enabled: false,
+        centroid: SIMD2(20, 20),
+        tracking: .tracking,
+        imageWidth: 64,
+        imageHeight: 64,
+        viewWidth: 128,
+        viewHeight: 128,
+        zoom: 1
+    )
+    try expect(off.lockNormalized == nil && off.centroid == nil, "disable clears pose")
 }

@@ -5,17 +5,34 @@ public struct StretchParams: Equatable, Sendable {
     public var black: Double
     /// White point as a fraction of the 16-bit range (0...1).
     public var white: Double
-    public var gamma: Double
+    /// Midtones balance in (0, 1). 0.5 is linear; values below 0.5 lift shadows (STF-style).
+    public var midtones: Double
 
-    public init(black: Double = 0.01, white: Double = 0.35, gamma: Double = 0.45) {
+    public init(black: Double = 0.01, white: Double = 0.35, midtones: Double = 0.25) {
         self.black = black
         self.white = white
-        self.gamma = gamma
+        self.midtones = midtones
     }
 
     public static let `default` = StretchParams()
 
-    /// Screen-transfer-function style auto stretch from a histogram.
+    /// PixInsight midtones transfer function.
+    /// MTF(x, m) = ((m − 1) x) / ((2m − 1) x − m)
+    public static func mtf(_ x: Double, midtones m: Double) -> Double {
+        let x = min(max(x, 0), 1)
+        let m = min(max(m, 1e-4), 1 - 1e-4)
+        if x == 0 || x == 1 || abs(m - 0.5) < 1e-6 { return x }
+        let y = ((m - 1) * x) / ((2 * m - 1) * x - m)
+        return min(max(y, 0), 1)
+    }
+
+    public func apply(normalizedValue x: Double) -> Double {
+        let span = max(white - black, 1e-6)
+        let t = min(max((x - black) / span, 0), 1)
+        return Self.mtf(t, midtones: midtones)
+    }
+
+    /// Auto stretch: clip by percentiles, then choose midtones so the median maps to 0.25.
     public static func auto(from histogram: Histogram) -> StretchParams {
         let black = histogram.percentile(0.001)
         var white = histogram.percentile(0.999)
@@ -24,10 +41,9 @@ public struct StretchParams: Equatable, Sendable {
         }
         let median = histogram.percentile(0.5)
         let linear = (median - black) / max(white - black, 1e-6)
-        let clampedLinear = min(max(linear, 0.02), 0.98)
-        let targetMid: Double = 0.25
-        var gamma = log(targetMid) / log(clampedLinear)
-        gamma = min(max(gamma, 0.15), 4.0)
-        return StretchParams(black: black, white: white, gamma: gamma)
+        let clampedLinear = min(max(linear, 1e-4), 1 - 1e-4)
+        let targetBackground = 0.25
+        let midtones = min(max(mtf(clampedLinear, midtones: targetBackground), 0.01), 0.6)
+        return StretchParams(black: black, white: white, midtones: midtones)
     }
 }
