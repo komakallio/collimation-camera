@@ -8,6 +8,7 @@ struct CoreTests {
         failures += run("histogram percentiles", testHistogramPercentiles)
         failures += run("auto stretch", testAutoStretch)
         failures += run("mtf identity", testMTFIdentityAtHalf)
+        failures += run("arcsinh stretch", testArcsinhStretch)
         failures += run("star detection", testStarDetection)
         failures += run("empty sky", testEmptySky)
         failures += run("circle fit", testCircleFit)
@@ -80,6 +81,33 @@ private func testMTFIdentityAtHalf() throws {
     try expect(StretchParams.mtf(1, midtones: 0.2) == 1, "white")
     let lifted = StretchParams.mtf(0.25, midtones: 0.2)
     try expect(lifted > 0.25, "m<0.5 lifts midtones (\(lifted))")
+}
+
+private func testArcsinhStretch() throws {
+    try expect(StretchParams.arcsinh(0, factor: 12) == 0, "black")
+    try expect(StretchParams.arcsinh(1, factor: 12) == 1, "white")
+    for x in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        let y = StretchParams.arcsinh(x, factor: StretchParams.arcsinhRange.lowerBound)
+        try expect(abs(y - x) < 0.02, "small factor nearly linear \(x) -> \(y)")
+    }
+    let lifted = StretchParams.arcsinh(0.1, factor: 40)
+    try expect(lifted > 0.1, "large factor lifts shadows (\(lifted))")
+    try expect(lifted < StretchParams.arcsinh(0.3, factor: 40), "monotonic")
+
+    let factor = StretchParams.arcsinhFactor(mapping: 0.05, to: 0.25)
+    let mapped = StretchParams.arcsinh(0.05, factor: factor)
+    try expect(abs(mapped - 0.25) < 0.01, "auto factor maps 0.05 -> 0.25 (\(mapped), α=\(factor))")
+
+    var pixels = [UInt16](repeating: 800, count: 256 * 256)
+    for i in 0..<200 { pixels[i] = 40_000 }
+    let frame = Frame(width: 256, height: 256, pixels: pixels, roi: ROI(x: 0, y: 0, width: 256, height: 256))
+    let stretch = StretchParams.auto(from: Histogram.compute(from: frame), curve: .arcsinh)
+    try expect(stretch.curve == .arcsinh, "curve")
+    try expect(abs(stretch.white - 1) < 1e-12, "white")
+    try expect(stretch.arcsinh >= StretchParams.arcsinhRange.lowerBound, "factor \(stretch.arcsinh)")
+    let sample = stretch.black + 0.05 * max(stretch.white - stretch.black, 1e-6)
+    let displayed = stretch.apply(normalizedValue: sample)
+    try expect(displayed > 0.05, "arcsinh lifts 5% linear (\(displayed), α=\(stretch.arcsinh))")
 }
 
 private func testStarDetection() throws {

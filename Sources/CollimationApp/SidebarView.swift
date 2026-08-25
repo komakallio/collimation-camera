@@ -170,9 +170,26 @@ struct SidebarView: View {
             VStack(alignment: .leading, spacing: 8) {
                 HistogramView(histogram: engine.histogram, stretch: engine.stretch)
                     .frame(height: 56)
+                Picker("Curve", selection: $engine.stretch.curve) {
+                    ForEach(StretchCurve.allCases) { curve in
+                        Text(curve.label).tag(curve)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
                 CommitSlider(title: "Black", value: $engine.stretch.black, range: StretchParams.blackRange, format: pct(engine.stretch.black))
                 CommitSlider(title: "White", value: $engine.stretch.white, range: 0...1, format: pct(engine.stretch.white))
-                CommitSlider(title: "Midtones", value: $engine.stretch.midtones, range: 0.01...0.99, format: String(format: "%.3f", engine.stretch.midtones))
+                if engine.stretch.curve == .mtf {
+                    CommitSlider(title: "Midtones", value: $engine.stretch.midtones, range: 0.01...0.99, format: String(format: "%.3f", engine.stretch.midtones))
+                } else {
+                    CommitSlider(
+                        title: "Factor",
+                        value: logArcsinhBinding,
+                        range: logArcsinhRange,
+                        format: String(format: "%.1f", engine.stretch.arcsinh)
+                    )
+                    .help("asinh(αx) / asinh(α). Larger α lifts the faint background more.")
+                }
                 Button("Auto stretch") { engine.autoStretch() }
                     .keyboardShortcut("a", modifiers: [.command])
             }
@@ -265,6 +282,19 @@ struct SidebarView: View {
                 log10(min(max(engine.exposureMicroseconds, engine.exposureRange.lowerBound), engine.exposureRange.upperBound))
             },
             set: { engine.exposureMicroseconds = pow(10, $0) }
+        )
+    }
+
+    private var logArcsinhRange: ClosedRange<Double> {
+        log10(StretchParams.arcsinhRange.lowerBound)...log10(StretchParams.arcsinhRange.upperBound)
+    }
+
+    private var logArcsinhBinding: Binding<Double> {
+        Binding(
+            get: {
+                log10(min(max(engine.stretch.arcsinh, StretchParams.arcsinhRange.lowerBound), StretchParams.arcsinhRange.upperBound))
+            },
+            set: { engine.stretch.arcsinh = pow(10, $0) }
         )
     }
 

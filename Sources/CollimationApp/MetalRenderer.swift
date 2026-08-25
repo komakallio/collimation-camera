@@ -93,8 +93,11 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         var uniforms = StretchUniforms(
             black: Float(state.stretch.black),
             white: Float(max(state.stretch.white, state.stretch.black + 0.0005)),
-            midtones: Float(min(max(state.stretch.midtones, 1e-4), 1 - 1e-4)),
-            nearest: state.zoom >= 1 ? 1 : 0
+            amount: state.stretch.curve == .arcsinh
+                ? Float(min(max(state.stretch.arcsinh, StretchParams.arcsinhRange.lowerBound), StretchParams.arcsinhRange.upperBound))
+                : Float(min(max(state.stretch.midtones, 1e-4), 1 - 1e-4)),
+            nearest: state.zoom >= 1 ? 1 : 0,
+            mode: state.stretch.curve == .arcsinh ? 1 : 0
         )
 
         encoder.setRenderPipelineState(pipeline)
@@ -155,8 +158,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private struct StretchUniforms {
         var black: Float
         var white: Float
-        var midtones: Float
+        var amount: Float
         var nearest: Float
+        var mode: Float
+        var pad0: Float = 0
+        var pad1: Float = 0
+        var pad2: Float = 0
     }
 
     private static let shaderSource = """
@@ -171,8 +178,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     struct StretchUniforms {
         float black;
         float white;
-        float midtones;
+        float amount;
         float nearest;
+        float mode;
+        float pad0;
+        float pad1;
+        float pad2;
     };
 
     vertex VertexOut stretchVertex(uint vid [[vertex_id]],
@@ -208,9 +219,14 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             raw = mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y) / 65535.0;
         }
         float t = saturate((raw - u.black) / max(u.white - u.black, 1e-6));
-        float m = u.midtones;
-        if (t > 0.0 && t < 1.0 && abs(m - 0.5) > 1e-6) {
-            t = saturate(((m - 1.0) * t) / ((2.0 * m - 1.0) * t - m));
+        if (u.mode > 0.5) {
+            float a = max(u.amount, 1e-4);
+            t = asinh(a * t) / max(asinh(a), 1e-6);
+        } else {
+            float m = u.amount;
+            if (t > 0.0 && t < 1.0 && abs(m - 0.5) > 1e-6) {
+                t = saturate(((m - 1.0) * t) / ((2.0 * m - 1.0) * t - m));
+            }
         }
         return float4(t, t, t, 1);
     }

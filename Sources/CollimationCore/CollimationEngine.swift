@@ -261,7 +261,7 @@ public final class CollimationEngine: ObservableObject {
     }
 
     public func autoStretch() {
-        stretch = StretchParams.auto(from: histogram)
+        stretch = StretchParams.auto(from: histogram, curve: stretch.curve)
     }
 
     public func fitZoom(viewWidth: Double? = nil, viewHeight: Double? = nil) {
