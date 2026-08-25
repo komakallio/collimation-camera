@@ -77,7 +77,10 @@ final class FramePipeline: @unchecked Sendable {
             outer: result?.outer,
             inner: result?.inner,
             comaVector: result?.vector,
-            trackingState: next.state
+            trackingState: next.state,
+            sensorWidth: sensorWidth,
+            sensorHeight: sensorHeight,
+            roi: frame.roi
         )
         return ProcessedFrame(histogram: histogram, tracking: next, coma: result, overlay: overlay)
     }

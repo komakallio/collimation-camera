@@ -11,6 +11,9 @@ public struct OverlayModel: Equatable, Sendable {
     public var trackingState: TrackingState
     public var stabilizeLock: SIMD2<Double>?
     public var stabilizeCentroid: SIMD2<Double>?
+    public var sensorWidth: Int
+    public var sensorHeight: Int
+    public var roi: ROI
 
     public init(
         imageWidth: Int = 0,
@@ -21,7 +24,10 @@ public struct OverlayModel: Equatable, Sendable {
         comaVector: SIMD2<Double>? = nil,
         trackingState: TrackingState = .idle,
         stabilizeLock: SIMD2<Double>? = nil,
-        stabilizeCentroid: SIMD2<Double>? = nil
+        stabilizeCentroid: SIMD2<Double>? = nil,
+        sensorWidth: Int = 0,
+        sensorHeight: Int = 0,
+        roi: ROI = ROI(x: 0, y: 0, width: 0, height: 0)
     ) {
         self.imageWidth = imageWidth
         self.imageHeight = imageHeight
@@ -32,6 +38,9 @@ public struct OverlayModel: Equatable, Sendable {
         self.trackingState = trackingState
         self.stabilizeLock = stabilizeLock
         self.stabilizeCentroid = stabilizeCentroid
+        self.sensorWidth = sensorWidth
+        self.sensorHeight = sensorHeight
+        self.roi = roi
     }
 }
 

@@ -170,7 +170,7 @@ struct SidebarView: View {
             VStack(alignment: .leading, spacing: 8) {
                 HistogramView(histogram: engine.histogram, stretch: engine.stretch)
                     .frame(height: 56)
-                CommitSlider(title: "Black", value: $engine.stretch.black, range: 0...1, format: pct(engine.stretch.black))
+                CommitSlider(title: "Black", value: $engine.stretch.black, range: StretchParams.blackRange, format: pct(engine.stretch.black))
                 CommitSlider(title: "White", value: $engine.stretch.white, range: 0...1, format: pct(engine.stretch.white))
                 CommitSlider(title: "Midtones", value: $engine.stretch.midtones, range: 0.01...0.99, format: String(format: "%.3f", engine.stretch.midtones))
                 Button("Auto stretch") { engine.autoStretch() }

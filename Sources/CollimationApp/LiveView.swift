@@ -147,3 +147,74 @@ struct OverlayView: View {
         context.stroke(Path(ellipseIn: rect), with: .color(color), lineWidth: 1.2)
     }
 }
+
+struct ROIMapView: View {
+    let sensorWidth: Int
+    let sensorHeight: Int
+    let roi: ROI
+    var centroidInFrame: SIMD2<Double>?
+
+    private let maxWidth: CGFloat = 140
+    private let maxHeight: CGFloat = 94
+
+    var body: some View {
+        let size = mapSize
+        Canvas { context, canvas in
+            let pad: CGFloat = 4
+            let sw = CGFloat(max(sensorWidth, 1))
+            let sh = CGFloat(max(sensorHeight, 1))
+            let scale = min((canvas.width - pad * 2) / sw, (canvas.height - pad * 2) / sh)
+            let frameW = sw * scale
+            let frameH = sh * scale
+            let origin = CGPoint(
+                x: (canvas.width - frameW) / 2,
+                y: (canvas.height - frameH) / 2
+            )
+            let frameRect = CGRect(x: origin.x, y: origin.y, width: frameW, height: frameH)
+            context.fill(Path(roundedRect: frameRect, cornerRadius: 1), with: .color(Color.white.opacity(0.08)))
+            context.stroke(Path(roundedRect: frameRect, cornerRadius: 1), with: .color(.white.opacity(0.75)), lineWidth: 1)
+
+            let roiRect = CGRect(
+                x: origin.x + CGFloat(roi.x) * scale,
+                y: origin.y + CGFloat(roi.y) * scale,
+                width: max(CGFloat(roi.sensorWidth) * scale, 1.5),
+                height: max(CGFloat(roi.sensorHeight) * scale, 1.5)
+            )
+            context.fill(Path(roiRect), with: .color(Color.red.opacity(0.28)))
+            context.stroke(Path(roiRect), with: .color(.red), lineWidth: 1.2)
+
+            if let centroidInFrame {
+                let sensor = roi.sensorPoint(fromFramePixel: centroidInFrame)
+                let point = CGPoint(
+                    x: origin.x + sensor.x * scale,
+                    y: origin.y + sensor.y * scale
+                )
+                drawYellowPlus(context: &context, at: point)
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .strokeBorder(.white.opacity(0.2), lineWidth: 1)
+        )
+        .help("Full sensor with the current camera ROI")
+    }
+
+    private func drawYellowPlus(context: inout GraphicsContext, at point: CGPoint) {
+        let arm: CGFloat = 4
+        var path = Path()
+        path.move(to: CGPoint(x: point.x - arm, y: point.y))
+        path.addLine(to: CGPoint(x: point.x + arm, y: point.y))
+        path.move(to: CGPoint(x: point.x, y: point.y - arm))
+        path.addLine(to: CGPoint(x: point.x, y: point.y + arm))
+        context.stroke(path, with: .color(.yellow), lineWidth: 1.25)
+    }
+
+    private var mapSize: CGSize {
+        let sw = CGFloat(max(sensorWidth, 1))
+        let sh = CGFloat(max(sensorHeight, 1))
+        let scale = min(maxWidth / sw, maxHeight / sh)
+        return CGSize(width: sw * scale + 8, height: sh * scale + 8)
+    }
+}

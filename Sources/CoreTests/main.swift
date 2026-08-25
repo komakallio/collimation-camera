@@ -67,7 +67,8 @@ private func testAutoStretch() throws {
     for i in 0..<200 { pixels[i] = 40_000 }
     let frame = Frame(width: 256, height: 256, pixels: pixels, roi: ROI(x: 0, y: 0, width: 256, height: 256))
     let stretch = StretchParams.auto(from: Histogram.compute(from: frame))
-    try expect(stretch.white > stretch.black, "white > black")
+    try expect(abs(stretch.white - 1) < 1e-12, "white stays at 100%")
+    try expect(stretch.black >= StretchParams.blackRange.lowerBound && stretch.black <= StretchParams.blackRange.upperBound, "black \(stretch.black)")
     try expect(stretch.midtones >= 0.01 && stretch.midtones <= 0.6, "midtones \(stretch.midtones)")
 }
 

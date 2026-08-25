@@ -91,9 +91,20 @@ struct ContentView: View {
                             .background(.black.opacity(0.45), in: Capsule())
                             .foregroundStyle(.white)
                     }
-                    .padding(10)
                     Spacer()
+                    HStack {
+                        Spacer()
+                        if engine.overlay.sensorWidth > 0, engine.overlay.sensorHeight > 0 {
+                            ROIMapView(
+                                sensorWidth: engine.overlay.sensorWidth,
+                                sensorHeight: engine.overlay.sensorHeight,
+                                roi: engine.overlay.roi,
+                                centroidInFrame: engine.overlay.centroid
+                            )
+                        }
+                    }
                 }
+                .padding(10)
             }
             .background(Color.black)
         }

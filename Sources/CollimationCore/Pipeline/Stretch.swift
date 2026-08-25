@@ -8,13 +8,15 @@ public struct StretchParams: Equatable, Sendable {
     /// Midtones balance in (0, 1). 0.5 is linear; values below 0.5 lift shadows (STF-style).
     public var midtones: Double
 
-    public init(black: Double = 0.01, white: Double = 0.35, midtones: Double = 0.25) {
+    public init(black: Double = 0.01, white: Double = 1, midtones: Double = 0.25) {
         self.black = black
         self.white = white
         self.midtones = midtones
     }
 
     public static let `default` = StretchParams()
+    /// Upper bound for the black point (5% of the 16-bit range).
+    public static let blackRange: ClosedRange<Double> = 0...0.05
 
     /// PixInsight midtones transfer function.
     /// MTF(x, m) = ((m − 1) x) / ((2m − 1) x − m)
@@ -32,13 +34,11 @@ public struct StretchParams: Equatable, Sendable {
         return Self.mtf(t, midtones: midtones)
     }
 
-    /// Auto stretch: clip by percentiles, then choose midtones so the median maps to 0.25.
+    /// Auto stretch: clip the black point, leave white at 100%, then choose
+    /// midtones so the median maps to 0.25.
     public static func auto(from histogram: Histogram) -> StretchParams {
-        let black = histogram.percentile(0.001)
-        var white = histogram.percentile(0.999)
-        if white - black < 0.004 {
-            white = min(1, black + 0.02)
-        }
+        let black = min(max(histogram.percentile(0.001), blackRange.lowerBound), blackRange.upperBound)
+        let white = 1.0
         let median = histogram.percentile(0.5)
         let linear = (median - black) / max(white - black, 1e-6)
         let clampedLinear = min(max(linear, 1e-4), 1 - 1e-4)

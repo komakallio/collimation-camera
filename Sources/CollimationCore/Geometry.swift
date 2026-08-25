@@ -17,6 +17,11 @@ public struct ROI: Equatable, Sendable {
 
     public var size: SIMD2<Int> { SIMD2(width, height) }
 
+    /// Unbinned width of this ROI on the sensor.
+    public var sensorWidth: Int { width * binning }
+    /// Unbinned height of this ROI on the sensor.
+    public var sensorHeight: Int { height * binning }
+
     public func contains(sensorPoint p: SIMD2<Double>) -> Bool {
         p.x >= Double(x) && p.y >= Double(y)
             && p.x < Double(x + width * binning)
