@@ -18,7 +18,6 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
     private var proto: EQ6Protocol?
     private var siderealPeriod = 0
     private var activeNudge: PadNudge?
-    private var highSpeedRatio = 16
 
     public var isConnected: Bool {
         lock.lock()
@@ -38,7 +37,6 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
         proto = nil
         siderealPeriod = 0
         activeNudge = nil
-        highSpeedRatio = 16
         let speed: speed_t = baud == 115200 ? speed_t(B115200) : speed_t(B9600)
         do {
             try port.open(path: path, baud: speed)
@@ -78,7 +76,6 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
         proto = nil
         siderealPeriod = 0
         activeNudge = nil
-        highSpeedRatio = 16
     }
 
     public func haltMotions() {
@@ -198,24 +195,12 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
     private func startSkyWatcherNudgeLocked(_ direction: GuideDirection, rate: UInt8) throws {
         let axis = (direction == .east || direction == .west) ? 1 : 2
         let forward = direction == .east || direction == .north
-        let (highSpeed, period) = skyWatcherPeriod(forRate: rate)
+        let period = SkyWatcherEncoding.slowSlewPeriod(sidereal: siderealPeriod, rate: rate)
         try? skyCommandLocked("K", axis: axis, data: "")
         usleep(80_000)
-        let mode = highSpeed ? (forward ? "30" : "31") : (forward ? "10" : "11")
-        try skyCommandLocked("G", axis: axis, data: mode)
+        try skyCommandLocked("G", axis: axis, data: forward ? "10" : "11")
         try skyCommandLocked("I", axis: axis, data: SkyWatcherEncoding.hex24(period))
         try skyCommandLocked("J", axis: axis, data: "")
-    }
-
-    private func skyWatcherPeriod(forRate rate: UInt8) -> (highSpeed: Bool, period: Int) {
-        let multiple = max(SynScanGuide.siderealMultiple(rate), 1)
-        let sidereal = max(siderealPeriod, 6)
-        let ratio = max(highSpeedRatio, 1)
-        if multiple >= Double(ratio) {
-            let internalMultiple = multiple / Double(ratio)
-            return (true, max(6, Int((Double(sidereal) / internalMultiple).rounded())))
-        }
-        return (false, max(6, Int((Double(sidereal) / multiple).rounded())))
     }
 
     private func pulseLX200Locked(_ direction: GuideDirection, milliseconds: Int) throws {
@@ -252,7 +237,7 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
         }
 
         try skyCommandLocked("G", axis: axis, data: forward ? "10" : "11")
-        let period = max(siderealPeriod, 6)
+        let period = SkyWatcherEncoding.trackingPeriod(sidereal: siderealPeriod)
         try skyCommandLocked("I", axis: axis, data: SkyWatcherEncoding.hex24(period))
         try skyCommandLocked("J", axis: axis, data: "")
         usleep(UInt32(milliseconds) * 1000)
@@ -274,7 +259,8 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
         do {
             try port.write(Data([UInt8(ascii: "K"), 0x55]))
             let response = try port.readUntil(terminator: UInt8(ascii: "#"), timeout: 0.8)
-            return response.contains(0x55)
+            // Handset echoes the payload and '#'. Do not treat a stray 0x55 as a match.
+            return response == Data([0x55, UInt8(ascii: "#")]) || response == Data([UInt8(ascii: "K"), 0x55, UInt8(ascii: "#")])
         } catch {
             return false
         }
@@ -298,18 +284,21 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
     private func initializeSkyWatcherLocked() throws {
         try skyCommandLocked("F", axis: 1, data: "")
         try skyCommandLocked("F", axis: 2, data: "")
-        if let period = try? inquireNumberLocked("D", axis: 1), period > 0 {
+        if let period = SkyWatcherEncoding.plausibleSiderealPeriod(try? inquireNumberLocked("d", axis: 1)) {
             siderealPeriod = period
         } else if
             let steps = try? inquireNumberLocked("a", axis: 1),
             let freq = try? inquireNumberLocked("b", axis: 1),
             steps > 0, freq > 0
         {
-            siderealPeriod = max(6, Int((Double(freq) * 86_164.0905 / Double(steps)).rounded()))
+            siderealPeriod = SkyWatcherEncoding.plausibleSiderealPeriod(
+                Int((Double(freq) * 86_164.0905 / Double(steps)).rounded())
+            ) ?? SkyWatcherEncoding.defaultSiderealPeriod
+        } else {
+            siderealPeriod = SkyWatcherEncoding.defaultSiderealPeriod
         }
-        if let ratio = try? inquireNumberLocked("g", axis: 1), ratio > 0 {
-            highSpeedRatio = ratio
-        }
+        print("EQ6 sidereal period \(siderealPeriod)")
+        fflush(stdout)
     }
 
     private func stopTrackingLocked() throws {

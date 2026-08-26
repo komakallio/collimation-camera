@@ -131,16 +131,6 @@ public struct Tracker: Sendable {
         if state == .searching {
             return TrackingStatus(state: .searching, lostFrames: lostFrames)
         }
-        if lostFrames >= config.lostFrameLimit {
-            state = .searching
-            let search = Alignment.fullFrameROI(
-                sensorWidth: sensorWidth,
-                sensorHeight: sensorHeight,
-                binning: config.searchBinning
-            )
-            lastMove = now
-            return TrackingStatus(state: .searching, lostFrames: lostFrames, requestedROI: search)
-        }
         state = .lost
         return TrackingStatus(
             state: .lost,

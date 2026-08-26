@@ -103,6 +103,7 @@ public final class CollimationEngine: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var mountTask: Task<Void, Never>?
     private var mountHoldsROI = false
+    private var restoreROIAfterMount = false
     private static let serialPortDefaultsKey = "mount.serialPort"
 
     public init() {
@@ -259,6 +260,7 @@ public final class CollimationEngine: ObservableObject {
     public func applyROISize() {
         guard isConnected else { return }
         pipeline.reset()
+        coalescer.cancel()
         let roi: ROI
         if roiSize == 0 {
             roi = Alignment.fullFrameROI(sensorWidth: sensorWidth, sensorHeight: sensorHeight, binning: 1)
@@ -278,6 +280,7 @@ public final class CollimationEngine: ObservableObject {
     public func searchNow() {
         guard isConnected else { return }
         pipeline.markSearching()
+        coalescer.cancel()
         let roi = Alignment.fullFrameROI(sensorWidth: sensorWidth, sensorHeight: sensorHeight, binning: 4)
         session.requestROI(roi)
         tracking.state = .searching
@@ -349,7 +352,7 @@ public final class CollimationEngine: ObservableObject {
     }
 
     private nonisolated func analyze(_ frame: Frame) {
-        let processed = pipeline.process(frame)
+        guard let processed = pipeline.process(frame) else { return }
         if let roi = processed.tracking.requestedROI {
             session.requestROI(roi)
         }
@@ -431,8 +434,13 @@ public final class CollimationEngine: ObservableObject {
         mount.disconnect()
         isMountConnected = false
         isMountBusy = false
+        let restoreROI = restoreROIAfterMount
         mountHoldsROI = false
+        restoreROIAfterMount = false
         applyPipelineConfig()
+        if restoreROI {
+            applyROISize()
+        }
         mountStatus = isMountCalibrated ? "Calibrated — mount disconnected" : "No mount"
     }
 
@@ -503,52 +511,14 @@ public final class CollimationEngine: ObservableObject {
             guard let calibration = guideCalibration, calibration.isValid else {
                 throw MountError.notCalibrated
             }
-            try beginMountWork("Centering on sensor…", holdROI: false)
-            try await nudgeNearCenter(calibration: calibration)
-            var lastError = 0.0
-            for step in 1...MountGuide.maxCenterIterations {
-                try Task.checkCancellation()
-                let centroid = try await waitForCentroid()
-                let target = sensorCenter()
-                let error = centroid - target
-                lastError = MountGuide.errorLength(error)
-                if MountGuide.isCentered(errorPixels: error) {
-                    followStarWithROI()
-                    endMountWork(String(format: "Centered — %.1f px from sensor center", lastError))
-                    return
-                }
-
-                guard let times = calibration.pulses(toMoveStarBy: target - centroid) else {
-                    throw MountError.notCalibrated
-                }
-                let pulses = GuidePulsePlanner.pulses(eastMs: times.eastMs, northMs: times.northMs)
-                if pulses.isEmpty {
-                    followStarWithROI()
-                    endMountWork(String(format: "Centered — %.1f px from sensor center", lastError))
-                    return
-                }
-
-                mountStatus = String(
-                    format: "Centering %d/%d — %.1f px from sensor center",
-                    step,
-                    MountGuide.maxCenterIterations,
-                    lastError
-                )
-                for pulse in pulses {
-                    try Task.checkCancellation()
-                    try await sendPulse(pulse.direction, milliseconds: pulse.milliseconds)
-                }
-                _ = try await waitForSettledCentroid()
-                followStarWithROI()
-            }
-
+            try beginMountWork("Centering on sensor…", holdROI: true, useFullFrame: true)
+            try await centerWithPadNudges(calibration: calibration)
             let centroid = try await waitForCentroid()
-            lastError = MountGuide.errorLength(centroid - sensorCenter())
-            followStarWithROI()
+            let lastError = MountGuide.errorLength(centroid - sensorCenter())
             if MountGuide.isCentered(errorPixels: centroid - sensorCenter()) {
                 endMountWork(String(format: "Centered — %.1f px from sensor center", lastError))
             } else {
-                endMountWork(String(format: "Stopped after %d pulses — %.1f px from sensor center", MountGuide.maxCenterIterations, lastError))
+                endMountWork(String(format: "Stopped — %.1f px from sensor center", lastError))
             }
         } catch is CancellationError {
             endMountWork("Centering cancelled")
@@ -558,64 +528,77 @@ public final class CollimationEngine: ObservableObject {
         }
     }
 
-    private func beginMountWork(_ status: String, holdROI: Bool) throws {
+    private func beginMountWork(_ status: String, holdROI: Bool, useFullFrame: Bool = false) throws {
         guard isMountConnected else { throw MountError.notConnected }
         guard isConnected else { throw CameraError.notConnected }
         isMountBusy = true
         mountStatus = status
         mountHoldsROI = holdROI
+        restoreROIAfterMount = useFullFrame
         applyPipelineConfig()
+        if useFullFrame {
+            session.requestROI(
+                Alignment.fullFrameROI(sensorWidth: sensorWidth, sensorHeight: sensorHeight, binning: 1)
+            )
+        }
     }
 
     private func endMountWork(_ status: String) {
         mount.haltMotions()
+        let restoreROI = restoreROIAfterMount
         mountHoldsROI = false
+        restoreROIAfterMount = false
         applyPipelineConfig()
+        if restoreROI {
+            applyROISize()
+        }
         isMountBusy = false
         mountStatus = status
         mountTask = nil
     }
 
-    private func nudgeNearCenter(calibration: GuideCalibration) async throws {
+    private func centerWithPadNudges(calibration: GuideCalibration) async throws {
         let target = sensorCenter()
-        var centroid = try await waitForCentroid()
+        var centroid = try await waitForSettledCentroid()
         var error = centroid - target
-        if MountGuide.isWithinSlewTolerance(error) { return }
+        if MountGuide.isCentered(errorPixels: error) { return }
 
-        var last: PadNudge?
-        let deadline = Date().addingTimeInterval(45)
+        let deadline = Date().addingTimeInterval(90)
         do {
             while Date() < deadline {
                 try Task.checkCancellation()
-                centroid = try await waitForCentroid(minNewFrames: 1, timeout: 1.5)
-                followStarWithROI()
-                error = centroid - target
                 let distance = MountGuide.errorLength(error)
-                if MountGuide.isWithinSlewTolerance(error) { break }
+                if MountGuide.isCentered(errorPixels: error) { break }
 
                 let desired = calibration.slewAxes(
                     toMoveStarBy: target - centroid,
-                    minAxisPixels: MountGuide.slewAxisStopPixels
+                    minAxisPixels: 1
                 )
-                let ra = MountGuide.committedSlew(current: last?.ra, desired: desired.ra)
-                let dec = MountGuide.committedSlew(current: last?.dec, desired: desired.dec)
                 let rate = SynScanGuide.rate(forDistancePixels: distance)
-                let next = (ra == nil && dec == nil) ? nil : PadNudge(ra: ra, dec: dec, rate: rate)
-                if next != last {
-                    try await mount.applyNudge(next)
-                    last = next
-                }
+                let next = (desired.ra == nil && desired.dec == nil)
+                    ? nil
+                    : PadNudge(ra: desired.ra, dec: desired.dec, rate: rate)
+                if next == nil { break }
+
+                let sliceMs = MountGuide.nudgeSliceMilliseconds(
+                    remaining: target - centroid,
+                    calibration: calibration,
+                    rate: rate
+                )
                 let multiple = SynScanGuide.siderealMultiple(rate)
                 mountStatus = String(
                     format: "Nudging %.0fx — %.0f px from sensor center",
                     multiple,
                     distance
                 )
-                if next == nil { break }
+                try await mount.applyNudge(next)
+                try await sleepMilliseconds(sliceMs)
+                try await mount.applyNudge(nil)
+
+                centroid = try await waitForSettledCentroid()
+                error = centroid - target
             }
             try await mount.applyNudge(nil)
-            _ = try await waitForSettledCentroid()
-            followStarWithROI()
         } catch {
             mount.haltMotions()
             throw error
@@ -629,7 +612,7 @@ public final class CollimationEngine: ObservableObject {
 
     private func waitForSettledCentroid() async throws -> SIMD2<Double> {
         try await sleepMilliseconds(MountGuide.settleMilliseconds)
-        return try await waitForCentroid(minNewFrames: 2, timeout: 4)
+        return try await waitForCentroid(minNewFrames: 2, timeout: 10)
     }
 
     private func waitForCentroid(minNewFrames: Int = 1, timeout: TimeInterval = 4) async throws -> SIMD2<Double> {
@@ -645,9 +628,6 @@ public final class CollimationEngine: ObservableObject {
             }
             try await Task.sleep(nanoseconds: 40_000_000)
         }
-        if tracking.state == .tracking, let centroid = tracking.centroidOnSensor {
-            return centroid
-        }
         throw MountError.noStar
     }
 
@@ -655,18 +635,6 @@ public final class CollimationEngine: ObservableObject {
         let width = overlay.sensorWidth > 0 ? overlay.sensorWidth : sensorWidth
         let height = overlay.sensorHeight > 0 ? overlay.sensorHeight : sensorHeight
         return MountGuide.frameCenter(width: width, height: height)
-    }
-
-    private func followStarWithROI() {
-        guard roiSize > 0, let center = tracking.centroidOnSensor else { return }
-        session.requestROI(
-            Alignment.centeredROI(
-                around: center,
-                size: roiSize,
-                sensorWidth: sensorWidth,
-                sensorHeight: sensorHeight
-            )
-        )
     }
 
     private func sleepMilliseconds(_ ms: Int) async throws {
@@ -679,7 +647,8 @@ public final class CollimationEngine: ObservableObject {
             autoCenter: autoCenter && !mountHoldsROI,
             roiSize: roiSize,
             sensorWidth: sensorWidth,
-            sensorHeight: sensorHeight
+            sensorHeight: sensorHeight,
+            holdROI: mountHoldsROI
         )
     }
 

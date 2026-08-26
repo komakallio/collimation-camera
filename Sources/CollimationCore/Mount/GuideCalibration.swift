@@ -132,11 +132,14 @@ public enum GuidePulsePlanner {
 public enum MountGuide {
     public static let calibrationPulseMs = 3000
     public static let maxCenterIterations = 20
-    public static let doneRadiusSensorPixels = 2.0
+    public static let doneRadiusSensorPixels = 32.0
     public static let slewRadiusSensorPixels = 50.0
     public static let slewAxisStopPixels = 40.0
     public static let minCalibrationMovePixels = 3.0
     public static let settleMilliseconds = 1_200
+    public static let minNudgeSliceMs = 80
+    public static let maxNudgeSliceMs = 5_000
+    public static let nudgeSliceFraction = 0.45
 
     public static func frameCenter(width: Int, height: Int) -> SIMD2<Double> {
         SIMD2(Double(max(width, 1) - 1) / 2, Double(max(height, 1) - 1) / 2)
@@ -148,7 +151,7 @@ public enum MountGuide {
     }
 
     public static func isCentered(errorPixels: SIMD2<Double>) -> Bool {
-        hypot(errorPixels.x, errorPixels.y) < doneRadiusSensorPixels
+        hypot(errorPixels.x, errorPixels.y) <= doneRadiusSensorPixels
     }
 
     public static func isWithinSlewTolerance(_ errorPixels: SIMD2<Double>) -> Bool {
@@ -165,6 +168,22 @@ public enum MountGuide {
 
     public static func errorLength(_ error: SIMD2<Double>) -> Double {
         hypot(error.x, error.y)
+    }
+
+    /// How long to run a pad-rate nudge before stopping to measure again.
+    /// Full-frame centering is slow, so a continuous slew overshoots badly.
+    public static func nudgeSliceMilliseconds(
+        remaining: SIMD2<Double>,
+        calibration: GuideCalibration,
+        rate: UInt8
+    ) -> Int {
+        guard let times = calibration.pulses(toMoveStarBy: remaining) else {
+            return minNudgeSliceMs
+        }
+        let multiple = max(SynScanGuide.siderealMultiple(rate), 1)
+        let msAtRate = max(abs(times.eastMs), abs(times.northMs)) / multiple
+        let sliced = msAtRate * nudgeSliceFraction
+        return Int(min(max(sliced, Double(minNudgeSliceMs)), Double(maxNudgeSliceMs)).rounded())
     }
 }
 
@@ -237,6 +256,27 @@ public enum SkyWatcherEncoding {
         else { return nil }
         return low + mid * 256 + high * 65536
     }
+
+    /// Typical EQ6 T1 interval for 1× sidereal in slow slew mode.
+    public static let defaultSiderealPeriod = 620
+
+    public static func plausibleSiderealPeriod(_ value: Int?) -> Int? {
+        guard let value, (50...50_000).contains(value) else { return nil }
+        return value
+    }
+
+    public static func trackingPeriod(sidereal: Int) -> Int {
+        max(plausibleSiderealPeriod(sidereal) ?? defaultSiderealPeriod, 50)
+    }
+
+    /// Step-timer period for a SynScan pad rate in slow slew mode (`:G*10` / `:G*11`).
+    /// High-speed gearbox mode is not used for rates 1–4: it is loud on EQ6 and
+    /// much faster than the same rate in the SynScan app.
+    public static func slowSlewPeriod(sidereal: Int, rate: UInt8) -> Int {
+        let multiple = max(SynScanGuide.siderealMultiple(rate), 1)
+        let base = Double(trackingPeriod(sidereal: sidereal))
+        return max(16, Int((base / multiple).rounded()))
+    }
 }
 
 public struct PadNudge: Equatable, Sendable {
@@ -247,7 +287,7 @@ public struct PadNudge: Equatable, Sendable {
     public init(ra: GuideDirection?, dec: GuideDirection?, rate: UInt8) {
         self.ra = ra
         self.dec = dec
-        self.rate = (ra == nil && dec == nil) ? 0 : min(max(rate, 1), 9)
+        self.rate = (ra == nil && dec == nil) ? 0 : min(max(rate, 1), 4)
     }
 
     public var isIdle: Bool { ra == nil && dec == nil }
@@ -273,11 +313,10 @@ public enum SynScanGuide {
 
     public static func rate(forDistancePixels distance: Double) -> UInt8 {
         switch distance {
-        case 2500...: return 6
-        case 1000...: return 5
         case 400...: return 4
         case 150...: return 3
-        default: return 2
+        case 40...: return 2
+        default: return 1
         }
     }
 

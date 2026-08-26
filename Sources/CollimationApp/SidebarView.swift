@@ -166,7 +166,7 @@ struct SidebarView: View {
                         .help("Pulse-guide east and north, measure how the star moves in the image, and save that mapping.")
                     Button("Center") { engine.centerStar() }
                         .disabled(!canCenterStar)
-                        .help("Nudge with SynScan pad rates 1–9, including diagonals, then pulse-guide to the sensor center.")
+                        .help("Uses the full sensor and SynScan pad rates 1–4 to put the star on the sensor center.")
                 }
 
                 Text(engine.mountStatus)
@@ -206,15 +206,17 @@ struct SidebarView: View {
                     Text("Full").tag(0)
                 }
                 .pickerStyle(.segmented)
+                .disabled(engine.isMountBusy)
                 .onChange(of: engine.roiSize) { _ in
                     engine.applyROISize()
                 }
 
                 Toggle("Auto-center star", isOn: $engine.autoCenter)
+                    .disabled(engine.isMountBusy)
                 Toggle("Stabilize view", isOn: $engine.stabilize)
                     .help("Nudge the live view so the detected centroid stays still in the window")
                 Button("Search full frame") { engine.searchNow() }
-                    .disabled(!engine.isConnected)
+                    .disabled(!engine.isConnected || engine.isMountBusy)
 
                 HStack {
                     Text("Zoom")

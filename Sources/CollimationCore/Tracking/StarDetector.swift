@@ -41,45 +41,29 @@ public struct StarDetector: Sendable {
         self.maxAreaFraction = maxAreaFraction
     }
 
-    public func detect(in frame: Frame) -> StarDetection? {
-        let stats = backgroundStats(frame)
-        let threshold = UInt16(min(65535, max(0, stats.median + kSigma * stats.sigma)))
-        let maxArea = Int(Double(frame.pixelCount) * maxAreaFraction)
-
-        var visited = [UInt8](repeating: 0, count: frame.pixelCount)
-        var best: StarDetection?
-        var bestFlux = -1.0
-
+    public func detect(in frame: Frame, around seed: SIMD2<Double>? = nil) -> StarDetection? {
         let width = frame.width
         let height = frame.height
-        let pixels = frame.pixels
+        guard width > 0, height > 0 else { return nil }
 
-        for y in 0..<height {
-            let row = y * width
-            for x in 0..<width {
-                let idx = row + x
-                if visited[idx] != 0 || pixels[idx] < threshold { continue }
-                if let blob = floodFill(
-                    pixels: pixels,
-                    visited: &visited,
-                    width: width,
-                    height: height,
-                    start: idx,
-                    threshold: threshold
-                ), blob.area >= minArea, blob.area <= maxArea, blob.flux > bestFlux {
-                    bestFlux = blob.flux
-                    best = StarDetection(
-                        centroid: blob.centroid,
-                        peak: blob.peak,
-                        flux: blob.flux,
-                        area: blob.area,
-                        background: stats.median,
-                        sigma: stats.sigma
-                    )
-                }
-            }
+        if let seed {
+            return detectRegion(in: frame, around: seed, halfWindow: 384)
         }
-        return best
+        if frame.pixelCount > 1024 * 1024 {
+            let peak = stridedPeak(in: frame)
+            if let peak, let found = detectRegion(in: frame, around: peak, halfWindow: 384) {
+                return found
+            }
+            if let peak {
+                return detectRegion(in: frame, around: peak, halfWindow: 768)
+            }
+            return detectRegion(
+                in: frame,
+                around: SIMD2(Double(width) / 2, Double(height) / 2),
+                halfWindow: 768
+            )
+        }
+        return detectRegion(in: frame, x0: 0, y0: 0, x1: width, y1: height)
     }
 
     public func backgroundStats(_ frame: Frame) -> (median: Double, sigma: Double) {
@@ -100,6 +84,87 @@ public struct StarDetector: Sendable {
         return (median, sigma)
     }
 
+    private func detectRegion(in frame: Frame, around seed: SIMD2<Double>, halfWindow: Int) -> StarDetection? {
+        let hw = max(32, halfWindow)
+        let cx = Int(seed.x.rounded())
+        let cy = Int(seed.y.rounded())
+        let x0 = max(0, cx - hw)
+        let y0 = max(0, cy - hw)
+        let x1 = min(frame.width, cx + hw + 1)
+        let y1 = min(frame.height, cy + hw + 1)
+        return detectRegion(in: frame, x0: x0, y0: y0, x1: x1, y1: y1)
+    }
+
+    private func detectRegion(in frame: Frame, x0: Int, y0: Int, x1: Int, y1: Int) -> StarDetection? {
+        guard x1 > x0, y1 > y0 else { return nil }
+        let stats = backgroundStats(frame)
+        let threshold = UInt16(min(65535, max(0, stats.median + kSigma * stats.sigma)))
+        let maxArea = Int(Double(frame.pixelCount) * maxAreaFraction)
+        let width = frame.width
+        let rw = x1 - x0
+        var visited = [UInt8](repeating: 0, count: rw * (y1 - y0))
+        var best: StarDetection?
+        var bestFlux = -1.0
+        let pixels = frame.pixels
+
+        for y in y0..<y1 {
+            let row = y * width
+            let visRow = (y - y0) * rw
+            for x in x0..<x1 {
+                let vis = visRow + (x - x0)
+                if visited[vis] != 0 { continue }
+                let idx = row + x
+                if pixels[idx] < threshold { continue }
+                if let blob = floodFill(
+                    pixels: pixels,
+                    visited: &visited,
+                    width: width,
+                    x0: x0,
+                    y0: y0,
+                    x1: x1,
+                    y1: y1,
+                    start: idx,
+                    threshold: threshold
+                ), blob.area >= minArea, blob.area <= maxArea, blob.flux > bestFlux {
+                    bestFlux = blob.flux
+                    best = StarDetection(
+                        centroid: blob.centroid,
+                        peak: blob.peak,
+                        flux: blob.flux,
+                        area: blob.area,
+                        background: stats.median,
+                        sigma: stats.sigma
+                    )
+                }
+            }
+        }
+        return best
+    }
+
+    private func stridedPeak(in frame: Frame, stride: Int = 8) -> SIMD2<Double>? {
+        let step = max(1, stride)
+        var peak: UInt16 = 0
+        var px = 0
+        var py = 0
+        var y = 0
+        while y < frame.height {
+            let row = y * frame.width
+            var x = 0
+            while x < frame.width {
+                let value = frame.pixels[row + x]
+                if value > peak {
+                    peak = value
+                    px = x
+                    py = y
+                }
+                x += step
+            }
+            y += step
+        }
+        guard peak > 0 else { return nil }
+        return SIMD2(Double(px), Double(py))
+    }
+
     private struct Blob {
         var centroid: SIMD2<Double>
         var peak: UInt16
@@ -111,12 +176,18 @@ public struct StarDetector: Sendable {
         pixels: [UInt16],
         visited: inout [UInt8],
         width: Int,
-        height: Int,
+        x0: Int,
+        y0: Int,
+        x1: Int,
+        y1: Int,
         start: Int,
         threshold: UInt16
     ) -> Blob? {
+        let rw = x1 - x0
         var stack = [start]
-        visited[start] = 1
+        let sx = start % width
+        let sy = start / width
+        visited[(sy - y0) * rw + (sx - x0)] = 1
         var area = 0
         var flux = 0.0
         var sumX = 0.0
@@ -135,34 +206,19 @@ public struct StarDetector: Sendable {
             sumY += Double(y) * w
             if value > peak { peak = value }
 
-            if x > 0 {
-                let n = idx - 1
-                if visited[n] == 0, pixels[n] >= threshold {
-                    visited[n] = 1
-                    stack.append(n)
-                }
+            func consider(_ nx: Int, _ ny: Int) {
+                guard nx >= x0, nx < x1, ny >= y0, ny < y1 else { return }
+                let vis = (ny - y0) * rw + (nx - x0)
+                if visited[vis] != 0 { return }
+                let n = ny * width + nx
+                if pixels[n] < threshold { return }
+                visited[vis] = 1
+                stack.append(n)
             }
-            if x + 1 < width {
-                let n = idx + 1
-                if visited[n] == 0, pixels[n] >= threshold {
-                    visited[n] = 1
-                    stack.append(n)
-                }
-            }
-            if y > 0 {
-                let n = idx - width
-                if visited[n] == 0, pixels[n] >= threshold {
-                    visited[n] = 1
-                    stack.append(n)
-                }
-            }
-            if y + 1 < height {
-                let n = idx + width
-                if visited[n] == 0, pixels[n] >= threshold {
-                    visited[n] = 1
-                    stack.append(n)
-                }
-            }
+            consider(x - 1, y)
+            consider(x + 1, y)
+            consider(x, y - 1)
+            consider(x, y + 1)
         }
 
         guard area > 0, flux > 0 else { return nil }
@@ -182,7 +238,7 @@ public struct StarDetector: Sendable {
 
         let cx = seed.map { Int($0.x.rounded()) } ?? width / 2
         let cy = seed.map { Int($0.y.rounded()) } ?? height / 2
-        let hw = seed == nil ? max(width, height) : max(32, min(halfWindow, max(width, height)))
+        let hw = max(32, min(halfWindow, max(width, height)))
         let x0 = max(0, cx - hw)
         let y0 = max(0, cy - hw)
         let x1 = min(width, cx + hw + 1)

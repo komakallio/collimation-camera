@@ -76,6 +76,7 @@ final class SerialPort: @unchecked Sendable {
                 throw SerialPortError.ioFailed
             }
         }
+        Self.log("TX", data)
     }
 
     func writeASCII(_ text: String) throws {
@@ -101,7 +102,10 @@ final class SerialPort: @unchecked Sendable {
             let n = Darwin.read(fd, &byte, 1)
             if n == 1 {
                 data.append(byte)
-                if byte == terminator { return data }
+                if byte == terminator {
+                    Self.log("RX", data)
+                    return data
+                }
                 if data.count >= maxBytes { throw SerialPortError.ioFailed }
                 continue
             }
@@ -109,6 +113,7 @@ final class SerialPort: @unchecked Sendable {
             if errno == EAGAIN || errno == EWOULDBLOCK { continue }
             throw SerialPortError.ioFailed
         }
+        Self.log("RX timeout", data)
         throw SerialPortError.timeout
     }
 
@@ -148,6 +153,28 @@ final class SerialPort: @unchecked Sendable {
         if pfd.revents & Int16(POLLERR | POLLHUP | POLLNVAL) != 0 {
             throw SerialPortError.ioFailed
         }
+    }
+
+    private static func log(_ direction: String, _ data: Data) {
+        if data.isEmpty {
+            print("EQ6 \(direction)")
+        } else {
+            print("EQ6 \(direction) \(describe(data))")
+        }
+        fflush(stdout)
+    }
+
+    private static func describe(_ data: Data) -> String {
+        if let text = String(data: data, encoding: .ascii),
+           text.unicodeScalars.allSatisfy({ scalar in
+               scalar.isASCII && (scalar.value >= 32 || scalar == "\r" || scalar == "\n")
+           })
+        {
+            return text
+                .replacingOccurrences(of: "\r", with: "\\r")
+                .replacingOccurrences(of: "\n", with: "\\n")
+        }
+        return data.map { String(format: "%02X", $0) }.joined(separator: " ")
     }
 }
 

@@ -18,7 +18,7 @@ struct CoreTests {
         failures += run("coma vertical", testComaVertical)
         failures += run("concentric donut", testConcentric)
         failures += run("tracker recenter", testTrackerRecenter)
-        failures += run("tracker search", testTrackerSearch)
+        failures += run("tracker hold when lost", testTrackerHoldWhenLost)
         failures += run("search recovery", testSearchRecovery)
         failures += run("auto exposure", testAutoExposure)
         failures += run("digital stabilize pan", testDigitalStabilizePan)
@@ -32,6 +32,8 @@ struct CoreTests {
         failures += run("guide center threshold", testGuideCenterThreshold)
         failures += run("lx200 pulse command", testLX200PulseCommand)
         failures += run("skywatcher hex24", testSkyWatcherHex24)
+        failures += run("skywatcher slow slew", testSkyWatcherSlowSlew)
+        failures += run("guide nudge slice", testGuideNudgeSlice)
         failures += run("synscan fixed rate", testSynScanFixedRate)
         failures += run("guide calibration store", testGuideCalibrationStore)
         failures += run("guide slew axes", testGuideSlewAxes)
@@ -330,7 +332,7 @@ private func testTrackerRecenter() throws {
     try expect(status.requestedROI != nil, "requested ROI")
 }
 
-private func testTrackerSearch() throws {
+private func testTrackerHoldWhenLost() throws {
     var tracker = Tracker(config: TrackingConfig(lostFrameLimit: 3))
     let frame = Frame(
         width: 64,
@@ -339,8 +341,7 @@ private func testTrackerSearch() throws {
         roi: ROI(x: 0, y: 0, width: 64, height: 64)
     )
     var last = TrackingStatus()
-    var searchROI: ROI?
-    for _ in 0..<4 {
+    for _ in 0..<8 {
         last = tracker.process(
             frame: frame,
             detection: nil,
@@ -349,11 +350,9 @@ private func testTrackerSearch() throws {
             sensorWidth: 6252,
             sensorHeight: 4176
         )
-        if let roi = last.requestedROI { searchROI = roi }
     }
-    try expect(last.state == TrackingState.searching, "state \(last.state)")
-    try expect(searchROI?.binning == 4, "bin \(String(describing: searchROI?.binning))")
-    try expect(searchROI?.x == 0, "origin")
+    try expect(last.state == TrackingState.lost, "stay lost until Search is pressed")
+    try expect(last.requestedROI == nil, "do not switch to a search ROI")
 }
 
 private func testSearchRecovery() throws {
@@ -637,8 +636,9 @@ private func testGuideCenterThreshold() throws {
     let center = MountGuide.frameCenter(width: 512, height: 256)
     try expect(abs(center.x - 255.5) < 1e-9, "x \(center.x)")
     try expect(abs(center.y - 127.5) < 1e-9, "y \(center.y)")
-    try expect(MountGuide.isCentered(errorPixels: SIMD2(1.5, 1.0)), "inside")
-    try expect(!MountGuide.isCentered(errorPixels: SIMD2(2.0, 0.1)), "outside")
+    try expect(MountGuide.isCentered(errorPixels: SIMD2(20, 20)), "inside")
+    try expect(MountGuide.isCentered(errorPixels: SIMD2(32, 0)), "on the 32 px limit")
+    try expect(!MountGuide.isCentered(errorPixels: SIMD2(32, 8)), "outside")
     let sensor = MountGuide.frameCenter(width: 6252, height: 4176)
     try expect(abs(sensor.x - 3125.5) < 1e-9, "sensor x \(sensor.x)")
     try expect(abs(sensor.y - 2087.5) < 1e-9, "sensor y \(sensor.y)")
@@ -657,6 +657,35 @@ private func testSkyWatcherHex24() throws {
     try expect(SkyWatcherEncoding.hex24(0x123456) == "563412", "encode")
     try expect(SkyWatcherEncoding.parseHex24("563412") == 0x123456, "decode")
     try expect(SkyWatcherEncoding.parseHex24("=563412\r") == 0x123456, "decode wrapped")
+}
+
+private func testSkyWatcherSlowSlew() throws {
+    try expect(SkyWatcherEncoding.slowSlewPeriod(sidereal: 1024, rate: 1) == 1024, "1x")
+    try expect(SkyWatcherEncoding.slowSlewPeriod(sidereal: 1024, rate: 4) == 32, "32x stays in slow mode")
+    try expect(SkyWatcherEncoding.plausibleSiderealPeriod(4) == nil, "reject tiny period")
+    try expect(SkyWatcherEncoding.trackingPeriod(sidereal: 0) == SkyWatcherEncoding.defaultSiderealPeriod, "default")
+    try expect(SkyWatcherEncoding.parseHex24("F60100") == 502, "logged I-command period")
+}
+
+private func testGuideNudgeSlice() throws {
+    let calibration = GuideCalibration(
+        eastRate: SIMD2(0.01, 0),
+        northRate: SIMD2(0, 0.01),
+        sampleDurationMs: 800
+    )
+    let far = MountGuide.nudgeSliceMilliseconds(
+        remaining: SIMD2(20_000, 0),
+        calibration: calibration,
+        rate: 4
+    )
+    try expect(far == MountGuide.maxNudgeSliceMs, "cap long slews \(far)")
+    let near = MountGuide.nudgeSliceMilliseconds(
+        remaining: SIMD2(20, 0),
+        calibration: calibration,
+        rate: 2
+    )
+    try expect(near >= MountGuide.minNudgeSliceMs, "minimum \(near)")
+    try expect(near <= MountGuide.maxNudgeSliceMs, "not over cap \(near)")
 }
 
 private func testSynScanFixedRate() throws {
@@ -713,8 +742,10 @@ private func testSynScanPadNudge() throws {
     try expect(SynScanGuide.siderealMultiple(1) == 1, "rate 1")
     try expect(SynScanGuide.siderealMultiple(2) == 8, "rate 2")
     try expect(SynScanGuide.siderealMultiple(9) == 800, "rate 9")
-    try expect(SynScanGuide.rate(forDistancePixels: 3000) == 6, "far")
+    try expect(SynScanGuide.rate(forDistancePixels: 3000) == 4, "far")
     try expect(SynScanGuide.rate(forDistancePixels: 80) == 2, "near")
+    try expect(SynScanGuide.rate(forDistancePixels: 20) == 1, "fine")
+    try expect(PadNudge(ra: .east, dec: nil, rate: 9).rate == 4, "never above pad rate 4")
     let calibration = GuideCalibration(
         eastRate: SIMD2(0.01, 0),
         northRate: SIMD2(0, 0.01),

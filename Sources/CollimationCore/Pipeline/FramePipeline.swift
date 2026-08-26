@@ -17,22 +17,34 @@ final class FramePipeline: @unchecked Sendable {
     private var smoothedComa: ComaResult?
     private var smoothedFWHM: FWHMResult?
     private var autoCenter = true
+    private var holdROI = false
     private var roiSize = 512
     private var sensorWidth = CameraDescriptor.simulator.sensorWidth
     private var sensorHeight = CameraDescriptor.simulator.sensorHeight
+    private var lastSensorCentroid: SIMD2<Double>?
+    private var generation = 0
 
-    func configure(autoCenter: Bool, roiSize: Int, sensorWidth: Int, sensorHeight: Int) {
+    func configure(
+        autoCenter: Bool,
+        roiSize: Int,
+        sensorWidth: Int,
+        sensorHeight: Int,
+        holdROI: Bool = false
+    ) {
         lock.lock()
         self.autoCenter = autoCenter
         self.roiSize = roiSize
         self.sensorWidth = sensorWidth
         self.sensorHeight = sensorHeight
+        self.holdROI = holdROI
         lock.unlock()
     }
 
     func reset() {
         lock.lock()
+        generation &+= 1
         tracker.reset()
+        lastSensorCentroid = nil
         smoothedComa = nil
         smoothedFWHM = nil
         lock.unlock()
@@ -41,52 +53,85 @@ final class FramePipeline: @unchecked Sendable {
     func markSearching() {
         lock.lock()
         tracker.markSearching()
+        lastSensorCentroid = nil
         lock.unlock()
     }
 
-    func process(_ frame: Frame) -> ProcessedFrame {
+    func process(_ frame: Frame) -> ProcessedFrame? {
         lock.lock()
-        defer { lock.unlock() }
+        let generation = self.generation
+        let autoCenter = self.autoCenter
+        let holdROI = self.holdROI
+        let roiSize = self.roiSize
+        let sensorWidth = self.sensorWidth
+        let sensorHeight = self.sensorHeight
+        let seed = lastSensorCentroid.map { frame.roi.framePixel(fromSensorPoint: $0) }
+        lock.unlock()
 
         let histogram = Histogram.compute(from: frame, stride: max(1, frame.pixelCount / 80_000))
-        let detection = detector.detect(in: frame)
-        let next = tracker.process(
+        let detection = detector.detect(in: frame, around: seed)
+
+        lock.lock()
+        guard generation == self.generation else {
+            lock.unlock()
+            return nil
+        }
+        var next = tracker.process(
             frame: frame,
             detection: detection,
-            autoCenter: autoCenter && roiSize != 0,
+            autoCenter: autoCenter && roiSize != 0 && !holdROI,
             trackingROISize: roiSize == 0 ? min(sensorWidth, sensorHeight) : roiSize,
             sensorWidth: sensorWidth,
             sensorHeight: sensorHeight
         )
+        if holdROI {
+            next.requestedROI = nil
+        }
+        if let sensor = next.centroidOnSensor {
+            lastSensorCentroid = sensor
+        } else if next.state == .searching || next.state == .idle {
+            lastSensorCentroid = nil
+        }
+        let trackingState = next.state
+        let centroid = next.centroidInFrame
+        let previousComa = smoothedComa
+        let previousFWHM = smoothedFWHM
+        lock.unlock()
 
         var result: ComaResult?
-        if next.state == .tracking,
+        if trackingState == .tracking,
            min(frame.width, frame.height) <= 2048,
            let detection,
            let analyzed = analyzer.analyze(frame: frame, detection: detection),
            analyzed.quality >= 0.4 {
-            result = analyzer.smooth(previous: smoothedComa, current: analyzed)
-            smoothedComa = result
-        } else if next.state != .tracking {
-            smoothedComa = nil
-            result = nil
-        } else {
-            result = smoothedComa
+            result = analyzer.smooth(previous: previousComa, current: analyzed)
+        } else if trackingState == .tracking {
+            result = previousComa
         }
 
         var fwhm: FWHMResult?
-        if next.state == .tracking, let centroid = next.centroidInFrame {
+        if trackingState == .tracking, let centroid {
             if let measured = fwhmEstimator.measure(frame: frame, centroid: centroid) {
-                fwhm = fwhmEstimator.smooth(previous: smoothedFWHM, current: measured)
-                smoothedFWHM = fwhm
+                fwhm = fwhmEstimator.smooth(previous: previousFWHM, current: measured)
             } else {
-                fwhm = smoothedFWHM
+                fwhm = previousFWHM
             }
-        } else {
-            smoothedFWHM = nil
-            fwhm = nil
         }
 
+        lock.lock()
+        guard generation == self.generation else {
+            lock.unlock()
+            return nil
+        }
+        if trackingState != .tracking {
+            smoothedComa = nil
+            smoothedFWHM = nil
+            result = nil
+            fwhm = nil
+        } else {
+            smoothedComa = result
+            smoothedFWHM = fwhm
+        }
         let overlay = OverlayModel(
             imageWidth: frame.width,
             imageHeight: frame.height,
@@ -99,6 +144,7 @@ final class FramePipeline: @unchecked Sendable {
             sensorHeight: sensorHeight,
             roi: frame.roi
         )
+        lock.unlock()
         return ProcessedFrame(histogram: histogram, tracking: next, coma: result, fwhm: fwhm, overlay: overlay)
     }
 }
