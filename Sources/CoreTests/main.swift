@@ -24,6 +24,7 @@ struct CoreTests {
         failures += run("digital stabilize pan", testDigitalStabilizePan)
         failures += run("digital stabilize hold", testDigitalStabilizeHold)
         failures += run("digital stabilize disable", testDigitalStabilizeDisable)
+        failures += run("digital stabilize process frame", testDigitalStabilizeProcessFrame)
         failures += run("guide solve orthogonal", testGuideSolveOrthogonal)
         failures += run("guide solve rotated", testGuideSolveRotated)
         failures += run("guide solve singular", testGuideSolveSingular)
@@ -519,6 +520,66 @@ private func testDigitalStabilizeDisable() throws {
         zoom: 1
     )
     try expect(off.lockNormalized == nil && off.centroid == nil, "disable clears pose")
+}
+
+private func testDigitalStabilizeProcessFrame() throws {
+    let controller = StabilizationController()
+    controller.configure(
+        enabled: true,
+        tracking: .tracking,
+        viewWidth: 256,
+        viewHeight: 256,
+        zoom: 1
+    )
+    let first = controller.process(starBlobFrame(at: SIMD2(80, 80)))
+    try expect(first.lockNormalized != nil && first.centroid != nil, "pose from first frame")
+    let layout0 = ImageLayout(
+        imageWidth: 128,
+        imageHeight: 128,
+        viewWidth: 256,
+        viewHeight: 256,
+        zoom: 1,
+        lockNormalized: first.lockNormalized,
+        stabilizeCentroid: first.centroid
+    )
+    let p0 = layout0.viewPoint(image: first.centroid!)
+
+    let moved = controller.process(starBlobFrame(at: SIMD2(92, 74)))
+    try expect(moved.centroid != first.centroid, "centroid follows the new frame")
+    let layout1 = ImageLayout(
+        imageWidth: 128,
+        imageHeight: 128,
+        viewWidth: 256,
+        viewHeight: 256,
+        zoom: 1,
+        lockNormalized: moved.lockNormalized,
+        stabilizeCentroid: moved.centroid
+    )
+    let p1 = layout1.viewPoint(image: moved.centroid!)
+    try expect(abs(p1.x - p0.x) < 0.5 && abs(p1.y - p0.y) < 0.5, "pan matches the frame about to be drawn (\(p1.x), \(p1.y))")
+}
+
+private func starBlobFrame(at center: SIMD2<Double>) -> Frame {
+    let width = 128
+    let height = 128
+    var pixels = [UInt16](repeating: 800, count: width * height)
+    let cx = Int(center.x.rounded())
+    let cy = Int(center.y.rounded())
+    for dy in -4...4 {
+        for dx in -4...4 {
+            let x = cx + dx
+            let y = cy + dy
+            guard x >= 0, x < width, y >= 0, y < height else { continue }
+            let r2 = dx * dx + dy * dy
+            pixels[y * width + x] = r2 <= 9 ? 50_000 : 8_000
+        }
+    }
+    return Frame(
+        width: width,
+        height: height,
+        pixels: pixels,
+        roi: ROI(x: 0, y: 0, width: width, height: height)
+    )
 }
 
 private func testGuideSolveOrthogonal() throws {

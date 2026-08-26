@@ -54,7 +54,8 @@ struct LiveView: NSViewRepresentable {
                   let renderer = MetalRenderer(
                     device: device,
                     frames: engine.frameSlot,
-                    renderState: engine.renderStateSlot
+                    renderState: engine.renderStateSlot,
+                    stabilization: engine.stabilization
                   )
             else {
                 fatalError("Metal is required for live view")

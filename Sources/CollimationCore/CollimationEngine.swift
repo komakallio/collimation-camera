@@ -99,7 +99,7 @@ public final class CollimationEngine: ObservableObject {
     private var lastSentGain: Int?
     private var sensorWidth = CameraDescriptor.simulator.sensorWidth
     private var sensorHeight = CameraDescriptor.simulator.sensorHeight
-    nonisolated private let stabilization = StabilizationController()
+    nonisolated public let stabilization = StabilizationController()
     private var cancellables = Set<AnyCancellable>()
     private var mountTask: Task<Void, Never>?
     private var mountHoldsROI = false
@@ -333,21 +333,18 @@ public final class CollimationEngine: ObservableObject {
         renderStateSlot.update { state in
             state.stretch = stretch
             state.zoom = zoom
-            state.stabilizeLock = pose.lockNormalized
-            state.stabilizeCentroid = pose.centroid
+            // Lock and centroid are written by the renderer for the frame it is
+            // about to draw, so the pan matches that image under jitter.
+            if !stabilize {
+                state.stabilizeLock = nil
+                state.stabilizeCentroid = nil
+            }
         }
     }
 
     private nonisolated func ingest(_ frame: Frame) {
         frameSlot.store(frame)
         _ = fpsMeter.tick()
-        if stabilization.isEnabled {
-            let pose = stabilization.process(frame)
-            renderStateSlot.update { state in
-                state.stabilizeLock = pose.lockNormalized
-                state.stabilizeCentroid = pose.centroid
-            }
-        }
         coalescer.submit(frame)
     }
 

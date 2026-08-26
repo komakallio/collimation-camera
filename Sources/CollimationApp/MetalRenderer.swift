@@ -11,15 +11,23 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private var textureWidth = 0
     private var textureHeight = 0
     private var lastSequence: UInt64 = .max
+    private var lastStabilizedSequence: UInt64 = .max
 
     let frames: FrameSlot
     let renderState: RenderStateSlot
+    let stabilization: StabilizationController
     var viewSize = CGSize(width: 1, height: 1)
 
-    init?(device: MTLDevice, frames: FrameSlot, renderState: RenderStateSlot) {
+    init?(
+        device: MTLDevice,
+        frames: FrameSlot,
+        renderState: RenderStateSlot,
+        stabilization: StabilizationController
+    ) {
         self.device = device
         self.frames = frames
         self.renderState = renderState
+        self.stabilization = stabilization
         guard let queue = device.makeCommandQueue() else { return nil }
         self.queue = queue
 
@@ -61,6 +69,22 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 upload(latest.frame)
                 lastSequence = latest.sequence
             }
+            if stabilization.isEnabled {
+                if latest.sequence != lastStabilizedSequence {
+                    let pose = stabilization.process(
+                        latest.frame,
+                        viewWidth: viewSize.width,
+                        viewHeight: viewSize.height
+                    )
+                    lastStabilizedSequence = latest.sequence
+                    renderState.update { state in
+                        state.stabilizeLock = pose.lockNormalized
+                        state.stabilizeCentroid = pose.centroid
+                    }
+                }
+            } else {
+                lastStabilizedSequence = .max
+            }
         }
 
         guard let texture else {
@@ -71,14 +95,16 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
 
         let state = renderState.peek()
+        let lockNormalized = stabilization.isEnabled ? state.stabilizeLock : nil
+        let stabilizeCentroid = stabilization.isEnabled ? state.stabilizeCentroid : nil
         let layout = ImageLayout(
             imageWidth: texture.width,
             imageHeight: texture.height,
             viewWidth: viewSize.width,
             viewHeight: viewSize.height,
             zoom: state.zoom,
-            lockNormalized: state.stabilizeLock,
-            stabilizeCentroid: state.stabilizeCentroid
+            lockNormalized: lockNormalized,
+            stabilizeCentroid: stabilizeCentroid
         )
         let rect = layout.imageRect
         let ndc = toNDC(

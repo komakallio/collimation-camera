@@ -63,14 +63,14 @@ public struct DigitalStabilizer: Equatable, Sendable {
     }
 }
 
-/// Per-frame digital stabilization. Runs a windowed intensity centroid on the
-/// grab thread so the live view can pan with every camera frame, while coma
-/// analysis stays coalesced.
+/// Per-frame digital stabilization. A windowed intensity centroid is measured on
+/// the frame about to be drawn so the live pan matches that image even when the
+/// star jitters a lot from frame to frame.
 ///
 /// A GPU reduction was considered and rejected for these ROIs: 256–2048 frames
 /// are already in RAM, a ~400² window is microseconds on CPU, and a compute
 /// shader would add encode + readback latency without helping the overlay lock.
-final class StabilizationController: @unchecked Sendable {
+public final class StabilizationController: @unchecked Sendable {
     private let lock = NSLock()
     private var enabled = false
     private var tracking: TrackingState = .idle
@@ -84,13 +84,15 @@ final class StabilizationController: @unchecked Sendable {
     private var lastPose = StabilizationPose()
     private let detector = StarDetector()
 
-    var isEnabled: Bool {
+    public init() {}
+
+    public var isEnabled: Bool {
         lock.lock()
         defer { lock.unlock() }
         return enabled
     }
 
-    func configure(
+    public func configure(
         enabled: Bool,
         tracking: TrackingState,
         viewWidth: Double,
@@ -113,7 +115,7 @@ final class StabilizationController: @unchecked Sendable {
 
     /// Use a detected centroid only to start tracking, never to overwrite a
     /// fresher per-frame measurement.
-    func seed(frameCentroid: SIMD2<Double>, roi: ROI, imageWidth: Int, imageHeight: Int) {
+    public func seed(frameCentroid: SIMD2<Double>, roi: ROI, imageWidth: Int, imageHeight: Int) {
         lock.lock()
         defer { lock.unlock() }
         guard enabled, tracking != .searching else { return }
@@ -133,18 +135,22 @@ final class StabilizationController: @unchecked Sendable {
         )
     }
 
-    func pose() -> StabilizationPose {
+    public func pose() -> StabilizationPose {
         lock.lock()
         defer { lock.unlock() }
         return lastPose
     }
 
-    func process(_ frame: Frame) -> StabilizationPose {
+    public func process(
+        _ frame: Frame,
+        viewWidth viewWidthOverride: Double? = nil,
+        viewHeight viewHeightOverride: Double? = nil
+    ) -> StabilizationPose {
         lock.lock()
         let enabled = self.enabled
         let tracking = self.tracking
-        let viewWidth = self.viewWidth
-        let viewHeight = self.viewHeight
+        let viewWidth = viewWidthOverride ?? self.viewWidth
+        let viewHeight = viewHeightOverride ?? self.viewHeight
         let zoom = self.zoom
         let seed = lastSensorCentroid.map { frame.roi.framePixel(fromSensorPoint: $0) }
         if !enabled || tracking == .searching {
@@ -180,7 +186,7 @@ final class StabilizationController: @unchecked Sendable {
         return pose
     }
 
-    func reset() {
+    public func reset() {
         lock.lock()
         stabilizer.reset()
         lastSensorCentroid = nil
