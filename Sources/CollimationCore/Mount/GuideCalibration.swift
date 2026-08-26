@@ -5,6 +5,15 @@ public enum GuideDirection: String, Equatable, Sendable, CaseIterable {
     case south
     case east
     case west
+
+    public var opposite: GuideDirection {
+        switch self {
+        case .north: return .south
+        case .south: return .north
+        case .east: return .west
+        case .west: return .east
+        }
+    }
 }
 
 public struct GuidePulse: Equatable, Sendable {
@@ -66,6 +75,25 @@ public struct GuideCalibration: Equatable, Sendable, Codable {
         guard eastMs.isFinite, northMs.isFinite else { return nil }
         return (eastMs, northMs)
     }
+
+    /// Axes to slew so the star moves by `delta`. An axis is omitted when the
+    /// remaining motion along it is below `minAxisPixels`, so a fast slew can
+    /// stop one motor while the other continues.
+    public func slewAxes(
+        toMoveStarBy delta: SIMD2<Double>,
+        minAxisPixels: Double
+    ) -> (ra: GuideDirection?, dec: GuideDirection?) {
+        guard let times = pulses(toMoveStarBy: delta) else { return (nil, nil) }
+        let eastPixels = hypot(eastX, eastY) * abs(times.eastMs)
+        let northPixels = hypot(northX, northY) * abs(times.northMs)
+        let ra: GuideDirection? = eastPixels >= minAxisPixels
+            ? (times.eastMs >= 0 ? .east : .west)
+            : nil
+        let dec: GuideDirection? = northPixels >= minAxisPixels
+            ? (times.northMs >= 0 ? .north : .south)
+            : nil
+        return (ra, dec)
+    }
 }
 
 public enum GuidePulsePlanner {
@@ -105,6 +133,8 @@ public enum MountGuide {
     public static let calibrationPulseMs = 3000
     public static let maxCenterIterations = 20
     public static let doneRadiusSensorPixels = 2.0
+    public static let slewRadiusSensorPixels = 50.0
+    public static let slewAxisStopPixels = 40.0
     public static let minCalibrationMovePixels = 3.0
     public static let settleMilliseconds = 1_200
 
@@ -119,6 +149,18 @@ public enum MountGuide {
 
     public static func isCentered(errorPixels: SIMD2<Double>) -> Bool {
         hypot(errorPixels.x, errorPixels.y) < doneRadiusSensorPixels
+    }
+
+    public static func isWithinSlewTolerance(_ errorPixels: SIMD2<Double>) -> Bool {
+        hypot(errorPixels.x, errorPixels.y) <= slewRadiusSensorPixels
+    }
+
+    /// New slew direction after a measurement. Sign flips stop the axis instead
+    /// of reversing, so a fast slew cannot oscillate around the target.
+    public static func committedSlew(current: GuideDirection?, desired: GuideDirection?) -> GuideDirection? {
+        if current == desired { return current }
+        if let current, desired == current.opposite { return nil }
+        return desired
     }
 
     public static func errorLength(_ error: SIMD2<Double>) -> Double {
@@ -197,8 +239,60 @@ public enum SkyWatcherEncoding {
     }
 }
 
+public struct PadNudge: Equatable, Sendable {
+    public var ra: GuideDirection?
+    public var dec: GuideDirection?
+    public var rate: UInt8
+
+    public init(ra: GuideDirection?, dec: GuideDirection?, rate: UInt8) {
+        self.ra = ra
+        self.dec = dec
+        self.rate = (ra == nil && dec == nil) ? 0 : min(max(rate, 1), 9)
+    }
+
+    public var isIdle: Bool { ra == nil && dec == nil }
+}
+
 public enum SynScanGuide {
-    /// Official SynScan fixed-rate slew used to simulate autoguiding (rate 1 does not cancel equatorial tracking).
+    /// Handset / SynScan-app D-pad rates. The pad sends the SynScan `P`
+    /// fixed-rate command with this 1–9 value (0 stops). Multiples are sidereal.
+    public static func siderealMultiple(_ rate: UInt8) -> Double {
+        switch rate {
+        case 0: return 0
+        case 1: return 1
+        case 2: return 8
+        case 3: return 16
+        case 4: return 32
+        case 5: return 64
+        case 6: return 128
+        case 7: return 400
+        case 8: return 600
+        default: return 800
+        }
+    }
+
+    public static func rate(forDistancePixels distance: Double) -> UInt8 {
+        switch distance {
+        case 2500...: return 6
+        case 1000...: return 5
+        case 400...: return 4
+        case 150...: return 3
+        default: return 2
+        }
+    }
+
+    public static func nudge(
+        movingStarBy delta: SIMD2<Double>,
+        calibration: GuideCalibration,
+        minAxisPixels: Double,
+        distancePixels: Double
+    ) -> PadNudge? {
+        let axes = calibration.slewAxes(toMoveStarBy: delta, minAxisPixels: minAxisPixels)
+        if axes.ra == nil && axes.dec == nil { return nil }
+        return PadNudge(ra: axes.ra, dec: axes.dec, rate: rate(forDistancePixels: distancePixels))
+    }
+
+    /// Official SynScan D-pad command: hold a direction at rate 1–9, or 0 to release.
     public static func fixedRateCommand(direction: GuideDirection, rate: UInt8) -> Data {
         let ra: Bool
         let positive: Bool

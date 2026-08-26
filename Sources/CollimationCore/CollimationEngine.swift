@@ -507,6 +507,7 @@ public final class CollimationEngine: ObservableObject {
                 throw MountError.notCalibrated
             }
             try beginMountWork("Centering on sensor…", holdROI: false)
+            try await nudgeNearCenter(calibration: calibration)
             var lastError = 0.0
             for step in 1...MountGuide.maxCenterIterations {
                 try Task.checkCancellation()
@@ -570,11 +571,58 @@ public final class CollimationEngine: ObservableObject {
     }
 
     private func endMountWork(_ status: String) {
+        mount.haltMotions()
         mountHoldsROI = false
         applyPipelineConfig()
         isMountBusy = false
         mountStatus = status
         mountTask = nil
+    }
+
+    private func nudgeNearCenter(calibration: GuideCalibration) async throws {
+        let target = sensorCenter()
+        var centroid = try await waitForCentroid()
+        var error = centroid - target
+        if MountGuide.isWithinSlewTolerance(error) { return }
+
+        var last: PadNudge?
+        let deadline = Date().addingTimeInterval(45)
+        do {
+            while Date() < deadline {
+                try Task.checkCancellation()
+                centroid = try await waitForCentroid(minNewFrames: 1, timeout: 1.5)
+                followStarWithROI()
+                error = centroid - target
+                let distance = MountGuide.errorLength(error)
+                if MountGuide.isWithinSlewTolerance(error) { break }
+
+                let desired = calibration.slewAxes(
+                    toMoveStarBy: target - centroid,
+                    minAxisPixels: MountGuide.slewAxisStopPixels
+                )
+                let ra = MountGuide.committedSlew(current: last?.ra, desired: desired.ra)
+                let dec = MountGuide.committedSlew(current: last?.dec, desired: desired.dec)
+                let rate = SynScanGuide.rate(forDistancePixels: distance)
+                let next = (ra == nil && dec == nil) ? nil : PadNudge(ra: ra, dec: dec, rate: rate)
+                if next != last {
+                    try await mount.applyNudge(next)
+                    last = next
+                }
+                let multiple = SynScanGuide.siderealMultiple(rate)
+                mountStatus = String(
+                    format: "Nudging %.0fx — %.0f px from sensor center",
+                    multiple,
+                    distance
+                )
+                if next == nil { break }
+            }
+            try await mount.applyNudge(nil)
+            _ = try await waitForSettledCentroid()
+            followStarWithROI()
+        } catch {
+            mount.haltMotions()
+            throw error
+        }
     }
 
     private func sendPulse(_ direction: GuideDirection, milliseconds: Int) async throws {

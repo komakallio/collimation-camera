@@ -33,6 +33,9 @@ struct CoreTests {
         failures += run("skywatcher hex24", testSkyWatcherHex24)
         failures += run("synscan fixed rate", testSynScanFixedRate)
         failures += run("guide calibration store", testGuideCalibrationStore)
+        failures += run("guide slew axes", testGuideSlewAxes)
+        failures += run("guide slew commit", testGuideSlewCommit)
+        failures += run("synscan pad nudge", testSynScanPadNudge)
 
         if failures == 0 {
             print("All tests passed.")
@@ -620,4 +623,56 @@ private func testGuideCalibrationStore() throws {
     try GuideCalibrationStore.save(original, to: url)
     let loaded = GuideCalibrationStore.load(from: url)
     try expect(loaded == original, "round-trip \(String(describing: loaded))")
+}
+
+private func testGuideSlewAxes() throws {
+    let calibration = GuideCalibration(
+        eastRate: SIMD2(0.01, 0),
+        northRate: SIMD2(0, 0.01),
+        sampleDurationMs: 800
+    )
+    let far = calibration.slewAxes(toMoveStarBy: SIMD2(200, -80), minAxisPixels: 40)
+    try expect(far.ra == .east, "ra \(String(describing: far.ra))")
+    try expect(far.dec == .south, "dec \(String(describing: far.dec))")
+    let near = calibration.slewAxes(toMoveStarBy: SIMD2(20, 10), minAxisPixels: 40)
+    try expect(near.ra == nil && near.dec == nil, "below stop threshold")
+    try expect(MountGuide.isWithinSlewTolerance(SIMD2(30, 40)), "50 px")
+    try expect(!MountGuide.isWithinSlewTolerance(SIMD2(40, 40)), "over 50")
+}
+
+private func testGuideSlewCommit() throws {
+    try expect(MountGuide.committedSlew(current: nil, desired: .east) == .east, "start")
+    try expect(MountGuide.committedSlew(current: .east, desired: .east) == .east, "hold")
+    try expect(MountGuide.committedSlew(current: .east, desired: nil) == nil, "stop")
+    try expect(MountGuide.committedSlew(current: .east, desired: .west) == nil, "no reverse")
+    try expect(MountGuide.committedSlew(current: .north, desired: .south) == nil, "no reverse dec")
+}
+
+private func testSynScanPadNudge() throws {
+    try expect(SynScanGuide.siderealMultiple(1) == 1, "rate 1")
+    try expect(SynScanGuide.siderealMultiple(2) == 8, "rate 2")
+    try expect(SynScanGuide.siderealMultiple(9) == 800, "rate 9")
+    try expect(SynScanGuide.rate(forDistancePixels: 3000) == 6, "far")
+    try expect(SynScanGuide.rate(forDistancePixels: 80) == 2, "near")
+    let calibration = GuideCalibration(
+        eastRate: SIMD2(0.01, 0),
+        northRate: SIMD2(0, 0.01),
+        sampleDurationMs: 800
+    )
+    let diagonal = SynScanGuide.nudge(
+        movingStarBy: SIMD2(200, 200),
+        calibration: calibration,
+        minAxisPixels: 40,
+        distancePixels: 280
+    )
+    try expect(diagonal?.ra == .east && diagonal?.dec == .north, "diagonal \(String(describing: diagonal))")
+    try expect(diagonal?.rate == 3, "rate for 280 px \(String(describing: diagonal?.rate))")
+    try expect(
+        SynScanGuide.fixedRateCommand(direction: .west, rate: 6) == Data([0x50, 2, 16, 37, 6, 0, 0, 0]),
+        "P-command west rate 6"
+    )
+    try expect(
+        SynScanGuide.fixedRateCommand(direction: .north, rate: 0) == Data([0x50, 2, 17, 36, 0, 0, 0, 0]),
+        "P-command release north"
+    )
 }

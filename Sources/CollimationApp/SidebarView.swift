@@ -166,7 +166,7 @@ struct SidebarView: View {
                         .help("Pulse-guide east and north, measure how the star moves in the image, and save that mapping.")
                     Button("Center") { engine.centerStar() }
                         .disabled(!canCenterStar)
-                        .help("Pulse-guide the mount until the centroid sits at the center of the sensor.")
+                        .help("Nudge with SynScan pad rates 1–9, including diagonals, then pulse-guide to the sensor center.")
                 }
 
                 Text(engine.mountStatus)
