@@ -86,17 +86,23 @@ struct OverlayView: View {
     let zoom: Double
     var lockNormalized: SIMD2<Double>? = nil
     var liveCentroid: SIMD2<Double>? = nil
+    /// When set, live pose is applied only if it matches this overlay frame size.
+    var displayedWidth: Int? = nil
+    var displayedHeight: Int? = nil
 
     var body: some View {
         Canvas { context, size in
+            let poseMatchesDisplayed = displayedWidth == nil
+                || displayedHeight == nil
+                || (displayedWidth == overlay.imageWidth && displayedHeight == overlay.imageHeight)
             let layout = ImageLayout(
                 imageWidth: max(overlay.imageWidth, 1),
                 imageHeight: max(overlay.imageHeight, 1),
                 viewWidth: size.width,
                 viewHeight: size.height,
                 zoom: zoom,
-                lockNormalized: lockNormalized ?? overlay.stabilizeLock,
-                stabilizeCentroid: liveCentroid ?? overlay.stabilizeCentroid
+                lockNormalized: poseMatchesDisplayed ? lockNormalized : nil,
+                stabilizeCentroid: poseMatchesDisplayed ? liveCentroid : overlay.centroid
             )
             let rect = layout.imageRect
             let imageRect = CGRect(x: rect.x, y: rect.y, width: rect.width, height: rect.height)

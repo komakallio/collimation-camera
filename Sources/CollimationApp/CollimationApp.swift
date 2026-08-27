@@ -153,7 +153,9 @@ struct ContentView: View {
                     overlay: engine.overlay,
                     zoom: engine.zoom,
                     lockNormalized: pose?.stabilizeLock,
-                    liveCentroid: pose?.stabilizeCentroid
+                    liveCentroid: pose?.stabilizeCentroid,
+                    displayedWidth: pose?.imageWidth,
+                    displayedHeight: pose?.imageHeight
                 )
             }
             VStack {
@@ -174,7 +176,7 @@ struct ContentView: View {
                         ROIMapView(
                             sensorWidth: engine.overlay.sensorWidth,
                             sensorHeight: engine.overlay.sensorHeight,
-                            roi: engine.overlay.roi,
+                            roi: pose?.roi ?? engine.overlay.roi,
                             centroidInFrame: pose?.stabilizeCentroid ?? engine.overlay.centroid
                         )
                     }

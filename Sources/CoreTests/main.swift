@@ -24,8 +24,11 @@ struct CoreTests {
         failures += run("auto exposure", testAutoExposure)
         failures += run("digital stabilize pan", testDigitalStabilizePan)
         failures += run("digital stabilize hold", testDigitalStabilizeHold)
+        failures += run("digital stabilize size change relocks", testDigitalStabilizeSizeChangeRelocks)
         failures += run("digital stabilize disable", testDigitalStabilizeDisable)
         failures += run("digital stabilize process frame", testDigitalStabilizeProcessFrame)
+        failures += run("digital stabilize lost ignores noise", testDigitalStabilizeLostIgnoresNoise)
+        failures += run("digital stabilize search then crop", testDigitalStabilizeSearchThenCrop)
         failures += run("guide solve orthogonal", testGuideSolveOrthogonal)
         failures += run("guide solve rotated", testGuideSolveRotated)
         failures += run("guide solve singular", testGuideSolveSingular)
@@ -516,6 +519,19 @@ private func testDigitalStabilizeHold() throws {
     try expect(lost.centroid == SIMD2(40, 60), "hold last centroid")
     try expect(lost.lockNormalized != nil, "keep lock while lost")
 
+    let lostWithBlob = stabilizer.update(
+        enabled: true,
+        centroid: SIMD2(10, 10),
+        tracking: .lost,
+        imageWidth: 100,
+        imageHeight: 100,
+        viewWidth: 200,
+        viewHeight: 200,
+        zoom: 2
+    )
+    try expect(lostWithBlob.centroid == SIMD2(40, 60), "lost ignores a new blob")
+    try expect(lostWithBlob.lockNormalized != nil, "keep lock while lost")
+
     let search = stabilizer.update(
         enabled: true,
         centroid: SIMD2(10, 10),
@@ -527,6 +543,42 @@ private func testDigitalStabilizeHold() throws {
         zoom: 1
     )
     try expect(search.lockNormalized == nil && search.centroid == nil, "clear lock while searching")
+}
+
+private func testDigitalStabilizeSizeChangeRelocks() throws {
+    var stabilizer = DigitalStabilizer()
+    let small = stabilizer.update(
+        enabled: true,
+        centroid: SIMD2(40, 40),
+        tracking: .tracking,
+        imageWidth: 100,
+        imageHeight: 100,
+        viewWidth: 200,
+        viewHeight: 200,
+        zoom: 1
+    )
+    try expect(small.lockNormalized != nil, "lock on small frame")
+    let large = stabilizer.update(
+        enabled: true,
+        centroid: SIMD2(80, 80),
+        tracking: .tracking,
+        imageWidth: 200,
+        imageHeight: 200,
+        viewWidth: 200,
+        viewHeight: 200,
+        zoom: 1
+    )
+    try expect(large.lockNormalized != small.lockNormalized, "new lock after size change")
+    let layout = ImageLayout(
+        imageWidth: 200,
+        imageHeight: 200,
+        viewWidth: 200,
+        viewHeight: 200,
+        zoom: 1,
+        lockNormalized: large.lockNormalized,
+        stabilizeCentroid: large.centroid
+    )
+    try expect(abs(layout.pan.x) < 1e-9 && abs(layout.pan.y) < 1e-9, "first frame of new size is unpanned")
 }
 
 private func testDigitalStabilizeDisable() throws {
@@ -591,9 +643,66 @@ private func testDigitalStabilizeProcessFrame() throws {
     try expect(abs(p1.x - p0.x) < 0.5 && abs(p1.y - p0.y) < 0.5, "pan matches the frame about to be drawn (\(p1.x), \(p1.y))")
 }
 
-private func starBlobFrame(at center: SIMD2<Double>) -> Frame {
-    let width = 128
-    let height = 128
+private func testDigitalStabilizeLostIgnoresNoise() throws {
+    let controller = StabilizationController()
+    controller.configure(
+        enabled: true,
+        tracking: .tracking,
+        viewWidth: 256,
+        viewHeight: 256,
+        zoom: 1
+    )
+    let first = controller.process(starBlobFrame(at: SIMD2(80, 80)))
+    try expect(first.centroid != nil, "locked on star")
+    controller.configure(
+        enabled: true,
+        tracking: .lost,
+        viewWidth: 256,
+        viewHeight: 256,
+        zoom: 1
+    )
+    let lost = controller.process(starBlobFrame(at: SIMD2(20, 20)))
+    try expect(lost.lockNormalized == first.lockNormalized, "keep lock while lost")
+    try expect(lost.centroid == first.centroid, "do not chase a new blob")
+}
+
+private func testDigitalStabilizeSearchThenCrop() throws {
+    let controller = StabilizationController()
+    controller.configure(
+        enabled: true,
+        tracking: .searching,
+        viewWidth: 256,
+        viewHeight: 256,
+        zoom: 1
+    )
+    let search = controller.process(starBlobFrame(at: SIMD2(20, 20), width: 256, height: 256))
+    try expect(search.lockNormalized == nil, "no lock while searching")
+
+    controller.configure(
+        enabled: true,
+        tracking: .tracking,
+        viewWidth: 256,
+        viewHeight: 256,
+        zoom: 1
+    )
+    controller.seed(frameCentroid: SIMD2(20, 20), roi: ROI(x: 0, y: 0, width: 256, height: 256))
+    try expect(controller.pose().lockNormalized == nil, "seed does not lock on the overlay frame")
+
+    let crop = controller.process(starBlobFrame(at: SIMD2(64, 64), width: 128, height: 128))
+    try expect(crop.lockNormalized != nil && crop.centroid != nil, "lock on the cropped frame")
+    let layout = ImageLayout(
+        imageWidth: 128,
+        imageHeight: 128,
+        viewWidth: 256,
+        viewHeight: 256,
+        zoom: 1,
+        lockNormalized: crop.lockNormalized,
+        stabilizeCentroid: crop.centroid
+    )
+    try expect(abs(layout.pan.x) < 1 && abs(layout.pan.y) < 1, "crop frame is not panned with the search lock")
+}
+
+private func starBlobFrame(at center: SIMD2<Double>, width: Int = 128, height: Int = 128) -> Frame {
     var pixels = [UInt16](repeating: 800, count: width * height)
     let cx = Int(center.x.rounded())
     let cy = Int(center.y.rounded())

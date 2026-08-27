@@ -6,17 +6,27 @@ public struct RenderState: Sendable {
     public var zoom: Double
     public var stabilizeLock: SIMD2<Double>?
     public var stabilizeCentroid: SIMD2<Double>?
+    /// Size and ROI of the frame the stabilize pose was measured on.
+    public var imageWidth: Int
+    public var imageHeight: Int
+    public var roi: ROI?
 
     public init(
         stretch: StretchParams = .default,
         zoom: Double = 1,
         stabilizeLock: SIMD2<Double>? = nil,
-        stabilizeCentroid: SIMD2<Double>? = nil
+        stabilizeCentroid: SIMD2<Double>? = nil,
+        imageWidth: Int = 0,
+        imageHeight: Int = 0,
+        roi: ROI? = nil
     ) {
         self.stretch = stretch
         self.zoom = zoom
         self.stabilizeLock = stabilizeLock
         self.stabilizeCentroid = stabilizeCentroid
+        self.imageWidth = imageWidth
+        self.imageHeight = imageHeight
+        self.roi = roi
     }
 }
 

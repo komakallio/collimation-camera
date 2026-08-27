@@ -80,6 +80,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                     renderState.update { state in
                         state.stabilizeLock = pose.lockNormalized
                         state.stabilizeCentroid = pose.centroid
+                        state.imageWidth = latest.frame.width
+                        state.imageHeight = latest.frame.height
+                        state.roi = latest.frame.roi
                     }
                 }
             } else {
@@ -95,8 +98,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
 
         let state = renderState.peek()
-        let lockNormalized = stabilization.isEnabled ? state.stabilizeLock : nil
-        let stabilizeCentroid = stabilization.isEnabled ? state.stabilizeCentroid : nil
+        let livePose = stabilization.pose()
+        let lockNormalized = stabilization.isEnabled ? livePose.lockNormalized : nil
+        let stabilizeCentroid = stabilization.isEnabled ? livePose.centroid : nil
         let layout = ImageLayout(
             imageWidth: texture.width,
             imageHeight: texture.height,

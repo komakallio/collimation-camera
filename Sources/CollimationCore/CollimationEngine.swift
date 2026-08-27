@@ -369,9 +369,7 @@ public final class CollimationEngine: ObservableObject {
         if let centroid = overlay.centroid, overlay.imageWidth > 0 {
             stabilization.seed(
                 frameCentroid: centroid,
-                roi: overlay.roi,
-                imageWidth: overlay.imageWidth,
-                imageHeight: overlay.imageHeight
+                roi: overlay.roi
             )
         }
         let pose = stabilization.pose()
@@ -382,9 +380,10 @@ public final class CollimationEngine: ObservableObject {
         renderStateSlot.update { state in
             state.stretch = stretch
             state.zoom = zoom
-            // Lock and centroid are written by the renderer for the frame it is
-            // about to draw, so the pan matches that image under jitter.
-            if !stabilize {
+            // Lock and centroid for a live frame are written by the renderer.
+            // Drop them here when they must not apply: stab off, or a full-frame
+            // search whose pixels are not the crop the lock was measured on.
+            if !stabilize || tracking.state == .searching {
                 state.stabilizeLock = nil
                 state.stabilizeCentroid = nil
             }

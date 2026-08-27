@@ -16,15 +16,25 @@ public struct StabilizationPose: Equatable, Sendable {
 
 /// Locks the tracked centroid to a fixed place in the window. Complements camera
 /// ROI recentering: the ROI follows large motion, this cancels leftover jitter.
+///
+/// The lock is in view space, but the centroid is in **this frame’s** pixel
+/// coordinates. A size change (search ↔ tracking ROI, user ROI) drops the lock
+/// so a pan computed for a 4×-binned full frame is never applied to a 512 crop.
+/// Lost/idle keeps the last lock and centroid so the view does not chase noise;
+/// searching clears both.
 public struct DigitalStabilizer: Equatable, Sendable {
     private var lockNormalized: SIMD2<Double>?
     private var lastCentroid: SIMD2<Double>?
+    private var lastImageWidth = 0
+    private var lastImageHeight = 0
 
     public init() {}
 
     public mutating func reset() {
         lockNormalized = nil
         lastCentroid = nil
+        lastImageWidth = 0
+        lastImageHeight = 0
     }
 
     public mutating func update(
@@ -45,16 +55,25 @@ public struct DigitalStabilizer: Equatable, Sendable {
             reset()
             return StabilizationPose()
         }
-        if let centroid {
+        if imageWidth != lastImageWidth || imageHeight != lastImageHeight {
+            lockNormalized = nil
+            lastCentroid = nil
+        }
+        lastImageWidth = imageWidth
+        lastImageHeight = imageHeight
+
+        // Only tracking frames may move the lock. Lost holds the last pose on
+        // this image size; a new blob is almost always noise or a hot pixel.
+        if tracking == .tracking, let centroid {
             lastCentroid = centroid
-            let layout = ImageLayout(
-                imageWidth: imageWidth,
-                imageHeight: imageHeight,
-                viewWidth: viewWidth,
-                viewHeight: viewHeight,
-                zoom: zoom
-            )
             if lockNormalized == nil {
+                let layout = ImageLayout(
+                    imageWidth: imageWidth,
+                    imageHeight: imageHeight,
+                    viewWidth: viewWidth,
+                    viewHeight: viewHeight,
+                    zoom: zoom
+                )
                 let locked = layout.viewPoint(image: centroid)
                 lockNormalized = SIMD2(locked.x / viewWidth, locked.y / viewHeight)
             }
@@ -71,6 +90,11 @@ public struct DigitalStabilizer: Equatable, Sendable {
 /// are already in RAM, a ~400² window is microseconds on CPU, and a compute
 /// shader would add encode + readback latency without helping the overlay lock.
 public final class StabilizationController: @unchecked Sendable {
+    /// Drop a measurement that jumped this far from the last sensor seed. The
+    /// tracking ROI recenters at ~15% of the frame; beyond that the blob is not
+    /// the same star (or the crop changed and the seed is stale).
+    public static let maxLockDriftPixels = 96.0
+
     private let lock = NSLock()
     private var enabled = false
     private var tracking: TrackingState = .idle
@@ -79,8 +103,6 @@ public final class StabilizationController: @unchecked Sendable {
     private var zoom = 1.0
     private var stabilizer = DigitalStabilizer()
     private var lastSensorCentroid: SIMD2<Double>?
-    private var lastImageWidth = 0
-    private var lastImageHeight = 0
     private var lastPose = StabilizationPose()
     private let detector = StarDetector()
 
@@ -113,26 +135,15 @@ public final class StabilizationController: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// Use a detected centroid only to start tracking, never to overwrite a
-    /// fresher per-frame measurement.
-    public func seed(frameCentroid: SIMD2<Double>, roi: ROI, imageWidth: Int, imageHeight: Int) {
+    /// Hint for the first `process` after a search or connect. Does not set the
+    /// view lock — that must be measured on the frame Metal is about to draw,
+    /// whose size may differ from the overlay’s analyzed frame.
+    public func seed(frameCentroid: SIMD2<Double>, roi: ROI) {
         lock.lock()
         defer { lock.unlock() }
         guard enabled, tracking != .searching else { return }
         guard lastSensorCentroid == nil else { return }
         lastSensorCentroid = roi.sensorPoint(fromFramePixel: frameCentroid)
-        lastImageWidth = imageWidth
-        lastImageHeight = imageHeight
-        lastPose = stabilizer.update(
-            enabled: enabled,
-            centroid: frameCentroid,
-            tracking: tracking,
-            imageWidth: imageWidth,
-            imageHeight: imageHeight,
-            viewWidth: viewWidth,
-            viewHeight: viewHeight,
-            zoom: zoom
-        )
     }
 
     public func pose() -> StabilizationPose {
@@ -152,7 +163,8 @@ public final class StabilizationController: @unchecked Sendable {
         let viewWidth = viewWidthOverride ?? self.viewWidth
         let viewHeight = viewHeightOverride ?? self.viewHeight
         let zoom = self.zoom
-        let seed = lastSensorCentroid.map { frame.roi.framePixel(fromSensorPoint: $0) }
+        let mappedSeed = lastSensorCentroid.map { frame.roi.framePixel(fromSensorPoint: $0) }
+        let seed = Self.inFrame(mappedSeed, width: frame.width, height: frame.height)
         if !enabled || tracking == .searching {
             stabilizer.reset()
             lastSensorCentroid = nil
@@ -163,11 +175,12 @@ public final class StabilizationController: @unchecked Sendable {
         }
         lock.unlock()
 
-        let centroid = detector.momentCentroid(in: frame, around: seed)
+        let measured = tracking == .tracking
+            ? detector.momentCentroid(in: frame, around: seed)
+            : nil
+        let centroid = Self.acceptedCentroid(measured, seed: seed)
 
         lock.lock()
-        lastImageWidth = frame.width
-        lastImageHeight = frame.height
         if let centroid {
             lastSensorCentroid = frame.roi.sensorPoint(fromFramePixel: centroid)
         }
@@ -192,5 +205,22 @@ public final class StabilizationController: @unchecked Sendable {
         lastSensorCentroid = nil
         lastPose = StabilizationPose()
         lock.unlock()
+    }
+
+    private static func inFrame(_ seed: SIMD2<Double>?, width: Int, height: Int) -> SIMD2<Double>? {
+        guard let seed else { return nil }
+        guard seed.x >= 0, seed.y >= 0, seed.x < Double(width), seed.y < Double(height) else {
+            return nil
+        }
+        return seed
+    }
+
+    private static func acceptedCentroid(_ measured: SIMD2<Double>?, seed: SIMD2<Double>?) -> SIMD2<Double>? {
+        guard let measured else { return nil }
+        guard let seed else { return measured }
+        let dx = measured.x - seed.x
+        let dy = measured.y - seed.y
+        guard (dx * dx + dy * dy).squareRoot() <= maxLockDriftPixels else { return nil }
+        return measured
     }
 }
