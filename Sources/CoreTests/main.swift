@@ -45,6 +45,7 @@ struct CoreTests {
         failures += run("synscan pad nudge", testSynScanPadNudge)
         failures += run("filter slot display name", testFilterSlotDisplayName)
         failures += run("filter wheel error text", testFilterWheelErrorText)
+        failures += run("mono tiff 16-bit", testMonoTIFF)
 
         if failures == 0 {
             print("All tests passed.")
@@ -930,4 +931,27 @@ private func testFilterWheelErrorText() throws {
         FilterWheelError.invalidPosition.localizedDescription.contains("position"),
         "bad slot"
     )
+}
+
+private func testMonoTIFF() throws {
+    let pixels: [UInt16] = [0, 1, 32768, 65535]
+    let data = try MonoTIFF.encode(pixels: pixels, width: 2, height: 2)
+    try expect(Array(data.prefix(4)) == [UInt8(ascii: "I"), UInt8(ascii: "I"), 42, 0], "TIFF II* header")
+    let ifdOffset = UInt32(data[4]) | UInt32(data[5]) << 8 | UInt32(data[6]) << 16 | UInt32(data[7]) << 24
+    try expect(ifdOffset == 8 + 8, "IFD after 2×2×2 pixel bytes")
+    let values = (0..<4).map { i in
+        UInt16(data[8 + i * 2]) | UInt16(data[9 + i * 2]) << 8
+    }
+    try expect(values == pixels, "16-bit samples \(values)")
+    let name = MonoTIFF.suggestedFileName(width: 512, height: 256, date: Date(timeIntervalSince1970: 1_700_000_000))
+    try expect(name.hasPrefix("collimation-512x256-"), "size in name \(name)")
+    try expect(name.hasSuffix(".tif"), "tif suffix \(name)")
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("collimation-tiff-test.tif")
+    try MonoTIFF.write(
+        frame: Frame(width: 2, height: 2, pixels: pixels, roi: ROI(x: 0, y: 0, width: 2, height: 2)),
+        to: url
+    )
+    let roundTrip = try Data(contentsOf: url)
+    try expect(roundTrip == data, "file matches encode")
+    try? FileManager.default.removeItem(at: url)
 }

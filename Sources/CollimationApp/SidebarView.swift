@@ -104,6 +104,9 @@ struct SidebarView: View {
                     Button("Refresh") { engine.refreshDevices() }
                         .disabled(engine.isConnected)
                 }
+                Button("Save TIFF…") { SnapshotExport.present(engine: engine) }
+                    .disabled(!engine.isConnected)
+                    .help("Save the current ROI as an uncompressed 16-bit mono TIFF")
 
                 HStack(alignment: .bottom, spacing: 8) {
                     CommitSlider(

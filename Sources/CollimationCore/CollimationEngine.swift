@@ -241,6 +241,29 @@ public final class CollimationEngine: ObservableObject {
         }
     }
 
+    public func suggestedSnapshotName() -> String {
+        if let frame = frameSlot.peek()?.frame {
+            return MonoTIFF.suggestedFileName(width: frame.width, height: frame.height, date: frame.timestamp)
+        }
+        let size = overlay.imageWidth > 0 ? overlay.imageWidth : (roiSize == 0 ? 0 : roiSize)
+        let height = overlay.imageHeight > 0 ? overlay.imageHeight : size
+        return MonoTIFF.suggestedFileName(width: max(size, 1), height: max(height, 1))
+    }
+
+    public func saveSnapshot(to url: URL) {
+        errorMessage = nil
+        guard let frame = frameSlot.peek()?.frame else {
+            presentError(CameraError.notConnected)
+            return
+        }
+        do {
+            try MonoTIFF.write(frame: frame, to: url)
+            statusText = "Saved \(url.lastPathComponent)"
+        } catch {
+            presentError(error)
+        }
+    }
+
     public func disconnect() {
         stopCapture()
         device = nil

@@ -1,6 +1,7 @@
 import AppKit
 import CollimationCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 @main
 struct CollimationApp: App {
@@ -27,6 +28,9 @@ struct CollimationApp: App {
                     .keyboardShortcut("a", modifiers: [.command])
                 Button("Auto Exposure") { engine.autoExpose() }
                     .keyboardShortcut("e", modifiers: [.command])
+                Button("Save TIFF…") { SnapshotExport.present(engine: engine) }
+                    .keyboardShortcut("s", modifiers: [.command])
+                    .disabled(!engine.isConnected)
                 Toggle("Search Full Frame", isOn: $engine.autoSearch)
                     .keyboardShortcut("f", modifiers: [.command])
                 Toggle("Stabilize View", isOn: $engine.stabilize)
@@ -92,8 +96,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        applyAppIcon()
         NSApplication.shared.activate(ignoringOtherApps: true)
         NSApp.windows.forEach { $0.makeKeyAndOrderFront(nil) }
+    }
+
+    @MainActor
+    private func applyAppIcon() {
+        var paths: [String] = []
+        if let bundled = Bundle.main.path(forResource: "AppIcon", ofType: "icns") {
+            paths.append(bundled)
+        }
+        if let exe = Bundle.main.executablePath {
+            let url = URL(fileURLWithPath: exe)
+            paths.append(url.deletingLastPathComponent().appendingPathComponent("AppIcon.icns").path)
+            paths.append(
+                url.deletingLastPathComponent()
+                    .deletingLastPathComponent()
+                    .appendingPathComponent("Resources/AppIcon.icns").path
+            )
+        }
+        paths.append(FileManager.default.currentDirectoryPath + "/Resources/AppIcon.icns")
+        for path in paths {
+            if let image = NSImage(contentsOfFile: path) {
+                NSApp.applicationIconImage = image
+                return
+            }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -202,5 +231,26 @@ struct ContentView: View {
             .padding(.vertical, 4)
             .background(color.opacity(0.85), in: Capsule())
             .foregroundStyle(.black)
+    }
+}
+
+enum SnapshotExport {
+    private static let directoryDefaultsKey = "snapshot.directory"
+
+    @MainActor
+    static func present(engine: CollimationEngine) {
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.allowedContentTypes = [.tiff]
+        panel.nameFieldStringValue = engine.suggestedSnapshotName()
+        panel.title = "Save ROI snapshot"
+        panel.message = "Uncompressed 16-bit mono TIFF of the current camera ROI."
+        if let saved = UserDefaults.standard.string(forKey: directoryDefaultsKey) {
+            panel.directoryURL = URL(fileURLWithPath: saved, isDirectory: true)
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        UserDefaults.standard.set(url.deletingLastPathComponent().path, forKey: directoryDefaultsKey)
+        engine.saveSnapshot(to: url)
     }
 }
