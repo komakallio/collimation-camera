@@ -44,6 +44,7 @@ struct CoreTests {
         failures += run("guide slew axes", testGuideSlewAxes)
         failures += run("guide slew commit", testGuideSlewCommit)
         failures += run("synscan pad nudge", testSynScanPadNudge)
+        failures += run("axis centering", testAxisCentering)
         failures += run("filter slot display name", testFilterSlotDisplayName)
         failures += run("filter wheel error text", testFilterWheelErrorText)
         failures += run("mono tiff 16-bit", testMonoTIFF)
@@ -918,8 +919,69 @@ private func testSynScanPadNudge() throws {
     )
     try expect(
         SynScanGuide.fixedRateCommand(direction: .north, rate: 0) == Data([0x50, 2, 17, 36, 0, 0, 0, 0]),
-        "P-command release north"
+        "P-command north stop"
     )
+}
+
+private func testAxisCentering() throws {
+    let calibration = GuideCalibration(
+        eastRate: SIMD2(0.01, 0),
+        northRate: SIMD2(0, 0.01),
+        sampleDurationMs: 800
+    )
+    let pixels = calibration.signedAxisPixels(toMoveStarBy: SIMD2(200, -80))
+    try expect(pixels?.ra == 200, "ra pixels \(String(describing: pixels?.ra))")
+    try expect(pixels?.dec == -80, "dec pixels \(String(describing: pixels?.dec))")
+    try expect(
+        calibration.remainingOnAxis(.ra, movingStarBy: SIMD2(200, -80)) == SIMD2(200, 0),
+        "ra-only remaining"
+    )
+    try expect(
+        calibration.remainingOnAxis(.dec, movingStarBy: SIMD2(200, -80)) == SIMD2(0, -80),
+        "dec-only remaining"
+    )
+
+    try expect(AxisCentering.primaryAxis(raPixels: 800, decPixels: 100) == .ra, "larger ra")
+    try expect(AxisCentering.primaryAxis(raPixels: 100, decPixels: 800) == .dec, "larger dec")
+    try expect(AxisCentering.primaryAxis(raPixels: 100, decPixels: 100) == .ra, "tie prefers ra")
+    try expect(AxisCentering.primaryAxis(raPixels: 10, decPixels: 10) == nil, "both axes done")
+    try expect(
+        AxisCentering.primaryAxis(calibration: calibration, movingStarBy: SIMD2(40, 200)) == .dec,
+        "primary from calibration"
+    )
+
+    let limit = AxisCentering.axisDoneRadiusSensorPixels
+    try expect(AxisCentering.isAxisCentered(limit), "on the per-axis limit")
+    try expect(!AxisCentering.isAxisCentered(limit + 1), "outside the per-axis limit")
+    try expect(
+        MountGuide.isCentered(errorPixels: SIMD2(limit, limit)),
+        "both axes done implies hypot centered"
+    )
+
+    try expect(!AxisCentering.overshot(remaining: 50, previousSign: nil), "first move")
+    try expect(!AxisCentering.overshot(remaining: 50, previousSign: 80), "same sign")
+    try expect(AxisCentering.overshot(remaining: -40, previousSign: 80), "sign flip")
+
+    try expect(AxisCentering.nextRate(remainingPixels: 800, lastRate: nil, overshot: false) == 4, "start far")
+    try expect(AxisCentering.nextRate(remainingPixels: 200, lastRate: 4, overshot: false) == 3, "slow as we close")
+    try expect(AxisCentering.nextRate(remainingPixels: -80, lastRate: 3, overshot: true) == 2, "overshoot drops rate")
+    try expect(AxisCentering.nextRate(remainingPixels: 200, lastRate: 2, overshot: false) == 2, "do not speed back up")
+    try expect(AxisCentering.nextRate(remainingPixels: 10, lastRate: 1, overshot: true) == 1, "rate 1 stays 1")
+
+    try expect(AxisCentering.direction(axis: .ra, remainingPixels: 50) == .east, "east")
+    try expect(AxisCentering.direction(axis: .ra, remainingPixels: -50) == .west, "west")
+    try expect(AxisCentering.direction(axis: .dec, remainingPixels: 50) == .north, "north")
+    try expect(AxisCentering.direction(axis: .dec, remainingPixels: -50) == .south, "south")
+
+    let first = AxisCentering.plan(axis: .ra, remainingPixels: 800, lastRate: nil, lastSign: nil)
+    try expect(first?.direction == .east && first?.rate == 4 && first?.overshot == false, "first ra plan")
+    try expect(first?.padNudge.ra == .east && first?.padNudge.dec == nil, "single-axis ra nudge")
+    let reverse = AxisCentering.plan(axis: .ra, remainingPixels: -90, lastRate: 4, lastSign: 800)
+    try expect(reverse?.direction == .west && reverse?.rate == 3 && reverse?.overshot == true, "overshoot reverse")
+    try expect(reverse?.padNudge.dec == nil, "still only ra")
+    let decPlan = AxisCentering.plan(axis: .dec, remainingPixels: 200, lastRate: nil, lastSign: nil)
+    try expect(decPlan?.direction == .north && decPlan?.padNudge.ra == nil, "single-axis dec")
+    try expect(AxisCentering.plan(axis: .ra, remainingPixels: 10, lastRate: 1, lastSign: 10) == nil, "axis done")
 }
 
 private func testFilterSlotDisplayName() throws {

@@ -94,6 +94,117 @@ public struct GuideCalibration: Equatable, Sendable, Codable {
             : nil
         return (ra, dec)
     }
+
+    /// Signed remaining pixels along RA (east positive) and Dec (north positive).
+    public func signedAxisPixels(toMoveStarBy delta: SIMD2<Double>) -> (ra: Double, dec: Double)? {
+        guard let times = pulses(toMoveStarBy: delta) else { return nil }
+        return (hypot(eastX, eastY) * times.eastMs, hypot(northX, northY) * times.northMs)
+    }
+
+    /// Star motion from a single-axis move that closes the remaining error on `axis`.
+    public func remainingOnAxis(_ axis: MountAxis, movingStarBy delta: SIMD2<Double>) -> SIMD2<Double>? {
+        guard let times = pulses(toMoveStarBy: delta) else { return nil }
+        switch axis {
+        case .ra:
+            return eastRate * times.eastMs
+        case .dec:
+            return northRate * times.northMs
+        }
+    }
+}
+
+public enum MountAxis: String, Equatable, Sendable {
+    case ra
+    case dec
+
+    public var other: MountAxis { self == .ra ? .dec : .ra }
+
+    public var displayName: String {
+        switch self {
+        case .ra: return "RA"
+        case .dec: return "Dec"
+        }
+    }
+}
+
+/// Sequential one-axis centering: finish RA or Dec, then the other.
+/// An overshoot drops the SynScan pad rate by one for the reverse correction.
+public enum AxisCentering {
+    public struct Plan: Equatable, Sendable {
+        public var axis: MountAxis
+        public var direction: GuideDirection
+        public var rate: UInt8
+        public var overshot: Bool
+
+        public var padNudge: PadNudge {
+            switch axis {
+            case .ra: return PadNudge(ra: direction, dec: nil, rate: rate)
+            case .dec: return PadNudge(ra: nil, dec: direction, rate: rate)
+            }
+        }
+    }
+
+    /// Per-axis stop so both axes inside this radius keep hypot ≤ `doneRadiusSensorPixels`.
+    public static var axisDoneRadiusSensorPixels: Double {
+        MountGuide.doneRadiusSensorPixels / sqrt(2)
+    }
+
+    public static func isAxisCentered(_ pixels: Double) -> Bool {
+        abs(pixels) <= axisDoneRadiusSensorPixels
+    }
+
+    public static func primaryAxis(raPixels: Double, decPixels: Double) -> MountAxis? {
+        if isAxisCentered(raPixels) && isAxisCentered(decPixels) { return nil }
+        return abs(raPixels) >= abs(decPixels) ? .ra : .dec
+    }
+
+    public static func primaryAxis(
+        calibration: GuideCalibration,
+        movingStarBy delta: SIMD2<Double>
+    ) -> MountAxis? {
+        guard let pixels = calibration.signedAxisPixels(toMoveStarBy: delta) else { return nil }
+        return primaryAxis(raPixels: pixels.ra, decPixels: pixels.dec)
+    }
+
+    public static func overshot(remaining: Double, previousSign: Double?) -> Bool {
+        guard let previous = previousSign, previous != 0, remaining != 0 else { return false }
+        return (previous > 0) != (remaining > 0)
+    }
+
+    public static func nextRate(
+        remainingPixels: Double,
+        lastRate: UInt8?,
+        overshot: Bool
+    ) -> UInt8 {
+        let suggested = SynScanGuide.rate(forDistancePixels: abs(remainingPixels))
+        guard let lastRate else { return suggested }
+        if overshot {
+            return max(1, lastRate - 1)
+        }
+        return min(suggested, lastRate)
+    }
+
+    public static func direction(axis: MountAxis, remainingPixels: Double) -> GuideDirection? {
+        guard remainingPixels != 0 else { return nil }
+        switch axis {
+        case .ra: return remainingPixels > 0 ? .east : .west
+        case .dec: return remainingPixels > 0 ? .north : .south
+        }
+    }
+
+    public static func plan(
+        axis: MountAxis,
+        remainingPixels: Double,
+        lastRate: UInt8?,
+        lastSign: Double?
+    ) -> Plan? {
+        guard !isAxisCentered(remainingPixels),
+              let direction = Self.direction(axis: axis, remainingPixels: remainingPixels)
+        else { return nil }
+        let didOvershoot = Self.overshot(remaining: remainingPixels, previousSign: lastSign)
+        let rate = nextRate(remainingPixels: remainingPixels, lastRate: lastRate, overshot: didOvershoot)
+        return Plan(axis: axis, direction: direction, rate: rate, overshot: didOvershoot)
+    }
 }
 
 public enum GuidePulsePlanner {

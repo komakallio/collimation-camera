@@ -761,48 +761,88 @@ public final class CollimationEngine: ObservableObject {
     private func centerWithPadNudges(calibration: GuideCalibration) async throws {
         let target = sensorCenter()
         var centroid = try await waitForSettledCentroid()
-        var error = centroid - target
-        if MountGuide.isCentered(errorPixels: error) { return }
+        if MountGuide.isCentered(errorPixels: centroid - target) { return }
 
         let deadline = Date().addingTimeInterval(90)
         do {
-            while Date() < deadline {
-                try Task.checkCancellation()
-                let distance = MountGuide.errorLength(error)
-                if MountGuide.isCentered(errorPixels: error) { break }
-
-                let desired = calibration.slewAxes(
-                    toMoveStarBy: target - centroid,
-                    minAxisPixels: 1
-                )
-                let rate = SynScanGuide.rate(forDistancePixels: distance)
-                let next = (desired.ra == nil && desired.dec == nil)
-                    ? nil
-                    : PadNudge(ra: desired.ra, dec: desired.dec, rate: rate)
-                if next == nil { break }
-
-                let sliceMs = MountGuide.nudgeSliceMilliseconds(
-                    remaining: target - centroid,
-                    calibration: calibration,
-                    rate: rate
-                )
-                let multiple = SynScanGuide.siderealMultiple(rate)
-                mountStatus = String(
-                    format: "Nudging %.0fx — %.0f px from sensor center",
-                    multiple,
-                    distance
-                )
-                try await mount.applyNudge(next)
-                try await sleepMilliseconds(sliceMs)
-                try await mount.applyNudge(nil)
-
-                centroid = try await waitForSettledCentroid()
-                error = centroid - target
-            }
+            guard let first = AxisCentering.primaryAxis(
+                calibration: calibration,
+                movingStarBy: target - centroid
+            ) else { return }
+            try await centerAxis(
+                first,
+                calibration: calibration,
+                target: target,
+                centroid: &centroid,
+                deadline: deadline
+            )
+            try await centerAxis(
+                first.other,
+                calibration: calibration,
+                target: target,
+                centroid: &centroid,
+                deadline: deadline
+            )
+            try await centerAxis(
+                first,
+                calibration: calibration,
+                target: target,
+                centroid: &centroid,
+                deadline: deadline
+            )
             try await mount.applyNudge(nil)
         } catch {
             mount.haltMotions()
             throw error
+        }
+    }
+
+    private func centerAxis(
+        _ axis: MountAxis,
+        calibration: GuideCalibration,
+        target: SIMD2<Double>,
+        centroid: inout SIMD2<Double>,
+        deadline: Date
+    ) async throws {
+        var lastRate: UInt8?
+        var lastSign: Double?
+
+        while Date() < deadline {
+            try Task.checkCancellation()
+            if MountGuide.isCentered(errorPixels: centroid - target) { return }
+
+            guard let axisPixels = calibration.signedAxisPixels(toMoveStarBy: target - centroid) else {
+                return
+            }
+            let remaining = axis == .ra ? axisPixels.ra : axisPixels.dec
+            guard let plan = AxisCentering.plan(
+                axis: axis,
+                remainingPixels: remaining,
+                lastRate: lastRate,
+                lastSign: lastSign
+            ) else { return }
+
+            lastRate = plan.rate
+            lastSign = remaining
+
+            let remainingOnAxis = calibration.remainingOnAxis(axis, movingStarBy: target - centroid)
+                ?? (target - centroid)
+            let sliceMs = MountGuide.nudgeSliceMilliseconds(
+                remaining: remainingOnAxis,
+                calibration: calibration,
+                rate: plan.rate
+            )
+            mountStatus = String(
+                format: "Centering %@ %.0fx — %.0f px on axis",
+                axis.displayName,
+                SynScanGuide.siderealMultiple(plan.rate),
+                abs(remaining)
+            )
+            try await mount.applyNudge(plan.padNudge)
+            try await sleepMilliseconds(sliceMs)
+            try await mount.applyNudge(nil)
+
+            centroid = try await waitForSettledCentroid()
         }
     }
 

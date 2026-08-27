@@ -226,7 +226,7 @@ struct SidebarView: View {
                         .help("Pulse-guide east and north, measure how the star moves in the image, and save that mapping.")
                     Button("Center") { engine.centerStar() }
                         .disabled(!canCenterStar)
-                        .help("Uses the full sensor and SynScan pad rates 1–4 to put the star on the sensor center.")
+                        .help("Centers one axis at a time on the full sensor using SynScan pad rates 1–4. An overshoot drops to a slower rate for the reverse correction.")
                 }
 
                 Text(engine.mountStatus)
