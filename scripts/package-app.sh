@@ -22,6 +22,7 @@ cat > "$DIST/Contents/Info.plist" <<'PLIST'
   <key>CFBundleVersion</key><string>1.0</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>CFBundleExecutable</key><string>CollimationApp</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
@@ -31,6 +32,10 @@ PLIST
 
 cp "$BIN" "$DIST/Contents/MacOS/CollimationApp"
 chmod +x "$DIST/Contents/MacOS/CollimationApp"
+
+if [[ -f "$ROOT/Resources/AppIcon.icns" ]]; then
+  cp "$ROOT/Resources/AppIcon.icns" "$DIST/Contents/Resources/AppIcon.icns"
+fi
 
 if [[ -f "$ROOT/Vendor/PlayerOne/libPlayerOneCamera.dylib" ]]; then
   cp "$ROOT/Vendor/PlayerOne/libPlayerOneCamera.dylib" "$DIST/Contents/Frameworks/"

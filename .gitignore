@@ -12,3 +12,4 @@ frame.png
 frame.pgm
 *.app/
 dist/
+Resources/AppIcon.iconset/
