@@ -48,6 +48,8 @@ struct CoreTests {
         failures += run("filter slot display name", testFilterSlotDisplayName)
         failures += run("filter wheel error text", testFilterWheelErrorText)
         failures += run("mono tiff 16-bit", testMonoTIFF)
+        failures += run("mono tiff 32-bit float", testMonoTIFFFloat32)
+        failures += run("frame stacker", testFrameStacker)
 
         if failures == 0 {
             print("All tests passed.")
@@ -1018,6 +1020,13 @@ private func testMonoTIFF() throws {
     let name = MonoTIFF.suggestedFileName(width: 512, height: 256, date: Date(timeIntervalSince1970: 1_700_000_000))
     try expect(name.hasPrefix("collimation-512x256-"), "size in name \(name)")
     try expect(name.hasSuffix(".tif"), "tif suffix \(name)")
+    let stackedName = MonoTIFF.suggestedFileName(
+        width: 512,
+        height: 256,
+        date: Date(timeIntervalSince1970: 1_700_000_000),
+        label: "stack100"
+    )
+    try expect(stackedName.contains("-stack100-"), "stack label \(stackedName)")
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("collimation-tiff-test.tif")
     try MonoTIFF.write(
         frame: Frame(width: 2, height: 2, pixels: pixels, roi: ROI(x: 0, y: 0, width: 2, height: 2)),
@@ -1026,4 +1035,73 @@ private func testMonoTIFF() throws {
     let roundTrip = try Data(contentsOf: url)
     try expect(roundTrip == data, "file matches encode")
     try? FileManager.default.removeItem(at: url)
+}
+
+private func testFrameStacker() throws {
+    try expect(FrameStacker.subframeCount == 100, "100 subframes")
+    let mid = FrameStacker.bilinearSample(pixels: [10, 20, 30, 40], width: 2, height: 2, x: 0.5, y: 0)
+    try expect(mid != nil && abs(mid! - 15) < 1e-9, "horizontal bilinear \(String(describing: mid))")
+    let exact = FrameStacker.bilinearSample(pixels: [10, 20, 30, 40], width: 2, height: 2, x: 1, y: 0)
+    try expect(exact == 20, "integer sample \(String(describing: exact))")
+    try expect(
+        FrameStacker.bilinearSample(pixels: [10, 20], width: 2, height: 1, x: -1, y: 0) == nil,
+        "outside"
+    )
+
+    let roi = ROI(x: 0, y: 0, width: 8, height: 8)
+    func hot(x: Int, y: Int, value: UInt16) -> Frame {
+        var pixels = [UInt16](repeating: 0, count: 64)
+        pixels[y * 8 + x] = value
+        return Frame(width: 8, height: 8, pixels: pixels, roi: roi)
+    }
+    let stacked = try FrameStacker.average([
+        (hot(x: 3, y: 4, value: 1000), SIMD2(3, 4)),
+        (hot(x: 5, y: 4, value: 1000), SIMD2(5, 4))
+    ])
+    try expect(stacked.pixels[4 * 8 + 3] == 1000, "aligned peak \(stacked.pixels[4 * 8 + 3])")
+    try expect(stacked.pixels[4 * 8 + 5] == 0, "shifted-away peak stays empty \(stacked.pixels[4 * 8 + 5])")
+
+    let dark = Frame(
+        width: 2,
+        height: 2,
+        pixels: [100, 100, 100, 100],
+        roi: ROI(x: 0, y: 0, width: 2, height: 2)
+    )
+    let bright = Frame(
+        width: 2,
+        height: 2,
+        pixels: [201, 201, 201, 201],
+        roi: ROI(x: 0, y: 0, width: 2, height: 2)
+    )
+    let mean = try FrameStacker.average([
+        (dark, SIMD2(1, 1)),
+        (bright, SIMD2(1, 1))
+    ])
+    try expect(mean.pixels.allSatisfy { abs($0 - 150.5) < 1e-5 }, "float mean \(mean.pixels)")
+}
+
+private func testMonoTIFFFloat32() throws {
+    let pixels: [Float] = [0, 0.5, 100.25, 65535]
+    let data = try MonoTIFF.encode(floats: pixels, width: 2, height: 2)
+    try expect(Array(data.prefix(4)) == [UInt8(ascii: "I"), UInt8(ascii: "I"), 42, 0], "TIFF II* header")
+    let ifdOffset = UInt32(data[4]) | UInt32(data[5]) << 8 | UInt32(data[6]) << 16 | UInt32(data[7]) << 24
+    try expect(ifdOffset == 8 + 16, "IFD after 2×2×4 pixel bytes")
+    let values = (0..<4).map { i -> Float in
+        let o = 8 + i * 4
+        let bits = UInt32(data[o])
+            | UInt32(data[o + 1]) << 8
+            | UInt32(data[o + 2]) << 16
+            | UInt32(data[o + 3]) << 24
+        return Float(bitPattern: bits)
+    }
+    try expect(values == pixels, "32-bit float samples \(values)")
+    let bitsPerSample = tiffShortValue(data, ifdOffset: Int(ifdOffset), entry: 2)
+    try expect(bitsPerSample == 32, "BitsPerSample \(bitsPerSample)")
+    let sampleFormat = tiffShortValue(data, ifdOffset: Int(ifdOffset), entry: 9)
+    try expect(sampleFormat == 3, "SampleFormat IEEE float \(sampleFormat)")
+}
+
+private func tiffShortValue(_ data: Data, ifdOffset: Int, entry: Int) -> UInt16 {
+    let o = ifdOffset + 2 + entry * 12 + 8
+    return UInt16(data[o]) | UInt16(data[o + 1]) << 8
 }

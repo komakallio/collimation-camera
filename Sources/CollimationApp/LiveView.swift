@@ -81,6 +81,127 @@ final class LiveMTKView: MTKView {
     }
 }
 
+enum OverlayChrome {
+    static let frameCenter = Color.white.opacity(0.55)
+    static let outerRing = Color(red: 0.4, green: 0.75, blue: 1)
+    static let innerRing = Color(red: 1, green: 0.75, blue: 0.25)
+    static let coma = Color(red: 1, green: 0.35, blue: 0.3)
+    static let starGood = Color(red: 0.3, green: 0.9, blue: 0.4)
+    static let starFaint = Color(red: 1, green: 0.85, blue: 0.15)
+    static let starSaturated = Color(red: 1, green: 0.22, blue: 0.18)
+
+    static func starMarker(peak: UInt16?) -> Color {
+        switch peak.map(StarQuality.from) {
+        case .saturated: return starSaturated
+        case .faint: return starFaint
+        case .good, .none: return starGood
+        }
+    }
+}
+
+struct OverlayLegendView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            row("Frame center") { OverlayLegendMark.crosshair(OverlayChrome.frameCenter) }
+            row("Star") { OverlayLegendMark.starPeaks() }
+            row("Outer ring") { OverlayLegendMark.ring(OverlayChrome.outerRing) }
+            row("Inner ring") { OverlayLegendMark.ring(OverlayChrome.innerRing) }
+            row("Coma") { OverlayLegendMark.line(OverlayChrome.coma) }
+        }
+        .font(.caption2)
+        .foregroundStyle(.white.opacity(0.92))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .strokeBorder(.white.opacity(0.2), lineWidth: 1)
+        )
+        .help("White plus is the frame center. The star marker is green when exposure is good, yellow when faint, and red when clipped. Cyan is the outer donut, gold the secondary shadow, red the coma.")
+    }
+
+    private func row(_ label: String, @ViewBuilder mark: () -> some View) -> some View {
+        HStack(spacing: 6) {
+            mark()
+                .frame(width: 28, height: 12)
+            Text(label)
+        }
+    }
+}
+
+private enum OverlayLegendMark {
+    static func crosshair(_ color: Color, size: CGFloat = 8) -> some View {
+        Canvas { context, canvas in
+            strokeCrosshair(
+                context: &context,
+                at: CGPoint(x: canvas.width / 2, y: canvas.height / 2),
+                color: color,
+                size: size
+            )
+        }
+        .frame(width: 16, height: 12)
+    }
+
+    static func ring(_ color: Color) -> some View {
+        Canvas { context, canvas in
+            let p = CGPoint(x: canvas.width / 2, y: canvas.height / 2)
+            let r: CGFloat = 5
+            context.stroke(
+                Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)),
+                with: .color(color),
+                lineWidth: 1.2
+            )
+        }
+        .frame(width: 16, height: 12)
+    }
+
+    static func starPeaks() -> some View {
+        Canvas { context, canvas in
+            let colors = [OverlayChrome.starGood, OverlayChrome.starFaint, OverlayChrome.starSaturated]
+            let step = canvas.width / 4
+            for (index, color) in colors.enumerated() {
+                strokeCrosshair(
+                    context: &context,
+                    at: CGPoint(x: step * CGFloat(index + 1), y: canvas.height / 2),
+                    color: color,
+                    size: 4
+                )
+            }
+        }
+        .frame(width: 28, height: 12)
+    }
+
+    static func line(_ color: Color) -> some View {
+        Canvas { context, canvas in
+            let y = canvas.height / 2
+            var path = Path()
+            path.move(to: CGPoint(x: 1, y: y))
+            path.addLine(to: CGPoint(x: canvas.width - 1, y: y))
+            context.stroke(path, with: .color(color), lineWidth: 2)
+        }
+        .frame(width: 16, height: 12)
+    }
+
+    private static func strokeCrosshair(
+        context: inout GraphicsContext,
+        at point: CGPoint,
+        color: Color,
+        size: CGFloat
+    ) {
+        var path = Path()
+        path.move(to: CGPoint(x: point.x - size, y: point.y))
+        path.addLine(to: CGPoint(x: point.x + size, y: point.y))
+        path.move(to: CGPoint(x: point.x, y: point.y - size))
+        path.addLine(to: CGPoint(x: point.x, y: point.y + size))
+        context.stroke(path, with: .color(color), lineWidth: 1)
+        let r = max(size * 0.22, 1.2)
+        context.fill(
+            Path(ellipseIn: CGRect(x: point.x - r, y: point.y - r, width: r * 2, height: r * 2)),
+            with: .color(color)
+        )
+    }
+}
+
 struct OverlayView: View {
     let overlay: OverlayModel
     let zoom: Double
@@ -108,17 +229,17 @@ struct OverlayView: View {
             let imageRect = CGRect(x: rect.x, y: rect.y, width: rect.width, height: rect.height)
 
             let cx = layout.viewPoint(image: SIMD2(Double(overlay.imageWidth) / 2, Double(overlay.imageHeight) / 2))
-            drawCrosshair(context: &context, at: CGPoint(x: cx.x, y: cx.y), color: .white.opacity(0.55))
+            drawCrosshair(context: &context, at: CGPoint(x: cx.x, y: cx.y), color: OverlayChrome.frameCenter)
 
             if let centroid = liveCentroid ?? overlay.centroid {
                 let p = layout.viewPoint(image: centroid)
-                drawCrosshair(context: &context, at: CGPoint(x: p.x, y: p.y), color: starMarkerColor, size: 14)
+                drawCrosshair(context: &context, at: CGPoint(x: p.x, y: p.y), color: OverlayChrome.starMarker(peak: overlay.starPeak), size: 14)
             }
             if let outer = overlay.outer {
-                strokeCircle(context: &context, layout: layout, circle: outer, color: Color(red: 0.4, green: 0.75, blue: 1))
+                strokeCircle(context: &context, layout: layout, circle: outer, color: OverlayChrome.outerRing)
             }
             if let inner = overlay.inner {
-                strokeCircle(context: &context, layout: layout, circle: inner, color: Color(red: 1, green: 0.75, blue: 0.25))
+                strokeCircle(context: &context, layout: layout, circle: inner, color: OverlayChrome.innerRing)
             }
             if let outer = overlay.outer, let vector = overlay.comaVector {
                 let start = layout.viewPoint(image: outer.center)
@@ -127,23 +248,12 @@ struct OverlayView: View {
                 var path = Path()
                 path.move(to: CGPoint(x: start.x, y: start.y))
                 path.addLine(to: CGPoint(x: end.x, y: end.y))
-                context.stroke(path, with: .color(Color(red: 1, green: 0.35, blue: 0.3)), lineWidth: 2)
+                context.stroke(path, with: .color(OverlayChrome.coma), lineWidth: 2)
             }
 
             _ = imageRect
         }
         .allowsHitTesting(false)
-    }
-
-    private var starMarkerColor: Color {
-        switch overlay.starPeak.map(StarQuality.from) {
-        case .saturated:
-            return Color(red: 1, green: 0.22, blue: 0.18)
-        case .faint:
-            return Color(red: 1, green: 0.85, blue: 0.15)
-        case .good, .none:
-            return Color(red: 0.3, green: 0.9, blue: 0.4)
-        }
     }
 
     private func drawCrosshair(context: inout GraphicsContext, at point: CGPoint, color: Color, size: CGFloat = 18) {

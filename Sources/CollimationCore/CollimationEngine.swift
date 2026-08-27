@@ -84,6 +84,7 @@ public final class CollimationEngine: ObservableObject {
     @Published public var selectedSerialPort = ""
     @Published public private(set) var isMountConnected = false
     @Published public private(set) var isMountBusy = false
+    @Published public private(set) var isStacking = false
     @Published public var mountStatus = "No mount"
     @Published public private(set) var guideCalibration: GuideCalibration?
 
@@ -115,6 +116,7 @@ public final class CollimationEngine: ObservableObject {
     nonisolated public let stabilization = StabilizationController()
     private var cancellables = Set<AnyCancellable>()
     private var mountTask: Task<Void, Never>?
+    private var stackTask: Task<Void, Never>?
     private var filterWheelTask: Task<Void, Never>?
     private var mountHoldsROI = false
     private var restoreROIAfterMount = false
@@ -253,6 +255,21 @@ public final class CollimationEngine: ObservableObject {
         return MonoTIFF.suggestedFileName(width: max(size, 1), height: max(height, 1))
     }
 
+    public func suggestedStackedName() -> String {
+        let label = "stack\(FrameStacker.subframeCount)"
+        if let frame = frameSlot.peek()?.frame {
+            return MonoTIFF.suggestedFileName(
+                width: frame.width,
+                height: frame.height,
+                date: frame.timestamp,
+                label: label
+            )
+        }
+        let size = overlay.imageWidth > 0 ? overlay.imageWidth : (roiSize == 0 ? 0 : roiSize)
+        let height = overlay.imageHeight > 0 ? overlay.imageHeight : size
+        return MonoTIFF.suggestedFileName(width: max(size, 1), height: max(height, 1), label: label)
+    }
+
     public func saveSnapshot(to url: URL) {
         errorMessage = nil
         guard let frame = frameSlot.peek()?.frame else {
@@ -267,7 +284,74 @@ public final class CollimationEngine: ObservableObject {
         }
     }
 
+    public func saveStackedSnapshot(to url: URL) {
+        guard isConnected, !isStacking, !isMountBusy else { return }
+        errorMessage = nil
+        stackTask?.cancel()
+        isStacking = true
+        applyPipelineConfig()
+        statusText = "Stacking 0/\(FrameStacker.subframeCount)…"
+        stackTask = Task { await self.runStackedSnapshot(to: url) }
+    }
+
+    private func runStackedSnapshot(to url: URL) async {
+        do {
+            let stacked = try await collectStackedFrame()
+            try Task.checkCancellation()
+            try MonoTIFF.write(stacked, to: url)
+            statusText = "Saved \(url.lastPathComponent)"
+        } catch is CancellationError {
+            statusText = "Stack cancelled"
+        } catch {
+            presentError(error)
+            statusText = "Stack failed"
+        }
+        isStacking = false
+        stackTask = nil
+        applyPipelineConfig()
+    }
+
+    private func collectStackedFrame() async throws -> StackedImage {
+        let target = FrameStacker.subframeCount
+        let detector = StarDetector()
+        var seed = overlay.centroid ?? tracking.centroidInFrame
+        var lastSeq: UInt64 = 0
+        var stack: FrameStackAccumulator?
+        let frameBudget = max(2.0, exposureMicroseconds / 1_000_000.0 + 1.0)
+        let deadline = Date().addingTimeInterval(frameBudget * Double(target) + 30)
+
+        while (stack?.count ?? 0) < target {
+            try Task.checkCancellation()
+            guard isConnected else { throw CameraError.disconnected }
+            guard Date() < deadline else { throw CameraError.timeout }
+
+            if let peeked = frameSlot.peek(), peeked.sequence > lastSeq {
+                lastSeq = peeked.sequence
+                let frame = peeked.frame
+                if let centroid = detector.momentCentroid(in: frame, around: seed) {
+                    seed = centroid
+                    if stack == nil {
+                        stack = FrameStackAccumulator(frame: frame, centroid: centroid)
+                    } else if var current = stack {
+                        guard current.add(frame: frame, centroid: centroid) else { continue }
+                        stack = current
+                    }
+                    statusText = "Stacking \(stack?.count ?? 0)/\(target)…"
+                }
+            }
+            try await Task.sleep(nanoseconds: 8_000_000)
+        }
+
+        guard let stack, stack.count >= target else {
+            throw CameraError.unsupported("No tracked star. Keep the artificial star in the frame to stack.")
+        }
+        return stack.finish()
+    }
+
     public func disconnect() {
+        stackTask?.cancel()
+        stackTask = nil
+        isStacking = false
         stopCapture()
         device = nil
         isConnected = false
@@ -316,7 +400,7 @@ public final class CollimationEngine: ObservableObject {
     }
 
     public func applyROISize() {
-        guard isConnected else { return }
+        guard isConnected, !isStacking, !isMountBusy else { return }
         pipeline.reset()
         coalescer.cancel()
         let roi: ROI
@@ -336,7 +420,7 @@ public final class CollimationEngine: ObservableObject {
     }
 
     public func searchNow() {
-        guard isConnected, !isMountBusy else { return }
+        guard isConnected, !isMountBusy, !isStacking else { return }
         pipeline.markSearching()
         coalescer.cancel()
         let roi = Alignment.fullFrameROI(sensorWidth: sensorWidth, sensorHeight: sensorHeight, binning: 4)
@@ -347,7 +431,7 @@ public final class CollimationEngine: ObservableObject {
     }
 
     private func handleAutoSearchChange(_ enabled: Bool) {
-        guard isConnected, !isMountBusy else { return }
+        guard isConnected, !isMountBusy, !isStacking else { return }
         if enabled {
             if tracking.state == .lost || tracking.state == .searching {
                 searchNow()
@@ -441,6 +525,7 @@ public final class CollimationEngine: ObservableObject {
         fwhm = processed.fwhm
         overlay = processed.overlay
         updateStabilization()
+        guard !isStacking else { return }
         switch processed.tracking.state {
         case .tracking:
             statusText = String(format: "Tracking  %.0f fps", fps)
@@ -646,13 +731,13 @@ public final class CollimationEngine: ObservableObject {
     }
 
     public func calibrateMount() {
-        guard !isMountBusy else { return }
+        guard !isMountBusy, !isStacking else { return }
         mountTask?.cancel()
         mountTask = Task { await self.runCalibration() }
     }
 
     public func centerStar() {
-        guard !isMountBusy else { return }
+        guard !isMountBusy, !isStacking else { return }
         mountTask?.cancel()
         mountTask = Task { await self.runCentering() }
     }
@@ -885,14 +970,16 @@ public final class CollimationEngine: ObservableObject {
 
     private func applyPipelineConfig() {
         pipeline.configure(
-            autoCenter: autoCenter && !mountHoldsROI,
-            autoSearch: autoSearch && !mountHoldsROI,
+            autoCenter: autoCenter && !holdsROI,
+            autoSearch: autoSearch && !holdsROI,
             roiSize: roiSize,
             sensorWidth: sensorWidth,
             sensorHeight: sensorHeight,
-            holdROI: mountHoldsROI
+            holdROI: holdsROI
         )
     }
+
+    private var holdsROI: Bool { mountHoldsROI || isStacking }
 
     private func presentError(_ error: Error) {
         if error is CancellationError { return }

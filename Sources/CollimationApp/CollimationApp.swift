@@ -30,7 +30,10 @@ struct CollimationApp: App {
                     .keyboardShortcut("e", modifiers: [.command])
                 Button("Save TIFF…") { SnapshotExport.present(engine: engine) }
                     .keyboardShortcut("s", modifiers: [.command])
-                    .disabled(!engine.isConnected)
+                    .disabled(!engine.isConnected || engine.isStacking)
+                Button("Save Stacked…") { SnapshotExport.presentStacked(engine: engine) }
+                    .keyboardShortcut("s", modifiers: [.command, .shift])
+                    .disabled(!engine.isConnected || engine.isStacking || engine.isMountBusy || engine.tracking.state != .tracking)
                 Toggle("Search Full Frame", isOn: $engine.autoSearch)
                     .keyboardShortcut("f", modifiers: [.command])
                 Toggle("Stabilize View", isOn: $engine.stabilize)
@@ -201,13 +204,18 @@ struct ContentView: View {
                 Spacer()
                 HStack {
                     Spacer()
-                    if engine.overlay.sensorWidth > 0, engine.overlay.sensorHeight > 0 {
-                        ROIMapView(
-                            sensorWidth: engine.overlay.sensorWidth,
-                            sensorHeight: engine.overlay.sensorHeight,
-                            roi: pose?.roi ?? engine.overlay.roi,
-                            centroidInFrame: pose?.stabilizeCentroid ?? engine.overlay.centroid
-                        )
+                    VStack(alignment: .trailing, spacing: 8) {
+                        if engine.showOverlay {
+                            OverlayLegendView()
+                        }
+                        if engine.overlay.sensorWidth > 0, engine.overlay.sensorHeight > 0 {
+                            ROIMapView(
+                                sensorWidth: engine.overlay.sensorWidth,
+                                sensorHeight: engine.overlay.sensorHeight,
+                                roi: pose?.roi ?? engine.overlay.roi,
+                                centroidInFrame: pose?.stabilizeCentroid ?? engine.overlay.centroid
+                            )
+                        }
                     }
                 }
             }
@@ -252,5 +260,22 @@ enum SnapshotExport {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         UserDefaults.standard.set(url.deletingLastPathComponent().path, forKey: directoryDefaultsKey)
         engine.saveSnapshot(to: url)
+    }
+
+    @MainActor
+    static func presentStacked(engine: CollimationEngine) {
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.allowedContentTypes = [.tiff]
+        panel.nameFieldStringValue = engine.suggestedStackedName()
+        panel.title = "Save stacked TIFF"
+        panel.message = "Captures 100 ROI frames, registers them on the star centroid, averages, and writes a 32-bit float mono TIFF."
+        if let saved = UserDefaults.standard.string(forKey: directoryDefaultsKey) {
+            panel.directoryURL = URL(fileURLWithPath: saved, isDirectory: true)
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        UserDefaults.standard.set(url.deletingLastPathComponent().path, forKey: directoryDefaultsKey)
+        engine.saveStackedSnapshot(to: url)
     }
 }

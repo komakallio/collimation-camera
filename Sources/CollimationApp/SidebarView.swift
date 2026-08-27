@@ -105,8 +105,11 @@ struct SidebarView: View {
                         .disabled(engine.isConnected)
                 }
                 Button("Save TIFF…") { SnapshotExport.present(engine: engine) }
-                    .disabled(!engine.isConnected)
+                    .disabled(!engine.isConnected || engine.isStacking)
                     .help("Save the current ROI as an uncompressed 16-bit mono TIFF")
+                Button("Save Stacked") { SnapshotExport.presentStacked(engine: engine) }
+                    .disabled(!engine.isConnected || engine.isStacking || engine.isMountBusy || engine.tracking.state != .tracking)
+                    .help("Capture 100 ROI frames, register them on the star centroid, average, and save a 32-bit float TIFF")
 
                 HStack(alignment: .bottom, spacing: 8) {
                     CommitSlider(
@@ -248,6 +251,7 @@ struct SidebarView: View {
         engine.isMountConnected
             && engine.isConnected
             && !engine.isMountBusy
+            && !engine.isStacking
             && engine.tracking.state == .tracking
     }
 
@@ -266,17 +270,17 @@ struct SidebarView: View {
                     Text("Full").tag(0)
                 }
                 .pickerStyle(.segmented)
-                .disabled(engine.isMountBusy)
+                .disabled(engine.isMountBusy || engine.isStacking)
                 .onChange(of: engine.roiSize) { _ in
                     engine.applyROISize()
                 }
 
                 Toggle("Auto-center star", isOn: $engine.autoCenter)
-                    .disabled(engine.isMountBusy)
+                    .disabled(engine.isMountBusy || engine.isStacking)
                 Toggle("Stabilize view", isOn: $engine.stabilize)
                     .help("Nudge the live view so the detected centroid stays still in the window")
                 Toggle("Search full frame", isOn: $engine.autoSearch)
-                    .disabled(!engine.isConnected || engine.isMountBusy)
+                    .disabled(!engine.isConnected || engine.isMountBusy || engine.isStacking)
                     .help("When on, a lost star starts a binned full-frame search. When off, lost stays lost.")
 
                 HStack {
