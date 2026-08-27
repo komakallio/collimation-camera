@@ -27,7 +27,7 @@ struct CollimationApp: App {
                     .keyboardShortcut("a", modifiers: [.command])
                 Button("Auto Exposure") { engine.autoExpose() }
                     .keyboardShortcut("e", modifiers: [.command])
-                Button("Search Full Frame") { engine.searchNow() }
+                Toggle("Search Full Frame", isOn: $engine.autoSearch)
                     .keyboardShortcut("f", modifiers: [.command])
                 Toggle("Stabilize View", isOn: $engine.stabilize)
                     .keyboardShortcut("l", modifiers: [.command])

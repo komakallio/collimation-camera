@@ -17,6 +17,7 @@ final class FramePipeline: @unchecked Sendable {
     private var smoothedComa: ComaResult?
     private var smoothedFWHM: FWHMResult?
     private var autoCenter = true
+    private var autoSearch = false
     private var holdROI = false
     private var roiSize = 512
     private var sensorWidth = CameraDescriptor.simulator.sensorWidth
@@ -26,6 +27,7 @@ final class FramePipeline: @unchecked Sendable {
 
     func configure(
         autoCenter: Bool,
+        autoSearch: Bool,
         roiSize: Int,
         sensorWidth: Int,
         sensorHeight: Int,
@@ -33,6 +35,7 @@ final class FramePipeline: @unchecked Sendable {
     ) {
         lock.lock()
         self.autoCenter = autoCenter
+        self.autoSearch = autoSearch
         self.roiSize = roiSize
         self.sensorWidth = sensorWidth
         self.sensorHeight = sensorHeight
@@ -61,6 +64,7 @@ final class FramePipeline: @unchecked Sendable {
         lock.lock()
         let generation = self.generation
         let autoCenter = self.autoCenter
+        let autoSearch = self.autoSearch
         let holdROI = self.holdROI
         let roiSize = self.roiSize
         let sensorWidth = self.sensorWidth
@@ -80,6 +84,7 @@ final class FramePipeline: @unchecked Sendable {
             frame: frame,
             detection: detection,
             autoCenter: autoCenter && roiSize != 0 && !holdROI,
+            autoSearch: autoSearch && !holdROI,
             trackingROISize: roiSize == 0 ? min(sensorWidth, sensorHeight) : roiSize,
             sensorWidth: sensorWidth,
             sensorHeight: sensorHeight

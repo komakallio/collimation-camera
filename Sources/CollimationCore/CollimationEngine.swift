@@ -64,6 +64,7 @@ public final class CollimationEngine: ObservableObject {
 
     @Published public var roiSize: Int = 512
     @Published public var autoCenter = true
+    @Published public var autoSearch = false
     @Published public var stabilize = false
     @Published public var showOverlay = true
     @Published public var zoom: Double = 1
@@ -138,9 +139,14 @@ public final class CollimationEngine: ObservableObject {
             }
             .store(in: &cancellables)
         $autoCenter
-            .combineLatest($roiSize)
-            .sink { [weak self] _, _ in
+            .combineLatest($roiSize, $autoSearch)
+            .sink { [weak self] _, _, _ in
                 self?.applyPipelineConfig()
+            }
+            .store(in: &cancellables)
+        $autoSearch
+            .sink { [weak self] enabled in
+                self?.handleAutoSearchChange(enabled)
             }
             .store(in: &cancellables)
         $selectedSerialPort
@@ -278,7 +284,7 @@ public final class CollimationEngine: ObservableObject {
     }
 
     public func searchNow() {
-        guard isConnected else { return }
+        guard isConnected, !isMountBusy else { return }
         pipeline.markSearching()
         coalescer.cancel()
         let roi = Alignment.fullFrameROI(sensorWidth: sensorWidth, sensorHeight: sensorHeight, binning: 4)
@@ -286,6 +292,20 @@ public final class CollimationEngine: ObservableObject {
         tracking.state = .searching
         statusText = "Searching full frame…"
         updateStabilization()
+    }
+
+    private func handleAutoSearchChange(_ enabled: Bool) {
+        guard isConnected, !isMountBusy else { return }
+        if enabled {
+            if tracking.state == .lost || tracking.state == .searching {
+                searchNow()
+            }
+        } else if tracking.state == .searching {
+            applyROISize()
+            tracking.state = .lost
+            statusText = "Star lost — holding ROI"
+            updateStabilization()
+        }
     }
 
     public func autoStretch() {
@@ -645,6 +665,7 @@ public final class CollimationEngine: ObservableObject {
     private func applyPipelineConfig() {
         pipeline.configure(
             autoCenter: autoCenter && !mountHoldsROI,
+            autoSearch: autoSearch && !mountHoldsROI,
             roiSize: roiSize,
             sensorWidth: sensorWidth,
             sensorHeight: sensorHeight,

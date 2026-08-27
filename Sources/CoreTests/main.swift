@@ -19,6 +19,7 @@ struct CoreTests {
         failures += run("concentric donut", testConcentric)
         failures += run("tracker recenter", testTrackerRecenter)
         failures += run("tracker hold when lost", testTrackerHoldWhenLost)
+        failures += run("tracker auto search", testTrackerAutoSearch)
         failures += run("search recovery", testSearchRecovery)
         failures += run("auto exposure", testAutoExposure)
         failures += run("digital stabilize pan", testDigitalStabilizePan)
@@ -324,6 +325,7 @@ private func testTrackerRecenter() throws {
         frame: frame,
         detection: detection,
         autoCenter: true,
+        autoSearch: false,
         trackingROISize: 128,
         sensorWidth: 6252,
         sensorHeight: 4176
@@ -346,13 +348,41 @@ private func testTrackerHoldWhenLost() throws {
             frame: frame,
             detection: nil,
             autoCenter: true,
+            autoSearch: false,
             trackingROISize: 256,
             sensorWidth: 6252,
             sensorHeight: 4176
         )
     }
-    try expect(last.state == TrackingState.lost, "stay lost until Search is pressed")
+    try expect(last.state == TrackingState.lost, "stay lost when auto-search is off")
     try expect(last.requestedROI == nil, "do not switch to a search ROI")
+}
+
+private func testTrackerAutoSearch() throws {
+    var tracker = Tracker(config: TrackingConfig(lostFrameLimit: 3))
+    let frame = Frame(
+        width: 64,
+        height: 64,
+        pixels: [UInt16](repeating: 800, count: 64 * 64),
+        roi: ROI(x: 0, y: 0, width: 64, height: 64)
+    )
+    var last = TrackingStatus()
+    var searchROI: ROI?
+    for _ in 0..<4 {
+        last = tracker.process(
+            frame: frame,
+            detection: nil,
+            autoCenter: true,
+            autoSearch: true,
+            trackingROISize: 256,
+            sensorWidth: 6252,
+            sensorHeight: 4176
+        )
+        if let roi = last.requestedROI { searchROI = roi }
+    }
+    try expect(last.state == TrackingState.searching, "state \(last.state)")
+    try expect(searchROI?.binning == 4, "bin \(String(describing: searchROI?.binning))")
+    try expect(searchROI?.x == 0, "origin")
 }
 
 private func testSearchRecovery() throws {
@@ -377,6 +407,7 @@ private func testSearchRecovery() throws {
         frame: frame,
         detection: detection,
         autoCenter: true,
+        autoSearch: true,
         trackingROISize: 256,
         sensorWidth: 800,
         sensorHeight: 600

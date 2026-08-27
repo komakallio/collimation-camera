@@ -76,6 +76,7 @@ public struct Tracker: Sendable {
         frame: Frame,
         detection: StarDetection?,
         autoCenter: Bool,
+        autoSearch: Bool,
         trackingROISize: Int,
         sensorWidth: Int,
         sensorHeight: Int
@@ -129,7 +130,25 @@ public struct Tracker: Sendable {
 
         lostFrames += 1
         if state == .searching {
+            if !autoSearch {
+                state = .lost
+                return TrackingStatus(
+                    state: .lost,
+                    centroidOnSensor: lastSensorCentroid,
+                    lostFrames: lostFrames
+                )
+            }
             return TrackingStatus(state: .searching, lostFrames: lostFrames)
+        }
+        if autoSearch, lostFrames >= config.lostFrameLimit {
+            state = .searching
+            let search = Alignment.fullFrameROI(
+                sensorWidth: sensorWidth,
+                sensorHeight: sensorHeight,
+                binning: config.searchBinning
+            )
+            lastMove = now
+            return TrackingStatus(state: .searching, lostFrames: lostFrames, requestedROI: search)
         }
         state = .lost
         return TrackingStatus(

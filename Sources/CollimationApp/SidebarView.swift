@@ -215,8 +215,9 @@ struct SidebarView: View {
                     .disabled(engine.isMountBusy)
                 Toggle("Stabilize view", isOn: $engine.stabilize)
                     .help("Nudge the live view so the detected centroid stays still in the window")
-                Button("Search full frame") { engine.searchNow() }
+                Toggle("Search full frame", isOn: $engine.autoSearch)
                     .disabled(!engine.isConnected || engine.isMountBusy)
+                    .help("When on, a lost star starts a binned full-frame search. When off, lost stays lost.")
 
                 HStack {
                     Text("Zoom")
