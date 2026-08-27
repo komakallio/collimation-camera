@@ -69,6 +69,7 @@ struct SidebarView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 cameraSection
+                filterWheelSection
                 mountSection
                 roiSection
                 stretchSection
@@ -129,6 +130,62 @@ struct SidebarView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var filterWheelSection: some View {
+        GroupBox("Filter wheel") {
+            VStack(alignment: .leading, spacing: 8) {
+                if engine.filterWheels.isEmpty {
+                    Text(PhoenixWheel.sdkVersion == nil ? "SDK not found" : "No Phoenix wheel")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Picker("Wheel", selection: $engine.selectedFilterWheelID) {
+                        ForEach(engine.filterWheels) { wheel in
+                            Text(wheel.name).tag(wheel.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .disabled(engine.isFilterWheelConnected || engine.isFilterWheelMoving)
+                }
+
+                HStack {
+                    Button(engine.isFilterWheelConnected ? "Disconnect" : "Connect") {
+                        if engine.isFilterWheelConnected {
+                            engine.disconnectFilterWheel()
+                        } else {
+                            engine.connectFilterWheel()
+                        }
+                    }
+                    .disabled((engine.filterWheels.isEmpty && !engine.isFilterWheelConnected) || engine.isFilterWheelMoving)
+                    Button("Refresh") { engine.refreshFilterWheels() }
+                        .disabled(engine.isFilterWheelConnected || engine.isFilterWheelMoving)
+                }
+
+                if !engine.filterSlots.isEmpty {
+                    Picker("Filter", selection: filterSelection) {
+                        ForEach(engine.filterSlots) { slot in
+                            Text(slot.displayName).tag(slot.position)
+                        }
+                    }
+                    .labelsHidden()
+                    .disabled(!engine.isFilterWheelConnected || engine.isFilterWheelMoving)
+                    .help("Stored aliases come from the wheel. Positions are 1–\(engine.filterSlots.count).")
+                }
+
+                Text(engine.filterWheelStatus)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onAppear { engine.refreshFilterWheels() }
+    }
+
+    private var filterSelection: Binding<Int> {
+        Binding(
+            get: { engine.selectedFilterPosition },
+            set: { engine.gotoFilter($0) }
+        )
     }
 
     private var mountSection: some View {

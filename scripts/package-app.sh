@@ -36,6 +36,10 @@ if [[ -f "$ROOT/Vendor/PlayerOne/libPlayerOneCamera.dylib" ]]; then
   cp "$ROOT/Vendor/PlayerOne/libPlayerOneCamera.dylib" "$DIST/Contents/Frameworks/"
   install_name_tool -add_rpath "@executable_path/../Frameworks" "$DIST/Contents/MacOS/CollimationApp" 2>/dev/null || true
 fi
+if [[ -f "$ROOT/Vendor/PlayerOne/libPlayerOnePW.dylib" ]]; then
+  cp "$ROOT/Vendor/PlayerOne/libPlayerOnePW.dylib" "$DIST/Contents/Frameworks/"
+  install_name_tool -add_rpath "@executable_path/../Frameworks" "$DIST/Contents/MacOS/CollimationApp" 2>/dev/null || true
+fi
 
 codesign --force --deep --sign - "$DIST" 2>/dev/null || true
 echo "Built $DIST"

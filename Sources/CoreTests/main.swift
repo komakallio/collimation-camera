@@ -40,6 +40,8 @@ struct CoreTests {
         failures += run("guide slew axes", testGuideSlewAxes)
         failures += run("guide slew commit", testGuideSlewCommit)
         failures += run("synscan pad nudge", testSynScanPadNudge)
+        failures += run("filter slot display name", testFilterSlotDisplayName)
+        failures += run("filter wheel error text", testFilterWheelErrorText)
 
         if failures == 0 {
             print("All tests passed.")
@@ -797,5 +799,26 @@ private func testSynScanPadNudge() throws {
     try expect(
         SynScanGuide.fixedRateCommand(direction: .north, rate: 0) == Data([0x50, 2, 17, 36, 0, 0, 0, 0]),
         "P-command release north"
+    )
+}
+
+private func testFilterSlotDisplayName() throws {
+    try expect(FilterSlot.displayName(position: 0, alias: "") == "1", "empty alias")
+    try expect(FilterSlot.displayName(position: 2, alias: "  Ha  ") == "3 · Ha", "trimmed alias")
+    try expect(FilterSlot(position: 4, alias: "IR-cut").displayName == "5 · IR-cut", "instance")
+}
+
+private func testFilterWheelErrorText() throws {
+    try expect(
+        FilterWheelError.sdkNotFound.localizedDescription.contains("libPlayerOnePW.dylib"),
+        "sdk path"
+    )
+    try expect(
+        FilterWheelError.noWheelSelected.localizedDescription.contains("Phoenix"),
+        "select wheel"
+    )
+    try expect(
+        FilterWheelError.invalidPosition.localizedDescription.contains("position"),
+        "bad slot"
     )
 }

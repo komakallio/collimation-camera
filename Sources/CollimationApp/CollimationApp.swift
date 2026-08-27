@@ -43,10 +43,38 @@ struct CollimationApp: App {
                     .keyboardShortcut("g", modifiers: [.command])
                     .disabled(!engine.isMountConnected || !engine.isMountCalibrated || engine.isMountBusy || engine.tracking.state != .tracking)
             }
+            CommandMenu("Filter Wheel") {
+                Button(engine.isFilterWheelConnected ? "Disconnect Filter Wheel" : "Connect Filter Wheel") {
+                    if engine.isFilterWheelConnected {
+                        engine.disconnectFilterWheel()
+                    } else {
+                        engine.connectFilterWheel()
+                    }
+                }
+                .disabled((engine.filterWheels.isEmpty && !engine.isFilterWheelConnected) || engine.isFilterWheelMoving)
+                Divider()
+                ForEach(engine.filterSlots) { slot in
+                    filterMenuItem(slot)
+                }
+            }
             CommandMenu("View") {
                 Toggle("Collimation Overlay", isOn: $engine.showOverlay)
                     .keyboardShortcut("o", modifiers: [.command])
             }
+        }
+    }
+
+    @ViewBuilder
+    private func filterMenuItem(_ slot: FilterSlot) -> some View {
+        let button = Button(slot.displayName) { engine.gotoFilter(slot.position) }
+            .disabled(!engine.isFilterWheelConnected || engine.isFilterWheelMoving)
+        if slot.position < 9 {
+            button.keyboardShortcut(
+                KeyEquivalent(Character(UnicodeScalar(0x31 + slot.position)!)),
+                modifiers: [.option]
+            )
+        } else {
+            button
         }
     }
 }

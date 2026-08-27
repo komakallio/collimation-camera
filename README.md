@@ -10,12 +10,14 @@ macOS app for collimating a telescope against an artificial star with a Player O
 - Manual and auto stretch (histogram percentiles)
 - Numeric coma: concentricity of the outer ring vs. the secondary shadow, plus sector asymmetry
 - Simulator camera so you can develop and test without hardware
+- Player One Phoenix filter wheel: connect, read on-wheel aliases, and move to a slot
 
 ## Requirements
 
 - macOS 13 or later (universal: Apple Silicon and Intel)
 - Swift 6 toolchain (`xcode-select` command line tools or Xcode)
 - Optional: [Player One Camera SDK](https://www.player-one-astronomy.com/service/software/) for a real camera
+- Optional: [Player One Filter Wheel SDK](https://www.player-one-astronomy.com/service/software/) for a Phoenix filter wheel (PW5 / PW7 / PW8)
 
 ## Build and run
 
@@ -41,17 +43,19 @@ swift run capture-cli --simulator --output frame.png
 
 ## Player One SDK
 
-The C library is loaded at runtime from, in order:
+The C libraries are loaded at runtime from, in order:
 
-1. `Collimation Camera.app/Contents/Frameworks/libPlayerOneCamera.dylib`
-2. `Vendor/PlayerOne/libPlayerOneCamera.dylib` (from the repo working directory)
-3. `/usr/local/lib/libPlayerOneCamera.dylib`
+1. `Collimation Camera.app/Contents/Frameworks/libPlayerOneCamera.dylib` and `libPlayerOnePW.dylib`
+2. `Vendor/PlayerOne/` (from the repo working directory)
+3. `/usr/local/lib/`
 
 ```bash
 scripts/fetch-sdk.sh
 ```
 
-Without the dylib, only the simulator appears in the device list. Plug in a Poseidon-M, click Refresh, then Connect. macOS may prompt for USB/camera access on first use.
+Without the camera dylib, only the simulator appears in the device list. Plug in a Poseidon-M, click Refresh, then Connect. macOS may prompt for USB/camera access on first use.
+
+Without the filter-wheel dylib, the sidebar Filter wheel section stays disconnected. Plug in a Phoenix wheel, click Refresh, then Connect, and pick a slot. Aliases stored on the wheel (Ha, OIII, IR-cut, …) show next to the 1-based position.
 
 ## Using it at the telescope
 

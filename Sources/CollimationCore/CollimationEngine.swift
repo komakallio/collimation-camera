@@ -84,6 +84,14 @@ public final class CollimationEngine: ObservableObject {
     @Published public var mountStatus = "No mount"
     @Published public private(set) var guideCalibration: GuideCalibration?
 
+    @Published public private(set) var filterWheels: [FilterWheelDescriptor] = []
+    @Published public var selectedFilterWheelID = ""
+    @Published public private(set) var isFilterWheelConnected = false
+    @Published public private(set) var isFilterWheelMoving = false
+    @Published public var filterWheelStatus = "No filter wheel"
+    @Published public private(set) var filterSlots: [FilterSlot] = []
+    @Published public var selectedFilterPosition = 0
+
     public let roiSizes = [256, 512, 1024, 2048, 0]
     public static let minZoom = 0.25
     public static let maxZoom = 8.0
@@ -94,6 +102,7 @@ public final class CollimationEngine: ObservableObject {
     nonisolated private let coalescer = FrameCoalescer(label: "collimation.process")
     nonisolated private let fpsMeter = FPSMeter()
     nonisolated private let mount = EQ6Mount()
+    nonisolated private let filterWheel = PhoenixWheel()
     private var device: CameraDevice?
     private var applyingControls = false
     private var lastSentExposure: Int?
@@ -103,9 +112,12 @@ public final class CollimationEngine: ObservableObject {
     nonisolated public let stabilization = StabilizationController()
     private var cancellables = Set<AnyCancellable>()
     private var mountTask: Task<Void, Never>?
+    private var filterWheelTask: Task<Void, Never>?
     private var mountHoldsROI = false
     private var restoreROIAfterMount = false
+    private var hardwareFilterPosition: Int?
     private static let serialPortDefaultsKey = "mount.serialPort"
+    private static let filterWheelDefaultsKey = "filterWheel.id"
 
     public init() {
         refreshDevices()
@@ -154,6 +166,19 @@ public final class CollimationEngine: ObservableObject {
                 UserDefaults.standard.set(path, forKey: Self.serialPortDefaultsKey)
             }
             .store(in: &cancellables)
+        refreshFilterWheels()
+        if let saved = UserDefaults.standard.string(forKey: Self.filterWheelDefaultsKey),
+           filterWheels.contains(where: { $0.id == saved })
+        {
+            selectedFilterWheelID = saved
+        }
+        $selectedFilterWheelID
+            .sink { id in
+                if !id.isEmpty {
+                    UserDefaults.standard.set(id, forKey: Self.filterWheelDefaultsKey)
+                }
+            }
+            .store(in: &cancellables)
     }
 
     deinit {
@@ -167,10 +192,11 @@ public final class CollimationEngine: ObservableObject {
         session.stop()
     }
 
-    /// Stops capture and closes the mount serial port. Call from app termination.
+    /// Stops capture and closes the mount serial port and filter wheel. Call from app termination.
     nonisolated public func shutdown() {
         stopCapture()
         mount.disconnect()
+        filterWheel.disconnect()
     }
 
     public var selectedDevice: CameraDescriptor? {
@@ -462,6 +488,136 @@ public final class CollimationEngine: ObservableObject {
             applyROISize()
         }
         mountStatus = isMountCalibrated ? "Calibrated — mount disconnected" : "No mount"
+    }
+
+    public func refreshFilterWheels() {
+        filterWheels = filterWheel.enumerate()
+        let saved = UserDefaults.standard.string(forKey: Self.filterWheelDefaultsKey) ?? selectedFilterWheelID
+        if let match = filterWheels.first(where: { $0.id == selectedFilterWheelID || $0.id == saved }) {
+            selectedFilterWheelID = match.id
+        } else if let first = filterWheels.first {
+            selectedFilterWheelID = first.id
+        }
+        if !isFilterWheelConnected {
+            if PhoenixWheel.sdkVersion == nil {
+                filterWheelStatus = "SDK not found — place libPlayerOnePW.dylib in Vendor/PlayerOne"
+            } else if filterWheels.isEmpty {
+                filterWheelStatus = "No Phoenix filter wheel"
+            } else {
+                filterWheelStatus = "SDK \(PhoenixWheel.sdkVersion ?? "") — disconnected"
+            }
+        }
+    }
+
+    public func connectFilterWheel() {
+        errorMessage = nil
+        refreshFilterWheels()
+        guard let descriptor = filterWheels.first(where: { $0.id == selectedFilterWheelID }) ?? filterWheels.first else {
+            if PhoenixWheel.sdkVersion == nil {
+                presentError(FilterWheelError.sdkNotFound)
+            } else {
+                presentError(FilterWheelError.noWheelSelected)
+            }
+            return
+        }
+        selectedFilterWheelID = descriptor.id
+        guard !isFilterWheelMoving else { return }
+        isFilterWheelMoving = true
+        filterWheelStatus = "Opening \(descriptor.name)…"
+        let wheel = filterWheel
+        filterWheelTask?.cancel()
+        filterWheelTask = Task {
+            do {
+                let snapshot = try await Task.detached {
+                    try wheel.connect(handle: descriptor.handle)
+                    return try wheel.snapshot()
+                }.value
+                try Task.checkCancellation()
+                guard wheel.isConnected else { return }
+                applyFilterSnapshot(snapshot)
+            } catch is CancellationError {
+                isFilterWheelMoving = false
+                isFilterWheelConnected = wheel.isConnected
+                filterWheelStatus = isFilterWheelConnected ? filterWheelStatus : "Disconnected"
+            } catch {
+                isFilterWheelConnected = false
+                isFilterWheelMoving = false
+                hardwareFilterPosition = nil
+                filterSlots = []
+                filterWheelStatus = "Not connected"
+                presentError(error)
+            }
+        }
+    }
+
+    public func disconnectFilterWheel() {
+        filterWheelTask?.cancel()
+        filterWheelTask = nil
+        filterWheel.disconnect()
+        isFilterWheelConnected = false
+        isFilterWheelMoving = false
+        hardwareFilterPosition = nil
+        filterSlots = []
+        selectedFilterPosition = 0
+        filterWheelStatus = PhoenixWheel.sdkVersion == nil ? "No filter wheel" : "Disconnected"
+        refreshFilterWheels()
+    }
+
+    public func gotoFilter(_ position: Int) {
+        guard isFilterWheelConnected, !isFilterWheelMoving else { return }
+        guard filterSlots.contains(where: { $0.position == position }) else { return }
+        if hardwareFilterPosition == position { return }
+        selectedFilterPosition = position
+        isFilterWheelMoving = true
+        let label = filterSlots.first { $0.position == position }?.displayName ?? "\(position + 1)"
+        filterWheelStatus = "Moving to \(label)…"
+        let wheel = filterWheel
+        filterWheelTask?.cancel()
+        filterWheelTask = Task {
+            do {
+                let snapshot = try await Task.detached {
+                    try wheel.goto(position: position)
+                    return try wheel.snapshot()
+                }.value
+                try Task.checkCancellation()
+                guard wheel.isConnected else { return }
+                applyFilterSnapshot(snapshot)
+            } catch is CancellationError {
+                isFilterWheelMoving = false
+                if !wheel.isConnected {
+                    isFilterWheelConnected = false
+                    filterSlots = []
+                    filterWheelStatus = "Disconnected"
+                }
+            } catch {
+                isFilterWheelMoving = false
+                guard wheel.isConnected else { return }
+                if let snapshot = try? await Task.detached(operation: { try wheel.snapshot() }).value {
+                    applyFilterSnapshot(snapshot)
+                } else {
+                    filterWheelStatus = "Move failed"
+                }
+                presentError(error)
+            }
+        }
+    }
+
+    private func applyFilterSnapshot(_ snapshot: FilterWheelSnapshot) {
+        isFilterWheelConnected = true
+        isFilterWheelMoving = snapshot.moving
+        filterSlots = snapshot.slots
+        if let position = snapshot.position {
+            hardwareFilterPosition = position
+            selectedFilterPosition = position
+        }
+        let current = snapshot.slots.first { $0.position == snapshot.position }?.displayName
+        if snapshot.moving {
+            filterWheelStatus = "Moving…"
+        } else if let current {
+            filterWheelStatus = "\(snapshot.name) — filter \(current)"
+        } else {
+            filterWheelStatus = snapshot.name
+        }
     }
 
     public func calibrateMount() {
