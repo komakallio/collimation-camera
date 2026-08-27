@@ -36,3 +36,19 @@ public enum ExposureControl {
         return Double(raw) / 65535.0
     }
 }
+
+/// Exposure quality of the tracked star, from its raw 16-bit peak.
+public enum StarQuality: Equatable, Sendable {
+    case faint
+    case good
+    case saturated
+
+    public static let fullWell: UInt16 = 65535
+    public static let faintFraction = 0.10
+
+    public static func from(peak: UInt16) -> StarQuality {
+        if peak >= fullWell { return .saturated }
+        if Double(peak) / Double(fullWell) < faintFraction { return .faint }
+        return .good
+    }
+}

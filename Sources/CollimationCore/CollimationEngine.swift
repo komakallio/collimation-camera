@@ -14,6 +14,7 @@ public struct OverlayModel: Equatable, Sendable {
     public var sensorWidth: Int
     public var sensorHeight: Int
     public var roi: ROI
+    public var starPeak: UInt16?
 
     public init(
         imageWidth: Int = 0,
@@ -27,7 +28,8 @@ public struct OverlayModel: Equatable, Sendable {
         stabilizeCentroid: SIMD2<Double>? = nil,
         sensorWidth: Int = 0,
         sensorHeight: Int = 0,
-        roi: ROI = ROI(x: 0, y: 0, width: 0, height: 0)
+        roi: ROI = ROI(x: 0, y: 0, width: 0, height: 0),
+        starPeak: UInt16? = nil
     ) {
         self.imageWidth = imageWidth
         self.imageHeight = imageHeight
@@ -41,6 +43,7 @@ public struct OverlayModel: Equatable, Sendable {
         self.sensorWidth = sensorWidth
         self.sensorHeight = sensorHeight
         self.roi = roi
+        self.starPeak = starPeak
     }
 }
 

@@ -112,7 +112,7 @@ struct OverlayView: View {
 
             if let centroid = liveCentroid ?? overlay.centroid {
                 let p = layout.viewPoint(image: centroid)
-                drawCrosshair(context: &context, at: CGPoint(x: p.x, y: p.y), color: Color(red: 0.3, green: 0.9, blue: 0.4), size: 14)
+                drawCrosshair(context: &context, at: CGPoint(x: p.x, y: p.y), color: starMarkerColor, size: 14)
             }
             if let outer = overlay.outer {
                 strokeCircle(context: &context, layout: layout, circle: outer, color: Color(red: 0.4, green: 0.75, blue: 1))
@@ -133,6 +133,17 @@ struct OverlayView: View {
             _ = imageRect
         }
         .allowsHitTesting(false)
+    }
+
+    private var starMarkerColor: Color {
+        switch overlay.starPeak.map(StarQuality.from) {
+        case .saturated:
+            return Color(red: 1, green: 0.22, blue: 0.18)
+        case .faint:
+            return Color(red: 1, green: 0.85, blue: 0.15)
+        case .good, .none:
+            return Color(red: 0.3, green: 0.9, blue: 0.4)
+        }
     }
 
     private func drawCrosshair(context: inout GraphicsContext, at point: CGPoint, color: Color, size: CGFloat = 18) {

@@ -22,6 +22,7 @@ struct CoreTests {
         failures += run("tracker auto search", testTrackerAutoSearch)
         failures += run("search recovery", testSearchRecovery)
         failures += run("auto exposure", testAutoExposure)
+        failures += run("star quality from peak", testStarQuality)
         failures += run("digital stabilize pan", testDigitalStabilizePan)
         failures += run("digital stabilize hold", testDigitalStabilizeHold)
         failures += run("digital stabilize size change relocks", testDigitalStabilizeSizeChangeRelocks)
@@ -444,6 +445,15 @@ private func testAutoExposure() throws {
     let stretchedLook = StretchParams(black: 0, white: 1, midtones: 0.15).apply(normalizedValue: raw)
     try expect(stretchedLook > raw, "stretch would lift the display")
     try expect(abs(raw - ExposureControl.peakNormalized(histogram: histogram, detectionPeak: 16_384)) < 1e-12, "detection peak is raw")
+}
+
+private func testStarQuality() throws {
+    try expect(StarQuality.from(peak: 0) == .faint, "zero")
+    try expect(StarQuality.from(peak: 6553) == .faint, "just under 10%")
+    try expect(StarQuality.from(peak: 6554) == .good, "10%")
+    try expect(StarQuality.from(peak: 52_428) == .good, "80%")
+    try expect(StarQuality.from(peak: 65_534) == .good, "almost full")
+    try expect(StarQuality.from(peak: 65_535) == .saturated, "full well")
 }
 
 private func testDigitalStabilizePan() throws {

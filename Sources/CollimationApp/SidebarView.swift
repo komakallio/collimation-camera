@@ -391,6 +391,14 @@ struct SidebarView: View {
         case .lost:
             return "Star dropped out of the ROI. Search starts after a few frames."
         case .tracking:
+            switch engine.overlay.starPeak.map(StarQuality.from) {
+            case .saturated:
+                return "Star is saturating. Lower exposure or gain. Clipped pixels are red."
+            case .faint:
+                return "Star peak is under 10% of full well. Increase exposure."
+            case .good, .none:
+                break
+            }
             if let q = engine.coma?.quality, q >= 0.6 {
                 return "Donut locked. Reduce the normalized coma toward zero."
             }

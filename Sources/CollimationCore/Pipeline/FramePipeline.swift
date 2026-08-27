@@ -147,7 +147,8 @@ final class FramePipeline: @unchecked Sendable {
             trackingState: next.state,
             sensorWidth: sensorWidth,
             sensorHeight: sensorHeight,
-            roi: frame.roi
+            roi: frame.roi,
+            starPeak: next.detection?.peak
         )
         lock.unlock()
         return ProcessedFrame(histogram: histogram, tracking: next, coma: result, fwhm: fwhm, overlay: overlay)

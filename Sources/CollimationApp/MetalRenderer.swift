@@ -247,6 +247,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             float v01 = float(tex.read(uint2(p00.x, p11.y)).r);
             float v11 = float(tex.read(p11).r);
             raw = mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y) / 65535.0;
+            if (v00 >= 65535.0 || v10 >= 65535.0 || v01 >= 65535.0 || v11 >= 65535.0) {
+                return float4(1.0, 0.18, 0.14, 1.0);
+            }
+        }
+        if (raw >= 1.0) {
+            return float4(1.0, 0.18, 0.14, 1.0);
         }
         float t = saturate((raw - u.black) / max(u.white - u.black, 1e-6));
         if (u.mode > 0.5) {
