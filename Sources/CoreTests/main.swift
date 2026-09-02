@@ -14,6 +14,8 @@ struct CoreTests {
         failures += run("moment centroid", testMomentCentroid)
         failures += run("empty sky", testEmptySky)
         failures += run("star fwhm", testStarFWHM)
+        failures += run("airy diffraction", testAiryDiffraction)
+        failures += run("airy simulator device", testAirySimulatorDevice)
         failures += run("circle fit", testCircleFit)
         failures += run("coma horizontal", testComaHorizontal)
         failures += run("coma vertical", testComaVertical)
@@ -285,6 +287,54 @@ private func testStarFWHM() throws {
     }
     try expect(abs(fwhm2.sensorPixels - fwhm2.framePixels * 2) < 1e-12, "bin2 sensor")
     try expect(abs(fwhm2.arcseconds - fwhm2.sensorPixels * scale) < 1e-9, "bin2 arcsec")
+}
+
+private func testAiryDiffraction() throws {
+    let firstMin = 10.0
+    let renderer = AiryRenderer(
+        scene: AiryScene(
+            sensorWidth: 256,
+            sensorHeight: 256,
+            starPosition: SIMD2(128, 128),
+            firstMinimumPixels: firstMin,
+            peakADU: 40_000,
+            backgroundADU: 800,
+            noiseSigma: 0,
+            seeingJitter: 0
+        )
+    )
+    try expect(abs(renderer.intensity(atRadiusPixels: 0) - 1) < 1e-9, "core")
+    try expect(renderer.intensity(atRadiusPixels: firstMin) < 0.002, "first min \(renderer.intensity(atRadiusPixels: firstMin))")
+    try expect(renderer.intensity(atRadiusPixels: firstMin * 0.4) > 0.4, "inside Airy disk")
+    let firstRing = firstMin * (5.135622 / AiryScene.j1FirstZero)
+    let ringI = renderer.intensity(atRadiusPixels: firstRing)
+    try expect(ringI > 0.012 && ringI < 0.025, "first ring \(ringI)")
+    try expect(ringI > renderer.intensity(atRadiusPixels: firstMin), "ring after dark")
+
+    var rng = RNG(seed: 3)
+    let frame = renderer.render(
+        roi: ROI(x: 0, y: 0, width: 256, height: 256),
+        jitter: .zero,
+        rng: &rng
+    )
+    let core = Double(frame.pixel(x: 128, y: 128))
+    try expect(core > 35_000, "core ADU \(core)")
+    let dark = Double(frame.pixel(x: 128 + Int(firstMin.rounded()), y: 128))
+    try expect(dark < core * 0.08, "dark ring ADU \(dark)")
+    guard let detection = StarDetector().detect(in: frame) else {
+        throw Expectation(description: "expected Airy star")
+    }
+    try expect(abs(detection.centroid.x - 128) < 2, "x \(detection.centroid.x)")
+    try expect(abs(detection.centroid.y - 128) < 2, "y \(detection.centroid.y)")
+}
+
+private func testAirySimulatorDevice() throws {
+    let ids = Set(DeviceCatalog.list().map(\.id))
+    try expect(ids.contains(CameraDescriptor.simulator.id), "donut simulator")
+    try expect(ids.contains(CameraDescriptor.airySimulator.id), "Airy simulator")
+    let device = try DeviceCatalog.makeDevice(id: CameraDescriptor.airySimulator.id)
+    try expect(device.descriptor.name.contains("Airy"), "name \(device.descriptor.name)")
+    try expect(device.descriptor.isSimulator, "simulator flag")
 }
 
 private func testCircleFit() throws {

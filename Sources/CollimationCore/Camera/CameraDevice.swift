@@ -29,7 +29,16 @@ public struct CameraDescriptor: Equatable, Identifiable, Sendable {
 
     public static let simulator = CameraDescriptor(
         id: "simulator",
-        name: "Simulator (Poseidon-M)",
+        name: "Simulator (defocused donut)",
+        sensorWidth: 6252,
+        sensorHeight: 4176,
+        pixelSizeMicrons: 3.76,
+        isSimulator: true
+    )
+
+    public static let airySimulator = CameraDescriptor(
+        id: "simulator-airy",
+        name: "Simulator (Airy)",
         sensorWidth: 6252,
         sensorHeight: 4176,
         pixelSizeMicrons: 3.76,
@@ -88,6 +97,7 @@ public enum DeviceCatalog {
             devices.append(contentsOf: native.enumerate())
         }
         devices.append(.simulator)
+        devices.append(.airySimulator)
         return devices
     }
 
@@ -97,7 +107,10 @@ public enum DeviceCatalog {
 
     public static func makeDevice(id: String) throws -> CameraDevice {
         if id == CameraDescriptor.simulator.id {
-            return SimulatorCamera()
+            return SimulatorCamera(pattern: .defocusedDonut)
+        }
+        if id == CameraDescriptor.airySimulator.id {
+            return SimulatorCamera(pattern: .airy)
         }
         guard let native = POANative.shared else { throw CameraError.sdkNotFound }
         let hardwareID = Int32(id.replacingOccurrences(of: "poa-", with: ""))

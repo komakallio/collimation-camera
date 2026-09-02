@@ -1,15 +1,22 @@
 import Foundation
 
 public final class SimulatorCamera: CameraDevice {
-    public let descriptor = CameraDescriptor.simulator
+    public enum Pattern: Sendable {
+        case defocusedDonut
+        case airy
+    }
+
+    public let descriptor: CameraDescriptor
     public private(set) var controls = CameraControls()
     public private(set) var currentROI = ROI(x: 0, y: 0, width: 512, height: 512)
     public let supportedBins = [1, 2, 4]
 
-    public var renderer = DonutRenderer()
     public var driftPerSecond = SIMD2<Double>(8, -3)
     public var disappearAfter: TimeInterval? = nil
 
+    private var pattern: Pattern
+    private var donut = DonutRenderer()
+    private var airy = AiryRenderer()
     private var opened = false
     private var streaming = false
     private var rng: RNG
@@ -17,7 +24,9 @@ public final class SimulatorCamera: CameraDevice {
     private var startedAt = Date()
     private let lock = NSLock()
 
-    public init(seed: UInt64 = 42) {
+    public init(pattern: Pattern = .defocusedDonut, seed: UInt64 = 42) {
+        self.pattern = pattern
+        self.descriptor = pattern == .airy ? .airySimulator : .simulator
         self.rng = RNG(seed: seed)
         let sensor = descriptor
         currentROI = Alignment.centeredROI(
@@ -44,13 +53,13 @@ public final class SimulatorCamera: CameraDevice {
     public func applyExposure(_ microseconds: Int) throws {
         controls.exposureMicroseconds = min(max(microseconds, controls.exposureRange.lowerBound), controls.exposureRange.upperBound)
         let scale = min(4, max(0.15, Double(controls.exposureMicroseconds) / 50_000))
-        renderer.scene.peakADU = 42_000 * scale
+        setPeakADU(42_000 * scale)
     }
 
     public func applyGain(_ gain: Int) throws {
         controls.gain = min(max(gain, controls.gainRange.lowerBound), controls.gainRange.upperBound)
-        renderer.scene.noiseSigma = max(12, 50 - Double(controls.gain) * 0.05)
-        renderer.scene.peakADU = min(60_000, 30_000 + Double(controls.gain) * 80)
+        setNoiseSigma(max(12, 50 - Double(controls.gain) * 0.05))
+        setPeakADU(min(60_000, 30_000 + Double(controls.gain) * 80))
     }
 
     public func applyROI(_ roi: ROI) throws {
@@ -84,19 +93,56 @@ public final class SimulatorCamera: CameraDevice {
         lock.lock()
         defer { lock.unlock() }
 
-        renderer.scene.starPosition += driftPerSecond * dt
+        var position = starPosition + driftPerSecond * dt
         let sw = Double(descriptor.sensorWidth)
         let sh = Double(descriptor.sensorHeight)
-        if renderer.scene.starPosition.x < 80 { renderer.scene.starPosition.x = 80; driftPerSecond.x *= -1 }
-        if renderer.scene.starPosition.y < 80 { renderer.scene.starPosition.y = 80; driftPerSecond.y *= -1 }
-        if renderer.scene.starPosition.x > sw - 80 { renderer.scene.starPosition.x = sw - 80; driftPerSecond.x *= -1 }
-        if renderer.scene.starPosition.y > sh - 80 { renderer.scene.starPosition.y = sh - 80; driftPerSecond.y *= -1 }
-
+        if position.x < 80 { position.x = 80; driftPerSecond.x *= -1 }
+        if position.y < 80 { position.y = 80; driftPerSecond.y *= -1 }
+        if position.x > sw - 80 { position.x = sw - 80; driftPerSecond.x *= -1 }
+        if position.y > sh - 80 { position.y = sh - 80; driftPerSecond.y *= -1 }
         if let disappearAfter, now.timeIntervalSince(startedAt) > disappearAfter {
-            renderer.scene.starPosition = SIMD2(-500, -500)
+            position = SIMD2(-500, -500)
         }
+        starPosition = position
 
-        let jitter = SIMD2(rng.gaussian(), rng.gaussian()) * renderer.scene.seeingJitter
-        return renderer.render(roi: currentROI, jitter: jitter, rng: &rng)
+        let jitter = SIMD2(rng.gaussian(), rng.gaussian()) * seeingJitter
+        switch pattern {
+        case .defocusedDonut:
+            return donut.render(roi: currentROI, jitter: jitter, rng: &rng)
+        case .airy:
+            return airy.render(roi: currentROI, jitter: jitter, rng: &rng)
+        }
+    }
+
+    private var starPosition: SIMD2<Double> {
+        get {
+            switch pattern {
+            case .defocusedDonut: return donut.scene.starPosition
+            case .airy: return airy.scene.starPosition
+            }
+        }
+        set {
+            switch pattern {
+            case .defocusedDonut: donut.scene.starPosition = newValue
+            case .airy: airy.scene.starPosition = newValue
+            }
+        }
+    }
+
+    private var seeingJitter: Double {
+        switch pattern {
+        case .defocusedDonut: return donut.scene.seeingJitter
+        case .airy: return airy.scene.seeingJitter
+        }
+    }
+
+    private func setPeakADU(_ value: Double) {
+        donut.scene.peakADU = value
+        airy.scene.peakADU = value
+    }
+
+    private func setNoiseSigma(_ value: Double) {
+        donut.scene.noiseSigma = value
+        airy.scene.noiseSigma = value
     }
 }
