@@ -20,6 +20,9 @@ struct CoreTests {
         failures += run("coma horizontal", testComaHorizontal)
         failures += run("coma vertical", testComaVertical)
         failures += run("concentric donut", testConcentric)
+        failures += run("in-focus coma horizontal", testInFocusComaHorizontal)
+        failures += run("in-focus coma symmetric", testInFocusComaSymmetric)
+        failures += run("airy coma footprint", testAiryComaFootprint)
         failures += run("coma ring size on crop", testComaRingSizeOnCrop)
         failures += run("tracker recenter", testTrackerRecenter)
         failures += run("tracker hold when lost", testTrackerHoldWhenLost)
@@ -387,6 +390,7 @@ private func testComaHorizontal() throws {
     try expect(abs(result.magnitudePixels - 4.5) < 2.0, "mag px \(result.magnitudePixels)")
     try expect(minAngleDelta(result.directionDegrees, 0) < 20, "dir \(result.directionDegrees)")
     try expect(result.magnitudeNormalized > 0.04, "norm \(result.magnitudeNormalized)")
+    try expect(result.isDonut, "donut method")
 }
 
 private func testComaVertical() throws {
@@ -402,6 +406,109 @@ private func testConcentric() throws {
         throw Expectation(description: "analysis failed")
     }
     try expect(result.magnitudeNormalized < 0.08, "norm \(result.magnitudeNormalized)")
+}
+
+private func testInFocusComaHorizontal() throws {
+    let frame = inFocusStarFrame(brightnessOffset: SIMD2(1, 0))
+    guard let result = ComaAnalyzer().analyze(frame: frame, detection: StarDetector().detect(in: frame)) else {
+        throw Expectation(description: "expected in-focus coma")
+    }
+    try expect(result.isDonut == false, "should use in-focus method")
+    try expect(result.quality >= 0.4, "quality \(result.quality)")
+    try expect(result.magnitudePixels > 0.15, "mag \(result.magnitudePixels)")
+    try expect(minAngleDelta(result.directionDegrees, 0) < 25, "dir \(result.directionDegrees)")
+}
+
+private func testInFocusComaSymmetric() throws {
+    let frame = inFocusStarFrame(brightnessOffset: .zero)
+    guard let result = ComaAnalyzer().analyze(frame: frame, detection: StarDetector().detect(in: frame)) else {
+        throw Expectation(description: "expected symmetric in-focus coma")
+    }
+    try expect(result.isDonut == false, "in-focus")
+    try expect(result.magnitudeNormalized < 0.08, "norm \(result.magnitudeNormalized)")
+}
+
+private func testAiryComaFootprint() throws {
+    let firstMin = 10.0
+    let center = SIMD2(128.0, 128.0)
+    var rng = RNG(seed: 5)
+    let symmetric = AiryRenderer(
+        scene: AiryScene(
+            sensorWidth: 256,
+            sensorHeight: 256,
+            starPosition: center,
+            firstMinimumPixels: firstMin,
+            peakADU: 40_000,
+            backgroundADU: 800,
+            noiseSigma: 0,
+            seeingJitter: 0
+        )
+    ).render(roi: ROI(x: 0, y: 0, width: 256, height: 256), jitter: .zero, rng: &rng)
+    guard let concentric = ComaAnalyzer().analyze(
+        frame: symmetric,
+        detection: StarDetector().detect(in: symmetric)
+    ) else {
+        throw Expectation(description: "expected Airy coma")
+    }
+    try expect(concentric.isDonut == false, "in-focus")
+    try expect(abs(concentric.outer.radius - firstMin) < 2.0, "footprint \(concentric.outer.radius) vs \(firstMin)")
+    try expect(concentric.magnitudeNormalized < 0.08, "symmetric \(concentric.magnitudeNormalized)")
+
+    rng = RNG(seed: 5)
+    let flared = AiryRenderer(
+        scene: AiryScene(
+            sensorWidth: 256,
+            sensorHeight: 256,
+            starPosition: center,
+            firstMinimumPixels: firstMin,
+            peakADU: 40_000,
+            backgroundADU: 800,
+            noiseSigma: 0,
+            seeingJitter: 0,
+            intensityAsymmetry: 0.55
+        )
+    ).render(roi: ROI(x: 0, y: 0, width: 256, height: 256), jitter: .zero, rng: &rng)
+    guard let coma = ComaAnalyzer().analyze(
+        frame: flared,
+        detection: StarDetector().detect(in: flared)
+    ) else {
+        throw Expectation(description: "expected flared Airy coma")
+    }
+    try expect(coma.isDonut == false, "in-focus flare")
+    try expect(abs(coma.outer.radius - firstMin) < 2.5, "flare footprint \(coma.outer.radius)")
+    try expect(coma.magnitudePixels > 0.08, "mag \(coma.magnitudePixels)")
+    try expect(minAngleDelta(coma.directionDegrees, 0) < 30, "dir \(coma.directionDegrees)")
+}
+
+/// Circular star whose brightness can be shifted so the photocenter leaves the geometric center.
+private func inFocusStarFrame(brightnessOffset: SIMD2<Double>) -> Frame {
+    let size = 256
+    let cx = 128.0
+    let cy = 128.0
+    let radius = 16.0
+    var pixels = [UInt16](repeating: 800, count: size * size)
+    let peak = 40_000.0
+    for y in 0..<size {
+        for x in 0..<size {
+            let dx = Double(x) - cx
+            let dy = Double(y) - cy
+            let r = sqrt(dx * dx + dy * dy)
+            if r > radius { continue }
+            let falloff = max(0, 1 - r / radius)
+            var signal = peak * falloff * falloff
+            if brightnessOffset != .zero {
+                let along = dx * brightnessOffset.x + dy * brightnessOffset.y
+                signal *= 1 + 0.55 * max(-1, min(1, along / radius))
+            }
+            pixels[y * size + x] = UInt16(min(65535, 800 + signal.rounded()))
+        }
+    }
+    return Frame(
+        width: size,
+        height: size,
+        pixels: pixels,
+        roi: ROI(x: 0, y: 0, width: size, height: size)
+    )
 }
 
 private func testComaRingSizeOnCrop() throws {

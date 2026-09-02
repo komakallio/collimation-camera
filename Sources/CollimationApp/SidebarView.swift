@@ -397,7 +397,13 @@ struct SidebarView: View {
                 break
             }
             if let q = engine.coma?.quality, q >= 0.6 {
+                if engine.coma?.isDonut == false {
+                    return "In-focus star. Reduce the normalized coma toward zero."
+                }
                 return "Donut locked. Reduce the normalized coma toward zero."
+            }
+            if engine.coma?.isDonut == false {
+                return "In-focus star locked. Coma is the offset of the bright core from the geometric center."
             }
             return "Star found. Defocus until the secondary shadow is clear."
         case .idle:

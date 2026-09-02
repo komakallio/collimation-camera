@@ -16,6 +16,8 @@ public struct AiryScene: Equatable, Sendable {
     public var backgroundADU: Double
     public var noiseSigma: Double
     public var seeingJitter: Double
+    /// Extra cosine intensity modulation (0…1). 0° = +x (right).
+    public var intensityAsymmetry: Double
 
     /// First zero of J₁.
     public static let j1FirstZero = 3.8317059702075125
@@ -28,7 +30,8 @@ public struct AiryScene: Equatable, Sendable {
         peakADU: Double = 42_000,
         backgroundADU: Double = 900,
         noiseSigma: Double = 20,
-        seeingJitter: Double = 0.12
+        seeingJitter: Double = 0.12,
+        intensityAsymmetry: Double = 0
     ) {
         self.sensorWidth = sensorWidth
         self.sensorHeight = sensorHeight
@@ -38,6 +41,7 @@ public struct AiryScene: Equatable, Sendable {
         self.backgroundADU = backgroundADU
         self.noiseSigma = noiseSigma
         self.seeingJitter = seeingJitter
+        self.intensityAsymmetry = intensityAsymmetry
     }
 
     /// 1.22 λ f / (D · pixel), with an 8× Barlow so rings are resolved.
@@ -102,7 +106,10 @@ public struct AiryRenderer: Sendable {
                     let dx = sx - origin.x
                     let dy = sy - origin.y
                     let r = sqrt(dx * dx + dy * dy)
-                    let signal = intensity(atRadiusPixels: r)
+                    var signal = intensity(atRadiusPixels: r)
+                    if scene.intensityAsymmetry != 0, r > 1e-6 {
+                        signal *= 1 + scene.intensityAsymmetry * cos(atan2(dy, dx))
+                    }
                     if signal < 2e-5 { continue }
                     var value = scene.backgroundADU + signal * scene.peakADU
                     if scene.noiseSigma > 0 {
