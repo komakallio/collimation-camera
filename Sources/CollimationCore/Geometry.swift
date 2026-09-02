@@ -45,6 +45,38 @@ public struct ROI: Equatable, Sendable {
     }
 }
 
+/// Camera readout vs the software window used for analysis and display.
+public enum CaptureLayout {
+    /// Hardware ROI while a star is tracked. Large enough that digital
+    /// stabilization can pan without restarting the camera stream.
+    public static let trackingHardwareSize = 2048
+    /// Software crop, histogram, coma, FWHM, and live view while tracking.
+    public static let displayCropSize = 512
+    /// `centeredROI` may shrink a 2048 request by a few pixels.
+    public static let hardwareSizeSlack = 32
+
+    public static func isTrackingCapture(_ frame: Frame) -> Bool {
+        let shortest = min(frame.width, frame.height)
+        let longest = max(frame.width, frame.height)
+        guard shortest >= displayCropSize else { return false }
+        guard longest <= trackingHardwareSize + hardwareSizeSlack else { return false }
+        return longest - shortest <= hardwareSizeSlack * 8
+    }
+
+    /// 512×512 around the star on a tracking capture; otherwise the full frame
+    /// (search and mount centering).
+    public static func displayFrame(
+        from frame: Frame,
+        tracking: TrackingState,
+        centroid: SIMD2<Double>?
+    ) -> Frame {
+        guard tracking == .tracking, let centroid, isTrackingCapture(frame) else {
+            return frame
+        }
+        return frame.cropped(around: centroid, size: displayCropSize)
+    }
+}
+
 public struct ImageLayout: Equatable, Sendable {
     public var imageWidth: Int
     public var imageHeight: Int

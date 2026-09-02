@@ -262,26 +262,19 @@ struct SidebarView: View {
     private var roiSection: some View {
         GroupBox("ROI & zoom") {
             VStack(alignment: .leading, spacing: 8) {
-                Picker("ROI", selection: $engine.roiSize) {
-                    Text("256").tag(256)
-                    Text("512").tag(512)
-                    Text("1024").tag(1024)
-                    Text("2048").tag(2048)
-                    Text("Full").tag(0)
-                }
-                .pickerStyle(.segmented)
-                .disabled(engine.isMountBusy || engine.isStacking)
-                .onChange(of: engine.roiSize) { _ in
-                    engine.applyROISize()
-                }
+                Text("Camera 2048×2048, view 512×512 around the star. Full frame while searching.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 Toggle("Auto-center star", isOn: $engine.autoCenter)
                     .disabled(engine.isMountBusy || engine.isStacking)
+                    .help("Keep the 2048×2048 camera window on the star. The live view is a 512×512 software crop.")
                 Toggle("Stabilize view", isOn: $engine.stabilize)
                     .help("Nudge the live view so the detected centroid stays still in the window")
                 Toggle("Search full frame", isOn: $engine.autoSearch)
                     .disabled(!engine.isConnected || engine.isMountBusy || engine.isStacking)
-                    .help("When on, a lost star starts a binned full-frame search. When off, lost stays lost.")
+                    .help("When on, a lost star starts a binned full-frame search. The live view shows that full frame until the star is found.")
 
                 HStack {
                     Text("Zoom")

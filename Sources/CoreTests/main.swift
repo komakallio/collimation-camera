@@ -21,6 +21,7 @@ struct CoreTests {
         failures += run("tracker hold when lost", testTrackerHoldWhenLost)
         failures += run("tracker auto search", testTrackerAutoSearch)
         failures += run("search recovery", testSearchRecovery)
+        failures += run("software crop", testSoftwareCrop)
         failures += run("auto exposure", testAutoExposure)
         failures += run("star quality from peak", testStarQuality)
         failures += run("digital stabilize pan", testDigitalStabilizePan)
@@ -418,13 +419,61 @@ private func testSearchRecovery() throws {
         detection: detection,
         autoCenter: true,
         autoSearch: true,
-        trackingROISize: 256,
+        trackingROISize: CaptureLayout.trackingHardwareSize,
         sensorWidth: 800,
         sensorHeight: 600
     )
     try expect(status.state == TrackingState.tracking, "state")
     try expect(status.requestedROI?.binning == 1, "bin")
-    try expect(status.requestedROI?.width == 256 || status.requestedROI?.width == 252, "width")
+    try expect(
+        status.requestedROI?.width == 800 || status.requestedROI?.width == 796,
+        "tracking window \(String(describing: status.requestedROI?.width))"
+    )
+}
+
+private func testSoftwareCrop() throws {
+    var pixels = [UInt16](repeating: 0, count: 64 * 64)
+    pixels[10 * 64 + 20] = 1000
+    let frame = Frame(
+        width: 64,
+        height: 64,
+        pixels: pixels,
+        roi: ROI(x: 100, y: 200, width: 64, height: 64)
+    )
+    let crop = frame.cropped(around: SIMD2(20, 10), size: 16)
+    try expect(crop.width == 16 && crop.height == 16, "size")
+    try expect(crop.roi.x == 100 + 20 - 8, "roi x \(crop.roi.x)")
+    try expect(crop.roi.y == 200 + 10 - 8, "roi y \(crop.roi.y)")
+    try expect(crop.pixel(x: 8, y: 8) == 1000, "hot pixel at crop center")
+    let origin = crop.origin(inParent: frame)
+    try expect(origin == SIMD2(12, 2), "origin \(origin)")
+
+    let edge = frame.cropped(around: SIMD2(1, 1), size: 16)
+    try expect(edge.roi.x == 100 && edge.roi.y == 200, "clamped to origin")
+
+    var window = [UInt16](repeating: 0, count: 1024 * 1024)
+    window[400 * 1024 + 300] = 999
+    let tracking = Frame(
+        width: 1024,
+        height: 1024,
+        pixels: window,
+        roi: ROI(x: 40, y: 80, width: 1024, height: 1024)
+    )
+    try expect(CaptureLayout.isTrackingCapture(tracking), "square tracking window")
+    let display = CaptureLayout.displayFrame(from: tracking, tracking: .tracking, centroid: SIMD2(300, 400))
+    try expect(display.width == CaptureLayout.displayCropSize, "view crop \(display.width)")
+    try expect(display.pixel(x: 256, y: 256) == 999, "star centered in the view crop")
+
+    let searchROI = Alignment.fullFrameROI(sensorWidth: 6252, sensorHeight: 4176, binning: 4)
+    let search = Frame(
+        width: searchROI.width,
+        height: searchROI.height,
+        pixels: [0],
+        roi: searchROI
+    )
+    try expect(!CaptureLayout.isTrackingCapture(search), "full-frame search is not a tracking window")
+    let shown = CaptureLayout.displayFrame(from: search, tracking: .searching, centroid: SIMD2(10, 10))
+    try expect(shown.width == search.width, "search shows the full frame")
 }
 
 private func testAutoExposure() throws {

@@ -65,7 +65,6 @@ public final class CollimationEngine: ObservableObject {
     @Published public var exposureRange: ClosedRange<Double> = Double(ExposureControl.minMicroseconds)...Double(ExposureControl.maxMicroseconds)
     @Published public var gainRange: ClosedRange<Double> = 0...400
 
-    @Published public var roiSize: Int = 512
     @Published public var autoCenter = true
     @Published public var autoSearch = false
     @Published public var stabilize = false
@@ -96,7 +95,6 @@ public final class CollimationEngine: ObservableObject {
     @Published public private(set) var filterSlots: [FilterSlot] = []
     @Published public var selectedFilterPosition = 0
 
-    public let roiSizes = [256, 512, 1024, 2048, 0]
     public static let minZoom = 0.25
     public static let maxZoom = 8.0
     public var isMountCalibrated: Bool { guideCalibration?.isValid == true }
@@ -114,6 +112,7 @@ public final class CollimationEngine: ObservableObject {
     private var sensorWidth = CameraDescriptor.simulator.sensorWidth
     private var sensorHeight = CameraDescriptor.simulator.sensorHeight
     nonisolated public let stabilization = StabilizationController()
+    nonisolated private let softwareCrop = SoftwareCropController()
     private var cancellables = Set<AnyCancellable>()
     private var mountTask: Task<Void, Never>?
     private var stackTask: Task<Void, Never>?
@@ -156,8 +155,8 @@ public final class CollimationEngine: ObservableObject {
             }
             .store(in: &cancellables)
         $autoCenter
-            .combineLatest($roiSize, $autoSearch)
-            .sink { [weak self] _, _, _ in
+            .combineLatest($autoSearch)
+            .sink { [weak self] _, _ in
                 self?.applyPipelineConfig()
             }
             .store(in: &cancellables)
@@ -240,6 +239,7 @@ public final class CollimationEngine: ObservableObject {
             lastSentGain = Int(gain)
             session.start(device: newDevice)
             isConnected = true
+            applyROISize()
             statusText = "Live — \(newDevice.descriptor.name)"
         } catch {
             handleError(error)
@@ -250,7 +250,7 @@ public final class CollimationEngine: ObservableObject {
         if let frame = frameSlot.peek()?.frame {
             return MonoTIFF.suggestedFileName(width: frame.width, height: frame.height, date: frame.timestamp)
         }
-        let size = overlay.imageWidth > 0 ? overlay.imageWidth : (roiSize == 0 ? 0 : roiSize)
+        let size = overlay.imageWidth > 0 ? overlay.imageWidth : CaptureLayout.displayCropSize
         let height = overlay.imageHeight > 0 ? overlay.imageHeight : size
         return MonoTIFF.suggestedFileName(width: max(size, 1), height: max(height, 1))
     }
@@ -265,7 +265,7 @@ public final class CollimationEngine: ObservableObject {
                 label: label
             )
         }
-        let size = overlay.imageWidth > 0 ? overlay.imageWidth : (roiSize == 0 ? 0 : roiSize)
+        let size = overlay.imageWidth > 0 ? overlay.imageWidth : CaptureLayout.displayCropSize
         let height = overlay.imageHeight > 0 ? overlay.imageHeight : size
         return MonoTIFF.suggestedFileName(width: max(size, 1), height: max(height, 1), label: label)
     }
@@ -360,6 +360,7 @@ public final class CollimationEngine: ObservableObject {
         fwhm = nil
         overlay = OverlayModel()
         frameSlot.clear()
+        softwareCrop.reset()
         stabilization.reset()
         updateStabilization()
         statusText = "Disconnected"
@@ -403,26 +404,24 @@ public final class CollimationEngine: ObservableObject {
         guard isConnected, !isStacking, !isMountBusy else { return }
         pipeline.reset()
         coalescer.cancel()
-        let roi: ROI
-        if roiSize == 0 {
-            roi = Alignment.fullFrameROI(sensorWidth: sensorWidth, sensorHeight: sensorHeight, binning: 1)
-        } else {
-            let center = tracking.centroidOnSensor
-                ?? SIMD2(Double(sensorWidth) / 2, Double(sensorHeight) / 2)
-            roi = Alignment.centeredROI(
+        softwareCrop.reset()
+        let center = tracking.centroidOnSensor
+            ?? SIMD2(Double(sensorWidth) / 2, Double(sensorHeight) / 2)
+        session.requestROI(
+            Alignment.centeredROI(
                 around: center,
-                size: roiSize,
+                size: CaptureLayout.trackingHardwareSize,
                 sensorWidth: sensorWidth,
                 sensorHeight: sensorHeight
             )
-        }
-        session.requestROI(roi)
+        )
     }
 
     public func searchNow() {
         guard isConnected, !isMountBusy, !isStacking else { return }
         pipeline.markSearching()
         coalescer.cancel()
+        softwareCrop.reset()
         let roi = Alignment.fullFrameROI(sensorWidth: sensorWidth, sensorHeight: sensorHeight, binning: 4)
         session.requestROI(roi)
         tracking.state = .searching
@@ -449,7 +448,7 @@ public final class CollimationEngine: ObservableObject {
     }
 
     public func fitZoom(viewWidth: Double? = nil, viewHeight: Double? = nil) {
-        let size = overlay.imageWidth == 0 ? (roiSize == 0 ? 1024 : roiSize) : overlay.imageWidth
+        let size = overlay.imageWidth == 0 ? CaptureLayout.displayCropSize : overlay.imageWidth
         let height = overlay.imageHeight == 0 ? size : overlay.imageHeight
         zoom = min(
             Self.maxZoom,
@@ -501,7 +500,7 @@ public final class CollimationEngine: ObservableObject {
     }
 
     private nonisolated func ingest(_ frame: Frame) {
-        frameSlot.store(frame)
+        frameSlot.store(softwareCrop.apply(frame))
         _ = fpsMeter.tick()
         coalescer.submit(frame)
     }
@@ -511,6 +510,11 @@ public final class CollimationEngine: ObservableObject {
         if let roi = processed.tracking.requestedROI {
             session.requestROI(roi)
         }
+        softwareCrop.update(
+            enabled: CaptureLayout.isTrackingCapture(frame) && processed.tracking.state == .tracking,
+            sensorCentroid: processed.tracking.centroidOnSensor
+        )
+        frameSlot.store(processed.displayFrame)
         Task { @MainActor in
             self.publish(processed)
         }
@@ -972,7 +976,6 @@ public final class CollimationEngine: ObservableObject {
         pipeline.configure(
             autoCenter: autoCenter && !holdsROI,
             autoSearch: autoSearch && !holdsROI,
-            roiSize: roiSize,
             sensorWidth: sensorWidth,
             sensorHeight: sensorHeight,
             holdROI: holdsROI

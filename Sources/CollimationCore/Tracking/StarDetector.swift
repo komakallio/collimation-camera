@@ -28,6 +28,17 @@ public struct StarDetection: Equatable, Sendable {
         guard sigma > 1e-3 else { return 0 }
         return max(0, (Double(peak) - background) / sigma)
     }
+
+    public func offsetBy(_ delta: SIMD2<Double>) -> StarDetection {
+        StarDetection(
+            centroid: centroid + delta,
+            peak: peak,
+            flux: flux,
+            area: area,
+            background: background,
+            sigma: sigma
+        )
+    }
 }
 
 public struct StarDetector: Sendable {

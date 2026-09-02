@@ -14,12 +14,13 @@ public struct StabilizationPose: Equatable, Sendable {
     }
 }
 
-/// Locks the tracked centroid to a fixed place in the window. Complements camera
-/// ROI recentering: the ROI follows large motion, this cancels leftover jitter.
+/// Locks the tracked centroid to a fixed place in the window. Complements the
+/// 2048×2048 hardware window: that ROI follows large motion, this cancels leftover
+/// jitter on the 512×512 software crop.
 ///
 /// The lock is in view space, but the centroid is in **this frame’s** pixel
-/// coordinates. A size change (search ↔ tracking ROI, user ROI) drops the lock
-/// so a pan computed for a 4×-binned full frame is never applied to a 512 crop.
+/// coordinates. A size change (full-frame search ↔ 512 crop) drops the lock
+/// so a pan computed for a binned full frame is never applied to the crop.
 /// Lost/idle keeps the last lock and centroid so the view does not chase noise;
 /// searching clears both.
 public struct DigitalStabilizer: Equatable, Sendable {
