@@ -102,7 +102,7 @@ enum OverlayChrome {
 struct OverlayLegendView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            row("Frame center") { OverlayLegendMark.crosshair(OverlayChrome.frameCenter) }
+            row("Sensor center") { OverlayLegendMark.crosshair(OverlayChrome.frameCenter) }
             row("Star") { OverlayLegendMark.starPeaks() }
             row("Outer ring") { OverlayLegendMark.ring(OverlayChrome.outerRing) }
             row("Inner ring") { OverlayLegendMark.ring(OverlayChrome.innerRing) }
@@ -117,7 +117,7 @@ struct OverlayLegendView: View {
             RoundedRectangle(cornerRadius: 4, style: .continuous)
                 .strokeBorder(.white.opacity(0.2), lineWidth: 1)
         )
-        .help("White plus is the frame center. The star marker is green when exposure is good, yellow when faint, and red when clipped. Cyan is the outer donut, gold the secondary shadow, red the coma.")
+        .help("White plus is the physical sensor center. The star marker is green when exposure is good, yellow when faint, and red when clipped. Cyan is the outer donut, gold the secondary shadow, red the coma.")
     }
 
     private func row(_ label: String, @ViewBuilder mark: () -> some View) -> some View {
@@ -228,8 +228,13 @@ struct OverlayView: View {
             let rect = layout.imageRect
             let imageRect = CGRect(x: rect.x, y: rect.y, width: rect.width, height: rect.height)
 
-            let cx = layout.viewPoint(image: SIMD2(Double(overlay.imageWidth) / 2, Double(overlay.imageHeight) / 2))
-            drawCrosshair(context: &context, at: CGPoint(x: cx.x, y: cx.y), color: OverlayChrome.frameCenter)
+            if let sensorCenter = overlay.sensorCenterInImage,
+               sensorCenter.x >= -2, sensorCenter.y >= -2,
+               sensorCenter.x <= Double(overlay.imageWidth) + 2,
+               sensorCenter.y <= Double(overlay.imageHeight) + 2 {
+                let cx = layout.viewPoint(image: sensorCenter)
+                drawCrosshair(context: &context, at: CGPoint(x: cx.x, y: cx.y), color: OverlayChrome.frameCenter)
+            }
 
             if let centroid = liveCentroid ?? overlay.centroid {
                 let p = layout.viewPoint(image: centroid)
@@ -304,6 +309,16 @@ struct ROIMapView: View {
             context.fill(Path(roundedRect: frameRect, cornerRadius: 1), with: .color(Color.white.opacity(0.08)))
             context.stroke(Path(roundedRect: frameRect, cornerRadius: 1), with: .color(.white.opacity(0.75)), lineWidth: 1)
 
+            let sensorCenter = MountGuide.frameCenter(width: sensorWidth, height: sensorHeight)
+            drawPlus(
+                context: &context,
+                at: CGPoint(
+                    x: origin.x + sensorCenter.x * scale,
+                    y: origin.y + sensorCenter.y * scale
+                ),
+                color: OverlayChrome.frameCenter
+            )
+
             let roiRect = CGRect(
                 x: origin.x + CGFloat(roi.x) * scale,
                 y: origin.y + CGFloat(roi.y) * scale,
@@ -319,7 +334,7 @@ struct ROIMapView: View {
                     x: origin.x + sensor.x * scale,
                     y: origin.y + sensor.y * scale
                 )
-                drawYellowPlus(context: &context, at: point)
+                drawPlus(context: &context, at: point, color: .yellow)
             }
         }
         .frame(width: size.width, height: size.height)
@@ -328,17 +343,17 @@ struct ROIMapView: View {
             RoundedRectangle(cornerRadius: 4, style: .continuous)
                 .strokeBorder(.white.opacity(0.2), lineWidth: 1)
         )
-        .help("Full sensor with the current camera ROI")
+        .help("Full sensor with the current camera ROI. White plus is the physical sensor center.")
     }
 
-    private func drawYellowPlus(context: inout GraphicsContext, at point: CGPoint) {
+    private func drawPlus(context: inout GraphicsContext, at point: CGPoint, color: Color) {
         let arm: CGFloat = 4
         var path = Path()
         path.move(to: CGPoint(x: point.x - arm, y: point.y))
         path.addLine(to: CGPoint(x: point.x + arm, y: point.y))
         path.move(to: CGPoint(x: point.x, y: point.y - arm))
         path.addLine(to: CGPoint(x: point.x, y: point.y + arm))
-        context.stroke(path, with: .color(.yellow), lineWidth: 1.25)
+        context.stroke(path, with: .color(color), lineWidth: 1.25)
     }
 
     private var mapSize: CGSize {

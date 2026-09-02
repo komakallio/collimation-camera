@@ -45,6 +45,14 @@ public struct OverlayModel: Equatable, Sendable {
         self.roi = roi
         self.starPeak = starPeak
     }
+
+    /// Displayed-image pixel of the physical sensor center (same point mount centering uses).
+    public var sensorCenterInImage: SIMD2<Double>? {
+        guard sensorWidth > 0, sensorHeight > 0, imageWidth > 0, imageHeight > 0 else { return nil }
+        return roi.framePixel(
+            fromSensorPoint: MountGuide.frameCenter(width: sensorWidth, height: sensorHeight)
+        )
+    }
 }
 
 @MainActor

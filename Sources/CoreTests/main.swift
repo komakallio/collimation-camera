@@ -23,6 +23,7 @@ struct CoreTests {
         failures += run("tracker auto search", testTrackerAutoSearch)
         failures += run("search recovery", testSearchRecovery)
         failures += run("software crop", testSoftwareCrop)
+        failures += run("sensor center overlay", testSensorCenterOverlay)
         failures += run("auto exposure", testAutoExposure)
         failures += run("star quality from peak", testStarQuality)
         failures += run("digital stabilize pan", testDigitalStabilizePan)
@@ -509,6 +510,58 @@ private func testSoftwareCrop() throws {
     try expect(!CaptureLayout.isTrackingCapture(search), "full-frame search is not a tracking window")
     let shown = CaptureLayout.displayFrame(from: search, tracking: .searching, centroid: SIMD2(10, 10))
     try expect(shown.width == search.width, "search shows the full frame")
+}
+
+private func testSensorCenterOverlay() throws {
+    let sensorWidth = 6252
+    let sensorHeight = 4176
+    let center = MountGuide.frameCenter(width: sensorWidth, height: sensorHeight)
+
+    let far = OverlayModel(
+        imageWidth: 512,
+        imageHeight: 512,
+        sensorWidth: sensorWidth,
+        sensorHeight: sensorHeight,
+        roi: ROI(x: 40, y: 80, width: 512, height: 512)
+    )
+    guard let farPoint = far.sensorCenterInImage else {
+        throw Expectation(description: "expected sensor center mapping")
+    }
+    try expect(farPoint.x < 0 || farPoint.x >= 512 || farPoint.y < 0 || farPoint.y >= 512, "corner crop is not sensor center")
+    try expect(abs(farPoint.x - 256) > 100, "must not sit at crop center \(farPoint.x)")
+
+    let roi = Alignment.centeredROI(
+        around: center,
+        size: 512,
+        sensorWidth: sensorWidth,
+        sensorHeight: sensorHeight
+    )
+    let onCenter = OverlayModel(
+        imageWidth: roi.width,
+        imageHeight: roi.height,
+        sensorWidth: sensorWidth,
+        sensorHeight: sensorHeight,
+        roi: roi
+    )
+    guard let point = onCenter.sensorCenterInImage else {
+        throw Expectation(description: "expected on-center mapping")
+    }
+    try expect(abs(point.x - Double(roi.width) / 2) < 4, "x \(point.x)")
+    try expect(abs(point.y - Double(roi.height) / 2) < 4, "y \(point.y)")
+
+    let full = Alignment.fullFrameROI(sensorWidth: sensorWidth, sensorHeight: sensorHeight, binning: 1)
+    let fullOverlay = OverlayModel(
+        imageWidth: full.width,
+        imageHeight: full.height,
+        sensorWidth: sensorWidth,
+        sensorHeight: sensorHeight,
+        roi: full
+    )
+    guard let fullPoint = fullOverlay.sensorCenterInImage else {
+        throw Expectation(description: "expected full-frame mapping")
+    }
+    try expect(abs(fullPoint.x - Double(full.width) / 2) < 2, "full x \(fullPoint.x)")
+    try expect(abs(fullPoint.y - Double(full.height) / 2) < 2, "full y \(fullPoint.y)")
 }
 
 private func testAutoExposure() throws {
