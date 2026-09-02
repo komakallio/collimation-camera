@@ -103,32 +103,6 @@ public struct ComaAnalyzer: Sendable {
         )
     }
 
-    public func smooth(previous: ComaResult?, current: ComaResult, alpha: Double = 0.25) -> ComaResult {
-        guard let previous else { return current }
-        let a = min(max(alpha, 0.05), 1)
-        let vec = previous.vector * (1 - a) + current.vector * a
-        let mag = simdLength(vec)
-        let annulus = max(current.outer.radius - current.inner.radius, 1)
-        return ComaResult(
-            outer: FittedCircle(
-                center: previous.outer.center * (1 - a) + current.outer.center * a,
-                radius: previous.outer.radius * (1 - a) + current.outer.radius * a
-            ),
-            inner: FittedCircle(
-                center: previous.inner.center * (1 - a) + current.inner.center * a,
-                radius: previous.inner.radius * (1 - a) + current.inner.radius * a
-            ),
-            vector: vec,
-            magnitudePixels: mag,
-            magnitudeNormalized: mag / annulus,
-            directionDegrees: wrapDegrees(atan2(vec.y, vec.x) * 180 / .pi),
-            sectorAsymmetry: previous.sectorAsymmetry * (1 - a) + current.sectorAsymmetry * a,
-            harmonicDirectionDegrees: current.harmonicDirectionDegrees,
-            snr: previous.snr * (1 - a) + current.snr * a,
-            quality: previous.quality * (1 - a) + current.quality * a
-        )
-    }
-
     private struct Hole {
         var center: SIMD2<Double>
         var radius: Double

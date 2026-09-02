@@ -500,6 +500,13 @@ private func testSoftwareCrop() throws {
     try expect(display.width == CaptureLayout.displayCropSize, "view crop \(display.width)")
     try expect(display.pixel(x: 256, y: 256) == 999, "star centered in the view crop")
 
+    let analysis = CaptureLayout.analysisFrame(from: tracking, seed: SIMD2(300, 400))
+    try expect(analysis.width == CaptureLayout.displayCropSize, "analysis crop \(analysis.width)")
+    try expect(analysis.pixel(x: 256, y: 256) == 999, "star centered in the analysis crop")
+    let unseeded = CaptureLayout.analysisFrame(from: tracking, seed: nil)
+    try expect(unseeded.width == CaptureLayout.displayCropSize, "unseeded crop")
+    try expect(unseeded.roi.x != analysis.roi.x || unseeded.roi.y != analysis.roi.y, "unseeded uses window center")
+
     let searchROI = Alignment.fullFrameROI(sensorWidth: 6252, sensorHeight: 4176, binning: 4)
     let search = Frame(
         width: searchROI.width,

@@ -50,7 +50,7 @@ public enum CaptureLayout {
     /// Hardware ROI while a star is tracked. Large enough that digital
     /// stabilization can pan without restarting the camera stream.
     public static let trackingHardwareSize = 2048
-    /// Software crop, histogram, coma, FWHM, and live view while tracking.
+    /// Software crop for detection, histogram, coma, FWHM, and live view while tracking.
     public static let displayCropSize = 512
     /// `centeredROI` may shrink a 2048 request by a few pixels.
     public static let hardwareSizeSlack = 32
@@ -63,6 +63,14 @@ public enum CaptureLayout {
         return longest - shortest <= hardwareSizeSlack * 8
     }
 
+    /// 512×512 around the last centroid (or the window center) on a tracking
+    /// capture; search and mount-centering frames stay full.
+    public static func analysisFrame(from frame: Frame, seed: SIMD2<Double>?) -> Frame {
+        guard isTrackingCapture(frame) else { return frame }
+        let center = seed ?? SIMD2(Double(frame.width) / 2, Double(frame.height) / 2)
+        return frame.cropped(around: center, size: displayCropSize)
+    }
+
     /// 512×512 around the star on a tracking capture; otherwise the full frame
     /// (search and mount centering).
     public static func displayFrame(
@@ -70,10 +78,10 @@ public enum CaptureLayout {
         tracking: TrackingState,
         centroid: SIMD2<Double>?
     ) -> Frame {
-        guard tracking == .tracking, let centroid, isTrackingCapture(frame) else {
+        guard tracking == .tracking, isTrackingCapture(frame) else {
             return frame
         }
-        return frame.cropped(around: centroid, size: displayCropSize)
+        return analysisFrame(from: frame, seed: centroid)
     }
 }
 

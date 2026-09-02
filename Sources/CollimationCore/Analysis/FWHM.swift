@@ -74,15 +74,6 @@ public struct FWHMEstimator: Sendable {
         return nil
     }
 
-    public func smooth(previous: FWHMResult?, current: FWHMResult, alpha: Double = 0.3) -> FWHMResult {
-        guard let previous, previous.binning == current.binning else { return current }
-        let a = min(max(alpha, 0.05), 1)
-        return FWHMResult(
-            framePixels: previous.framePixels * (1 - a) + current.framePixels * a,
-            binning: current.binning
-        )
-    }
-
     /// Half-max diameter of the azimuthally averaged profile around `centroid`.
     private func radialFWHM(
         frame: Frame,
