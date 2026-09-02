@@ -35,7 +35,6 @@ struct LiveView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: LiveMTKView, context: Context) {
-        context.coordinator.renderer.viewSize = nsView.drawableSize
         let width = nsView.bounds.width
         let height = nsView.bounds.height
         Task { @MainActor in

@@ -18,6 +18,7 @@ struct CoreTests {
         failures += run("coma horizontal", testComaHorizontal)
         failures += run("coma vertical", testComaVertical)
         failures += run("concentric donut", testConcentric)
+        failures += run("coma ring size on crop", testComaRingSizeOnCrop)
         failures += run("tracker recenter", testTrackerRecenter)
         failures += run("tracker hold when lost", testTrackerHoldWhenLost)
         failures += run("tracker auto search", testTrackerAutoSearch)
@@ -350,6 +351,41 @@ private func testConcentric() throws {
         throw Expectation(description: "analysis failed")
     }
     try expect(result.magnitudeNormalized < 0.08, "norm \(result.magnitudeNormalized)")
+}
+
+private func testComaRingSizeOnCrop() throws {
+    let size = 2048
+    let center = SIMD2(1024.0, 1024.0)
+    let outerR = 48.0
+    let innerR = 18.0
+    let scene = DonutScene(
+        sensorWidth: size,
+        sensorHeight: size,
+        starPosition: center,
+        outerRadius: outerR,
+        innerRadius: innerR,
+        comaOffset: SIMD2(3.5, -2.0),
+        intensityAsymmetry: 0.28,
+        peakADU: 42_000,
+        backgroundADU: 900,
+        noiseSigma: 12,
+        seeingJitter: 0
+    )
+    var rng = RNG(seed: 42)
+    let frame = DonutRenderer(scene: scene).render(
+        roi: ROI(x: 0, y: 0, width: size, height: size),
+        jitter: .zero,
+        rng: &rng
+    )
+    let crop = CaptureLayout.analysisFrame(from: frame, seed: center)
+    guard let detection = StarDetector().detect(in: crop) else {
+        throw Expectation(description: "expected detection on 512 crop")
+    }
+    guard let coma = ComaAnalyzer().analyze(frame: crop, detection: detection) else {
+        throw Expectation(description: "expected coma on 512 crop")
+    }
+    try expect(abs(coma.outer.radius - outerR) < 10, "outer \(coma.outer.radius) vs \(outerR)")
+    try expect(abs(coma.inner.radius - innerR) < 10, "inner \(coma.inner.radius) vs \(innerR)")
 }
 
 private func testTrackerRecenter() throws {

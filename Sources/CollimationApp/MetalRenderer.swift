@@ -16,7 +16,6 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     let frames: FrameSlot
     let renderState: RenderStateSlot
     let stabilization: StabilizationController
-    var viewSize = CGSize(width: 1, height: 1)
 
     init?(
         device: MTLDevice,
@@ -50,9 +49,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         super.init()
     }
 
-    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
-        viewSize = size
-    }
+    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
     func draw(in view: MTKView) {
         guard let descriptor = view.currentRenderPassDescriptor else { return }
@@ -64,6 +61,11 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
               let encoder = command.makeRenderCommandEncoder(descriptor: descriptor)
         else { return }
 
+        // Layout in view points so the quad matches the SwiftUI overlay. Using
+        // `drawableSize` (pixels) on Retina made the image half as large as the rings.
+        let viewWidth = max(Double(view.bounds.width), 1)
+        let viewHeight = max(Double(view.bounds.height), 1)
+
         if let latest = frames.peek() {
             if latest.sequence != lastSequence {
                 upload(latest.frame)
@@ -73,8 +75,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 if latest.sequence != lastStabilizedSequence {
                     let pose = stabilization.process(
                         latest.frame,
-                        viewWidth: viewSize.width,
-                        viewHeight: viewSize.height
+                        viewWidth: viewWidth,
+                        viewHeight: viewHeight
                     )
                     lastStabilizedSequence = latest.sequence
                     renderState.update { state in
@@ -104,8 +106,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let layout = ImageLayout(
             imageWidth: texture.width,
             imageHeight: texture.height,
-            viewWidth: viewSize.width,
-            viewHeight: viewSize.height,
+            viewWidth: viewWidth,
+            viewHeight: viewHeight,
             zoom: state.zoom,
             lockNormalized: lockNormalized,
             stabilizeCentroid: stabilizeCentroid
@@ -116,8 +118,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             y: rect.y,
             width: rect.width,
             height: rect.height,
-            viewWidth: viewSize.width,
-            viewHeight: viewSize.height
+            viewWidth: viewWidth,
+            viewHeight: viewHeight
         )
 
         var uniforms = StretchUniforms(
