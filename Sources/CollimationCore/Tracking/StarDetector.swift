@@ -58,23 +58,41 @@ public struct StarDetector: Sendable {
         guard width > 0, height > 0 else { return nil }
 
         if let seed {
-            return detectRegion(in: frame, around: seed, halfWindow: 384)
-        }
-        if frame.pixelCount > 1024 * 1024 {
-            let peak = stridedPeak(in: frame)
-            if let peak, let found = detectRegion(in: frame, around: peak, halfWindow: 384) {
-                return found
-            }
-            if let peak {
-                return detectRegion(in: frame, around: peak, halfWindow: 768)
-            }
             return detectRegion(
                 in: frame,
-                around: SIMD2(Double(width) / 2, Double(height) / 2),
-                halfWindow: 768
+                around: seed,
+                halfWindow: Self.seedHalfWindow(width: width, height: height)
             )
         }
-        return detectRegion(in: frame, x0: 0, y0: 0, x1: width, y1: height)
+        // 2048×2048 tracking frames must be searched in full: a 4× PowerMate
+        // donut is often larger than the old 768-pixel window around the rim.
+        if frame.pixelCount <= CaptureLayout.trackingHardwareSize * CaptureLayout.trackingHardwareSize {
+            return detectRegion(in: frame, x0: 0, y0: 0, x1: width, y1: height)
+        }
+        return detectLargeFrame(frame)
+    }
+
+    private static func seedHalfWindow(width: Int, height: Int) -> Int {
+        max(384, min(width, height) / 2)
+    }
+
+    private func detectLargeFrame(_ frame: Frame) -> StarDetection? {
+        let peak = stridedPeak(in: frame)
+            ?? SIMD2(Double(frame.width) / 2, Double(frame.height) / 2)
+        let maxHW = max(min(frame.width, frame.height) / 2, 512)
+        var halfWindow = 512
+        while halfWindow < maxHW {
+            if let found = detectRegion(
+                in: frame,
+                around: peak,
+                halfWindow: halfWindow,
+                allowClipped: false
+            ) {
+                return found
+            }
+            halfWindow = min(maxHW, halfWindow * 2)
+        }
+        return detectRegion(in: frame, around: peak, halfWindow: maxHW, allowClipped: true)
     }
 
     public func backgroundStats(_ frame: Frame) -> (median: Double, sigma: Double) {
@@ -95,7 +113,12 @@ public struct StarDetector: Sendable {
         return (median, sigma)
     }
 
-    private func detectRegion(in frame: Frame, around seed: SIMD2<Double>, halfWindow: Int) -> StarDetection? {
+    private func detectRegion(
+        in frame: Frame,
+        around seed: SIMD2<Double>,
+        halfWindow: Int,
+        allowClipped: Bool = true
+    ) -> StarDetection? {
         let hw = max(32, halfWindow)
         let cx = Int(seed.x.rounded())
         let cy = Int(seed.y.rounded())
@@ -103,15 +126,24 @@ public struct StarDetector: Sendable {
         let y0 = max(0, cy - hw)
         let x1 = min(frame.width, cx + hw + 1)
         let y1 = min(frame.height, cy + hw + 1)
-        return detectRegion(in: frame, x0: x0, y0: y0, x1: x1, y1: y1)
+        return detectRegion(in: frame, x0: x0, y0: y0, x1: x1, y1: y1, allowClipped: allowClipped)
     }
 
-    private func detectRegion(in frame: Frame, x0: Int, y0: Int, x1: Int, y1: Int) -> StarDetection? {
+    private func detectRegion(
+        in frame: Frame,
+        x0: Int,
+        y0: Int,
+        x1: Int,
+        y1: Int,
+        allowClipped: Bool = true
+    ) -> StarDetection? {
         guard x1 > x0, y1 > y0 else { return nil }
         let stats = backgroundStats(frame)
         let threshold = UInt16(min(65535, max(0, stats.median + kSigma * stats.sigma)))
         let maxArea = Int(Double(frame.pixelCount) * maxAreaFraction)
         let width = frame.width
+        let height = frame.height
+        let fullFrame = x0 == 0 && y0 == 0 && x1 == width && y1 == height
         let rw = x1 - x0
         var visited = [UInt8](repeating: 0, count: rw * (y1 - y0))
         var best: StarDetection?
@@ -126,27 +158,29 @@ public struct StarDetector: Sendable {
                 if visited[vis] != 0 { continue }
                 let idx = row + x
                 if pixels[idx] < threshold { continue }
-                if let blob = floodFill(
+                guard let blob = floodFill(
                     pixels: pixels,
                     visited: &visited,
                     width: width,
+                    height: height,
                     x0: x0,
                     y0: y0,
                     x1: x1,
                     y1: y1,
                     start: idx,
                     threshold: threshold
-                ), blob.area >= minArea, blob.area <= maxArea, blob.flux > bestFlux {
-                    bestFlux = blob.flux
-                    best = StarDetection(
-                        centroid: blob.centroid,
-                        peak: blob.peak,
-                        flux: blob.flux,
-                        area: blob.area,
-                        background: stats.median,
-                        sigma: stats.sigma
-                    )
-                }
+                ), blob.area >= minArea, blob.area <= maxArea, blob.flux > bestFlux
+                else { continue }
+                if blob.clippedByWindow, !fullFrame, !allowClipped { continue }
+                bestFlux = blob.flux
+                best = StarDetection(
+                    centroid: blob.centroid,
+                    peak: blob.peak,
+                    flux: blob.flux,
+                    area: blob.area,
+                    background: stats.median,
+                    sigma: stats.sigma
+                )
             }
         }
         return best
@@ -181,12 +215,14 @@ public struct StarDetector: Sendable {
         var peak: UInt16
         var flux: Double
         var area: Int
+        var clippedByWindow: Bool
     }
 
     private func floodFill(
         pixels: [UInt16],
         visited: inout [UInt8],
         width: Int,
+        height: Int,
         x0: Int,
         y0: Int,
         x1: Int,
@@ -204,6 +240,7 @@ public struct StarDetector: Sendable {
         var sumX = 0.0
         var sumY = 0.0
         var peak: UInt16 = 0
+        var clippedByWindow = false
 
         while let idx = stack.popLast() {
             let value = pixels[idx]
@@ -218,7 +255,12 @@ public struct StarDetector: Sendable {
             if value > peak { peak = value }
 
             func consider(_ nx: Int, _ ny: Int) {
-                guard nx >= x0, nx < x1, ny >= y0, ny < y1 else { return }
+                guard nx >= x0, nx < x1, ny >= y0, ny < y1 else {
+                    if nx >= 0, nx < width, ny >= 0, ny < height {
+                        clippedByWindow = true
+                    }
+                    return
+                }
                 let vis = (ny - y0) * rw + (nx - x0)
                 if visited[vis] != 0 { return }
                 let n = ny * width + nx
@@ -233,7 +275,13 @@ public struct StarDetector: Sendable {
         }
 
         guard area > 0, flux > 0 else { return nil }
-        return Blob(centroid: SIMD2(sumX / flux, sumY / flux), peak: peak, flux: flux, area: area)
+        return Blob(
+            centroid: SIMD2(sumX / flux, sumY / flux),
+            peak: peak,
+            flux: flux,
+            area: area,
+            clippedByWindow: clippedByWindow
+        )
     }
 
     /// Intensity-weighted centroid in a window. Cheap enough to run on every live frame
@@ -241,7 +289,7 @@ public struct StarDetector: Sendable {
     public func momentCentroid(
         in frame: Frame,
         around seed: SIMD2<Double>?,
-        halfWindow: Int = 192
+        halfWindow: Int = 256
     ) -> SIMD2<Double>? {
         let width = frame.width
         let height = frame.height

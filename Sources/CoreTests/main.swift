@@ -10,6 +10,7 @@ struct CoreTests {
         failures += run("mtf identity", testMTFIdentityAtHalf)
         failures += run("arcsinh stretch", testArcsinhStretch)
         failures += run("star detection", testStarDetection)
+        failures += run("large donut detection", testLargeDonutDetection)
         failures += run("moment centroid", testMomentCentroid)
         failures += run("empty sky", testEmptySky)
         failures += run("star fwhm", testStarFWHM)
@@ -160,6 +161,40 @@ private func testStarDetection() throws {
     try expect(abs(detection.centroid.x - 180) < 6, "x \(detection.centroid.x)")
     try expect(abs(detection.centroid.y - 96) < 6, "y \(detection.centroid.y)")
     try expect(detection.snr > 10, "snr \(detection.snr)")
+}
+
+private func testLargeDonutDetection() throws {
+    // 4× PowerMate on a 2.9 µm sensor makes a collimation donut hundreds of
+    // pixels across. Detection used to search only a 768-pixel box around the
+    // bright rim, which misses the rest of the annulus.
+    let size = 1100
+    let center = SIMD2(550.0, 540.0)
+    let scene = DonutScene(
+        sensorWidth: size,
+        sensorHeight: size,
+        starPosition: center,
+        outerRadius: 260,
+        innerRadius: 90,
+        comaOffset: .zero,
+        intensityAsymmetry: 0,
+        noiseSigma: 12,
+        seeingJitter: 0
+    )
+    var rng = RNG(seed: 11)
+    let frame = DonutRenderer(scene: scene).render(
+        roi: ROI(x: 0, y: 0, width: size, height: size),
+        jitter: .zero,
+        rng: &rng
+    )
+    guard let detection = StarDetector().detect(in: frame) else {
+        throw Expectation(description: "expected large donut")
+    }
+    try expect(abs(detection.centroid.x - center.x) < 20, "x \(detection.centroid.x)")
+    try expect(abs(detection.centroid.y - center.y) < 20, "y \(detection.centroid.y)")
+    guard let seeded = StarDetector().detect(in: frame, around: center) else {
+        throw Expectation(description: "expected seeded large donut")
+    }
+    try expect(abs(seeded.centroid.x - center.x) < 20, "seeded x \(seeded.centroid.x)")
 }
 
 private func testMomentCentroid() throws {
