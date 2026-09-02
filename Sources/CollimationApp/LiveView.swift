@@ -307,6 +307,10 @@ struct ROIMapView: View {
             )
             let frameRect = CGRect(x: origin.x, y: origin.y, width: frameW, height: frameH)
             context.fill(Path(roundedRect: frameRect, cornerRadius: 1), with: .color(Color.white.opacity(0.08)))
+            context.drawLayer { ctx in
+                ctx.clip(to: Path(roundedRect: frameRect, cornerRadius: 1))
+                drawGrid(context: &ctx, in: frameRect, divisions: 4)
+            }
             context.stroke(Path(roundedRect: frameRect, cornerRadius: 1), with: .color(.white.opacity(0.75)), lineWidth: 1)
 
             let sensorCenter = MountGuide.frameCenter(width: sensorWidth, height: sensorHeight)
@@ -343,7 +347,29 @@ struct ROIMapView: View {
             RoundedRectangle(cornerRadius: 4, style: .continuous)
                 .strokeBorder(.white.opacity(0.2), lineWidth: 1)
         )
-        .help("Full sensor with the current camera ROI. White plus is the physical sensor center.")
+        .help("Full sensor with the current camera ROI. White plus is the physical sensor center. Grid lines are sensor quarters.")
+    }
+
+    private func drawGrid(context: inout GraphicsContext, in rect: CGRect, divisions: Int) {
+        let n = max(2, divisions)
+        var minor = Path()
+        var major = Path()
+        for i in 1..<n {
+            let x = rect.minX + rect.width * CGFloat(i) / CGFloat(n)
+            let y = rect.minY + rect.height * CGFloat(i) / CGFloat(n)
+            var path = Path()
+            path.move(to: CGPoint(x: x, y: rect.minY))
+            path.addLine(to: CGPoint(x: x, y: rect.maxY))
+            path.move(to: CGPoint(x: rect.minX, y: y))
+            path.addLine(to: CGPoint(x: rect.maxX, y: y))
+            if i * 2 == n {
+                major.addPath(path)
+            } else {
+                minor.addPath(path)
+            }
+        }
+        context.stroke(minor, with: .color(.white.opacity(0.14)), lineWidth: 0.5)
+        context.stroke(major, with: .color(.white.opacity(0.32)), lineWidth: 0.6)
     }
 
     private func drawPlus(context: inout GraphicsContext, at point: CGPoint, color: Color) {
