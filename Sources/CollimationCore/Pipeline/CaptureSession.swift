@@ -87,6 +87,7 @@ public final class CaptureSession: @unchecked Sendable {
             return
         }
 
+        var nextFrameDeadline = Date.distantPast
         while true {
             stateLock.lock()
             let keepGoing = running
@@ -109,8 +110,21 @@ public final class CaptureSession: @unchecked Sendable {
                 if let roi, roi != device.currentROI {
                     try device.applyROI(roi)
                 }
+                if !device.descriptor.isSimulator {
+                    let now = Date()
+                    if now < nextFrameDeadline {
+                        Thread.sleep(forTimeInterval: nextFrameDeadline.timeIntervalSince(now))
+                    }
+                    stateLock.lock()
+                    let stillRunning = running
+                    stateLock.unlock()
+                    if !stillRunning { break }
+                }
                 let timeout = max(100, device.controls.exposureMicroseconds / 1000 + 400)
                 let frame = try device.grabFrame(timeoutMs: timeout)
+                if !device.descriptor.isSimulator {
+                    nextFrameDeadline = Date().addingTimeInterval(1.0 / Double(CaptureLayout.maxReadoutFPS))
+                }
                 onFrame?(frame)
             } catch CameraError.timeout {
                 continue

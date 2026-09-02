@@ -67,7 +67,8 @@ final class POACameraDevice: CameraDevice {
             sensorHeight: descriptor.sensorHeight
         )
         try applyROI(roi)
-        try? native.setInt(cameraID, POA_FRAME_LIMIT, 0)
+        let fps = CaptureLayout.clampedReadoutFPS(range: native.intRange(cameraID, POA_FRAME_LIMIT))
+        try? native.setInt(cameraID, POA_FRAME_LIMIT, fps)
         try applyExposure(controls.exposureMicroseconds)
         try applyGain(controls.gain)
         if let actual = native.getExposureMicroseconds(cameraID) {

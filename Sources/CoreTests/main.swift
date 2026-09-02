@@ -26,6 +26,7 @@ struct CoreTests {
         failures += run("tracker auto search", testTrackerAutoSearch)
         failures += run("search recovery", testSearchRecovery)
         failures += run("software crop", testSoftwareCrop)
+        failures += run("readout fps cap", testReadoutFPSCap)
         failures += run("sensor center overlay", testSensorCenterOverlay)
         failures += run("auto exposure", testAutoExposure)
         failures += run("star quality from peak", testStarQuality)
@@ -603,6 +604,14 @@ private func testSoftwareCrop() throws {
     try expect(!CaptureLayout.isTrackingCapture(search), "full-frame search is not a tracking window")
     let shown = CaptureLayout.displayFrame(from: search, tracking: .searching, centroid: SIMD2(10, 10))
     try expect(shown.width == search.width, "search shows the full frame")
+}
+
+private func testReadoutFPSCap() throws {
+    try expect(CaptureLayout.maxReadoutFPS == 30, "30 fps")
+    try expect(CaptureLayout.clampedReadoutFPS(range: nil) == 30, "no range")
+    try expect(CaptureLayout.clampedReadoutFPS(range: 0...2000) == 30, "unlimited min is 0")
+    try expect(CaptureLayout.clampedReadoutFPS(range: 0...20) == 20, "camera max below 30")
+    try expect(CaptureLayout.clampedReadoutFPS(range: 50...200) == 50, "camera min above 30")
 }
 
 private func testSensorCenterOverlay() throws {
