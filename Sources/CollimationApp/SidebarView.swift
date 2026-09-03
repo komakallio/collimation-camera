@@ -120,8 +120,8 @@ struct SidebarView: View {
                         onCommit: { engine.applyExposure() }
                     )
                     Button("Auto") { engine.autoExpose() }
-                        .disabled(!engine.isConnected)
-                        .help("Set exposure so the brightest pixels sit near 80% of saturation")
+                        .disabled(!engine.isConnected || engine.isAutoExposing || engine.isStacking || engine.isMountBusy)
+                        .help("Iterate exposure until the brightest pixels sit near 85% of 16-bit full well")
                 }
                 CommitSlider(
                     title: "Gain",

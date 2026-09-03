@@ -105,6 +105,7 @@ public final class CollimationEngine: ObservableObject {
     @Published public private(set) var isMountBusy = false
     @Published public private(set) var mountWork: MountWork?
     @Published public private(set) var isStacking = false
+    @Published public private(set) var isAutoExposing = false
     @Published public var mountStatus = "No mount"
     @Published public private(set) var guideCalibration: GuideCalibration?
 
@@ -138,6 +139,7 @@ public final class CollimationEngine: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var mountTask: Task<Void, Never>?
     private var stackTask: Task<Void, Never>?
+    private var autoExposeTask: Task<Void, Never>?
     private var filterWheelTask: Task<Void, Never>?
     private var mountHoldsROI = false
     private var hardwareFilterPosition: Int?
@@ -374,6 +376,9 @@ public final class CollimationEngine: ObservableObject {
         stackTask?.cancel()
         stackTask = nil
         isStacking = false
+        autoExposeTask?.cancel()
+        autoExposeTask = nil
+        isAutoExposing = false
         stopCapture()
         device = nil
         isConnected = false
@@ -391,29 +396,93 @@ public final class CollimationEngine: ObservableObject {
     }
 
     public func applyExposure() {
+        autoExposeTask?.cancel()
         guard isConnected, !applyingControls else { return }
-        let value = ExposureControl.clamp(Int(exposureMicroseconds.rounded()))
+        sendExposure(Int(exposureMicroseconds.rounded()))
+    }
+
+    public func autoExpose() {
+        guard isConnected, !isStacking, !isMountBusy, !isAutoExposing else { return }
+        isAutoExposing = true
+        autoExposeTask = Task { await self.runAutoExposure() }
+    }
+
+    private func runAutoExposure() async {
+        isAutoExposing = true
+        statusText = "Auto exposure…"
+        defer {
+            isAutoExposing = false
+            autoExposeTask = nil
+        }
+        do {
+            if histogram.sampleCount == 0 {
+                try await waitForAnalyzedFrames(1, timeout: 4)
+            }
+            for _ in 0..<ExposureControl.maxAutoIterations {
+                try Task.checkCancellation()
+                guard isConnected else { return }
+                let peakADU = currentPeakADU()
+                let saturated = ExposureControl.isSaturated(peakADU: peakADU)
+                let peak = ExposureControl.peakNormalized(peakADU: peakADU)
+                if ExposureControl.isAtTarget(peakNormalized: peak, saturated: saturated) {
+                    statusText = String(format: "Auto exposure — %.0f%% full well", peak * 100)
+                    return
+                }
+                let current = Int(exposureMicroseconds.rounded())
+                let next = ExposureControl.adjustedMicroseconds(
+                    current: current,
+                    peakNormalized: peak,
+                    saturated: saturated
+                )
+                if next == current {
+                    statusText = String(
+                        format: "Auto exposure — limited at %.1f ms, %.0f%% well",
+                        Double(current) / 1_000,
+                        peak * 100
+                    )
+                    return
+                }
+                sendExposure(next)
+                try await waitForAnalyzedFrames(3, timeout: autoExposureSettleTimeout())
+            }
+            let peak = ExposureControl.peakNormalized(peakADU: currentPeakADU())
+            if isConnected {
+                statusText = String(format: "Auto exposure — %.0f%% full well", peak * 100)
+            }
+        } catch is CancellationError {
+            if isConnected { statusText = "Auto exposure cancelled" }
+        } catch {
+            if isConnected { statusText = "Auto exposure failed" }
+        }
+    }
+
+    private func currentPeakADU() -> UInt16 {
+        max(histogram.maxADU, tracking.detection?.peak ?? 0)
+    }
+
+    private func sendExposure(_ microseconds: Int) {
+        let value = ExposureControl.clamp(microseconds)
+        applyingControls = true
         exposureMicroseconds = Double(value)
+        applyingControls = false
         guard value != lastSentExposure else { return }
         lastSentExposure = value
         session.requestExposure(value)
     }
 
-    public func autoExpose() {
-        guard isConnected, histogram.sampleCount > 0 else { return }
-        let peak = ExposureControl.peakNormalized(
-            histogram: histogram,
-            detectionPeak: tracking.detection?.peak
-        )
-        let next = ExposureControl.adjustedMicroseconds(
-            current: Int(exposureMicroseconds.rounded()),
-            peakNormalized: peak
-        )
-        applyingControls = true
-        exposureMicroseconds = Double(next)
-        applyingControls = false
-        lastSentExposure = nil
-        applyExposure()
+    private func waitForAnalyzedFrames(_ count: Int, timeout: TimeInterval) async throws {
+        let startSeq = frameSequence
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            try Task.checkCancellation()
+            if frameSequence >= startSeq + UInt64(count) { return }
+            try await Task.sleep(nanoseconds: 40_000_000)
+        }
+    }
+
+    private func autoExposureSettleTimeout() -> TimeInterval {
+        let seconds = max(exposureMicroseconds / 1_000_000.0, 0.001)
+        return max(2.5, seconds * 6 + 0.8)
     }
 
     public func applyGain() {

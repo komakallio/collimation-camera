@@ -6,24 +6,39 @@ public enum ExposureControl {
     public static let maxMicroseconds = 100_000
     public static let range = minMicroseconds...maxMicroseconds
     /// Fraction of 16-bit full well to hold the brightest pixels at.
-    public static let targetPeak = 0.80
+    public static let targetPeak = 0.85
+    /// Accept a peak within this band of `targetPeak` (absolute fraction of full well).
+    public static let targetTolerance = 0.03
+    /// When any pixel is clipped, multiply the current exposure by this factor.
+    public static let saturationBackoff = 0.20
+    public static let maxAutoIterations = 12
 
     public static func clamp(_ microseconds: Int) -> Int {
         min(max(microseconds, minMicroseconds), maxMicroseconds)
     }
 
-    /// Scale exposure so the current peak maps to `targetPeak` of saturation.
+    public static func isSaturated(peakADU: UInt16) -> Bool {
+        peakADU >= StarQuality.clipADU
+    }
+
+    public static func isAtTarget(peakNormalized: Double, saturated: Bool = false) -> Bool {
+        guard !saturated else { return false }
+        let peak = min(max(peakNormalized, 0), 1)
+        return abs(peak - targetPeak) <= targetTolerance
+    }
+
+    /// Next exposure: 20% of current if clipped, otherwise the scale that maps
+    /// `peakNormalized` onto `targetPeak`.
     public static func adjustedMicroseconds(
         current: Int,
-        peakNormalized: Double
+        peakNormalized: Double,
+        saturated: Bool = false
     ) -> Int {
-        let peak = min(max(peakNormalized, 0), 1)
         let scale: Double
-        if peak < 0.02 {
-            scale = 4
-        } else if peak > 0.98 {
-            scale = 0.80 / peak * 0.7
+        if saturated {
+            scale = saturationBackoff
         } else {
+            let peak = min(max(peakNormalized, 1.0 / 65535.0), 1)
             scale = targetPeak / peak
         }
         let next = Double(max(current, 1)) * scale
@@ -31,9 +46,12 @@ public enum ExposureControl {
     }
 
     /// Brightest-pixel estimate from unstretched 16-bit ADU (not the displayed stretch).
+    public static func peakNormalized(peakADU: UInt16) -> Double {
+        Double(peakADU) / 65535.0
+    }
+
     public static func peakNormalized(histogram: Histogram, detectionPeak: UInt16?) -> Double {
-        let raw = max(histogram.maxADU, detectionPeak ?? 0)
-        return Double(raw) / 65535.0
+        peakNormalized(peakADU: max(histogram.maxADU, detectionPeak ?? 0))
     }
 }
 

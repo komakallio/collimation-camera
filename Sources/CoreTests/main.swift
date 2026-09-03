@@ -847,10 +847,36 @@ private func testSensorCenterOverlay() throws {
 private func testAutoExposure() throws {
     try expect(ExposureControl.clamp(10) == 100, "min 0.1 ms")
     try expect(ExposureControl.clamp(5_000_000) == 100_000, "max 100 ms")
-    let doubled = ExposureControl.adjustedMicroseconds(current: 10_000, peakNormalized: 0.40)
-    try expect(doubled == 20_000, "scale 0.80/0.40 -> 2x (\(doubled))")
-    let atTarget = ExposureControl.adjustedMicroseconds(current: 8_000, peakNormalized: 0.80)
-    try expect(atTarget == 8_000, "already at target (\(atTarget))")
+    try expect(ExposureControl.targetPeak == 0.85, "85% full well")
+    try expect(ExposureControl.isAtTarget(peakNormalized: 0.85), "on target")
+    try expect(ExposureControl.isAtTarget(peakNormalized: 0.83), "within band")
+    try expect(!ExposureControl.isAtTarget(peakNormalized: 0.40), "too low")
+    try expect(!ExposureControl.isAtTarget(peakNormalized: 0.99, saturated: true), "clipped")
+    try expect(ExposureControl.isSaturated(peakADU: StarQuality.clipADU), "clip ADU")
+    try expect(!ExposureControl.isSaturated(peakADU: 40_000), "unsaturated star")
+    let scaled = ExposureControl.adjustedMicroseconds(current: 10_000, peakNormalized: 0.40)
+    try expect(scaled == 21_250, "scale 0.85/0.40 (\(scaled))")
+    let atTarget = ExposureControl.adjustedMicroseconds(current: 8_500, peakNormalized: 0.85)
+    try expect(atTarget == 8_500, "already at target (\(atTarget))")
+    let backedOff = ExposureControl.adjustedMicroseconds(
+        current: 10_000,
+        peakNormalized: 1,
+        saturated: true
+    )
+    try expect(backedOff == 2_000, "saturated -> 20% (\(backedOff))")
+
+    var exposure = 10_000
+    var peak = 0.40
+    var steps = 0
+    while steps < ExposureControl.maxAutoIterations {
+        if ExposureControl.isAtTarget(peakNormalized: peak) { break }
+        let next = ExposureControl.adjustedMicroseconds(current: exposure, peakNormalized: peak)
+        try expect(next != exposure, "loop should change exposure at peak \(peak)")
+        exposure = next
+        peak = min(1, 0.40 * Double(exposure) / 10_000)
+        steps += 1
+    }
+    try expect(ExposureControl.isAtTarget(peakNormalized: peak), "loop converged \(peak) in \(steps) steps")
 
     var pixels = [UInt16](repeating: 1_000, count: 64 * 64)
     pixels[0] = 16_384

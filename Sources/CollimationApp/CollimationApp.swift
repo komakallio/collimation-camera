@@ -28,6 +28,7 @@ struct CollimationApp: App {
                     .keyboardShortcut("a", modifiers: [.command])
                 Button("Auto Exposure") { engine.autoExpose() }
                     .keyboardShortcut("e", modifiers: [.command])
+                    .disabled(!engine.isConnected || engine.isAutoExposing || engine.isStacking || engine.isMountBusy)
                 Button("Save TIFF…") { SnapshotExport.present(engine: engine) }
                     .keyboardShortcut("s", modifiers: [.command])
                     .disabled(!engine.isConnected || engine.isStacking)
@@ -236,6 +237,9 @@ struct ContentView: View {
                 case .centering:
                     return ("CENTERING", Color(red: 0.45, green: 0.75, blue: 1))
                 }
+            }
+            if engine.isAutoExposing {
+                return ("AUTO-EXPOSURE", Color(red: 0.95, green: 0.72, blue: 0.22))
             }
             switch engine.tracking.state {
             case .tracking: return ("TRACKING", Color(red: 0.35, green: 0.85, blue: 0.45))
