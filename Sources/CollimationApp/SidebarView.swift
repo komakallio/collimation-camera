@@ -305,7 +305,7 @@ struct SidebarView: View {
                 CommitSlider(title: "Black", value: $engine.stretch.black, range: StretchParams.blackRange, format: pct(engine.stretch.black))
                 CommitSlider(title: "White", value: $engine.stretch.white, range: 0...1, format: pct(engine.stretch.white))
                 if engine.stretch.curve == .mtf {
-                    CommitSlider(title: "Midtones", value: $engine.stretch.midtones, range: 0.01...0.99, format: String(format: "%.3f", engine.stretch.midtones))
+                    CommitSlider(title: "Midtones", value: $engine.stretch.midtones, range: StretchParams.midtonesRange, format: String(format: "%.4f", engine.stretch.midtones))
                 } else {
                     CommitSlider(
                         title: "Factor",
