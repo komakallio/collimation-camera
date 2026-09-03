@@ -8,6 +8,10 @@ public struct FittedCircle: Equatable, Sendable {
         self.center = center
         self.radius = radius
     }
+
+    public func translated(by delta: SIMD2<Double>) -> FittedCircle {
+        FittedCircle(center: center + delta, radius: radius)
+    }
 }
 
 public enum CircleFit {

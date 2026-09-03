@@ -37,6 +37,7 @@ struct CoreTests {
         failures += run("star quality from peak", testStarQuality)
         failures += run("star intensity profile", testStarIntensityProfile)
         failures += run("digital stabilize pan", testDigitalStabilizePan)
+        failures += run("overlay rings follow stabilizer", testOverlayRingsFollowStabilizer)
         failures += run("digital stabilize hold", testDigitalStabilizeHold)
         failures += run("digital stabilize size change relocks", testDigitalStabilizeSizeChangeRelocks)
         failures += run("digital stabilize disable", testDigitalStabilizeDisable)
@@ -963,6 +964,41 @@ private func testDigitalStabilizePan() throws {
     let p1 = layout1.viewPoint(image: SIMD2(55, 47))
     try expect(abs(p1.x - p0.x) < 1e-9 && abs(p1.y - p0.y) < 1e-9, "centroid stays in the window (\(p1.x), \(p1.y))")
     try expect(abs(layout1.pan.x + 5) < 1e-9 && abs(layout1.pan.y - 3) < 1e-9, "pan \(layout1.pan)")
+}
+
+private func testOverlayRingsFollowStabilizer() throws {
+    let overlay = OverlayModel(
+        imageWidth: 100,
+        imageHeight: 100,
+        centroid: SIMD2(50, 50),
+        outer: FittedCircle(center: SIMD2(48, 51), radius: 10)
+    )
+    let lock = SIMD2(0.5, 0.5)
+    let layout0 = ImageLayout(
+        imageWidth: 100,
+        imageHeight: 100,
+        viewWidth: 200,
+        viewHeight: 200,
+        zoom: 1,
+        lockNormalized: lock,
+        stabilizeCentroid: overlay.centroid
+    )
+    let ring0 = layout0.viewPoint(image: overlay.outer!.center)
+
+    let live = SIMD2(55.0, 47.0)
+    let layout1 = ImageLayout(
+        imageWidth: 100,
+        imageHeight: 100,
+        viewWidth: 200,
+        viewHeight: 200,
+        zoom: 1,
+        lockNormalized: lock,
+        stabilizeCentroid: live
+    )
+    let shifted = overlay.outer!.translated(by: overlay.shift(toLiveCentroid: live))
+    let ring1 = layout1.viewPoint(image: shifted.center)
+    try expect(abs(ring1.x - ring0.x) < 1e-9 && abs(ring1.y - ring0.y) < 1e-9, "ring stays with the lock (\(ring1.x), \(ring1.y))")
+    try expect(overlay.shift(toLiveCentroid: nil) == .zero, "no shift without a live centroid")
 }
 
 private func testDigitalStabilizeHold() throws {

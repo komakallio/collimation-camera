@@ -53,6 +53,12 @@ public struct OverlayModel: Equatable, Sendable {
             fromSensorPoint: MountGuide.frameCenter(width: sensorWidth, height: sensorHeight)
         )
     }
+
+    /// Frame-pixel shift that glues this overlay to a live stabilizer centroid.
+    public func shift(toLiveCentroid live: SIMD2<Double>?) -> SIMD2<Double> {
+        guard let live, let centroid else { return .zero }
+        return live - centroid
+    }
 }
 
 @MainActor

@@ -215,6 +215,7 @@ struct OverlayView: View {
             let poseMatchesDisplayed = displayedWidth == nil
                 || displayedHeight == nil
                 || (displayedWidth == overlay.imageWidth && displayedHeight == overlay.imageHeight)
+            let live = poseMatchesDisplayed ? liveCentroid : nil
             let layout = ImageLayout(
                 imageWidth: max(overlay.imageWidth, 1),
                 imageHeight: max(overlay.imageHeight, 1),
@@ -222,10 +223,11 @@ struct OverlayView: View {
                 viewHeight: size.height,
                 zoom: zoom,
                 lockNormalized: poseMatchesDisplayed ? lockNormalized : nil,
-                stabilizeCentroid: poseMatchesDisplayed ? liveCentroid : overlay.centroid
+                stabilizeCentroid: live ?? overlay.centroid
             )
             let rect = layout.imageRect
             let imageRect = CGRect(x: rect.x, y: rect.y, width: rect.width, height: rect.height)
+            let ringShift = overlay.shift(toLiveCentroid: live)
 
             if let sensorCenter = overlay.sensorCenterInImage,
                sensorCenter.x >= -2, sensorCenter.y >= -2,
@@ -235,20 +237,31 @@ struct OverlayView: View {
                 drawCrosshair(context: &context, at: CGPoint(x: cx.x, y: cx.y), color: OverlayChrome.frameCenter)
             }
 
-            if let centroid = liveCentroid ?? overlay.centroid {
+            if let centroid = live ?? overlay.centroid {
                 let p = layout.viewPoint(image: centroid)
                 drawCrosshair(context: &context, at: CGPoint(x: p.x, y: p.y), color: OverlayChrome.starMarker(peak: overlay.starPeak), size: 14)
             }
             if let outer = overlay.outer {
-                strokeCircle(context: &context, layout: layout, circle: outer, color: OverlayChrome.outerRing)
+                strokeCircle(
+                    context: &context,
+                    layout: layout,
+                    circle: outer.translated(by: ringShift),
+                    color: OverlayChrome.outerRing
+                )
             }
             if let inner = overlay.inner {
-                strokeCircle(context: &context, layout: layout, circle: inner, color: OverlayChrome.innerRing)
+                strokeCircle(
+                    context: &context,
+                    layout: layout,
+                    circle: inner.translated(by: ringShift),
+                    color: OverlayChrome.innerRing
+                )
             }
             if let outer = overlay.outer, let vector = overlay.comaVector {
-                let start = layout.viewPoint(image: outer.center)
+                let origin = outer.center + ringShift
+                let start = layout.viewPoint(image: origin)
                 let scale = 8.0
-                let end = layout.viewPoint(image: outer.center + vector * scale)
+                let end = layout.viewPoint(image: origin + vector * scale)
                 var path = Path()
                 path.move(to: CGPoint(x: start.x, y: start.y))
                 path.addLine(to: CGPoint(x: end.x, y: end.y))
