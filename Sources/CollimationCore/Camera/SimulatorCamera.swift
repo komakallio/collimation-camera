@@ -52,14 +52,13 @@ public final class SimulatorCamera: CameraDevice {
 
     public func applyExposure(_ microseconds: Int) throws {
         controls.exposureMicroseconds = min(max(microseconds, controls.exposureRange.lowerBound), controls.exposureRange.upperBound)
-        let scale = min(4, max(0.15, Double(controls.exposureMicroseconds) / 50_000))
-        setPeakADU(42_000 * scale)
+        applySignalLevel()
     }
 
     public func applyGain(_ gain: Int) throws {
         controls.gain = min(max(gain, controls.gainRange.lowerBound), controls.gainRange.upperBound)
         setNoiseSigma(max(12, 50 - Double(controls.gain) * 0.05))
-        setPeakADU(min(60_000, 30_000 + Double(controls.gain) * 80))
+        applySignalLevel()
     }
 
     public func applyROI(_ roi: ROI) throws {
@@ -134,6 +133,12 @@ public final class SimulatorCamera: CameraDevice {
         case .defocusedDonut: return donut.scene.seeingJitter
         case .airy: return airy.scene.seeingJitter
         }
+    }
+
+    private func applySignalLevel() {
+        let exposureScale = min(4, max(0.15, Double(controls.exposureMicroseconds) / 50_000))
+        let gainScale = 1 + Double(controls.gain) / 400.0
+        setPeakADU(42_000 * exposureScale * gainScale)
     }
 
     private func setPeakADU(_ value: Double) {

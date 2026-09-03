@@ -44,10 +44,13 @@ public enum StarQuality: Equatable, Sendable {
     case saturated
 
     public static let fullWell: UInt16 = 65535
+    /// 12-bit cameras often occupy the top of a 16-bit container (`0xFFF0`).
+    /// The live shader uses the same cutoff so clipped texels paint red.
+    public static let clipADU: UInt16 = 0xFFF0
     public static let faintFraction = 0.10
 
     public static func from(peak: UInt16) -> StarQuality {
-        if peak >= fullWell { return .saturated }
+        if peak >= clipADU { return .saturated }
         if Double(peak) / Double(fullWell) < faintFraction { return .faint }
         return .good
     }

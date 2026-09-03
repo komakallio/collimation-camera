@@ -132,7 +132,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 ? Float(min(max(state.stretch.arcsinh, StretchParams.arcsinhRange.lowerBound), StretchParams.arcsinhRange.upperBound))
                 : Float(min(max(state.stretch.midtones, 1e-4), 1 - 1e-4)),
             nearest: state.zoom >= 1 ? 1 : 0,
-            mode: state.stretch.curve == .arcsinh ? 1 : 0
+            mode: state.stretch.curve == .arcsinh ? 1 : 0,
+            clipADU: UInt32(StarQuality.clipADU)
         )
 
         encoder.setRenderPipelineState(pipeline)
@@ -225,9 +226,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         var amount: Float
         var nearest: Float
         var mode: Float
+        var clipADU: UInt32
         var pad0: Float = 0
         var pad1: Float = 0
-        var pad2: Float = 0
     }
 
     private static let shaderSource = """
@@ -245,10 +246,21 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         float amount;
         float nearest;
         float mode;
+        uint clipADU;
         float pad0;
         float pad1;
-        float pad2;
     };
+
+    constant float4 kClipColor = float4(1.0, 0.18, 0.14, 1.0);
+
+    ushort readADU(texture2d<ushort, access::read> tex, uint2 p) {
+        uint2 maxP = uint2(tex.get_width() - 1, tex.get_height() - 1);
+        return tex.read(min(p, maxP)).r;
+    }
+
+    bool isClipped(ushort adu, uint clipADU) {
+        return uint(adu) >= clipADU;
+    }
 
     vertex VertexOut stretchVertex(uint vid [[vertex_id]],
                                    constant float4 *verts [[buffer(0)]]) {
@@ -269,24 +281,26 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         if (u.nearest > 0.5) {
             uint x = uint(clamp(uv.x * w, 0.0, w - 1.0));
             uint y = uint(clamp(uv.y * h, 0.0, h - 1.0));
-            raw = float(tex.read(uint2(x, y)).r) / 65535.0;
+            ushort adu = readADU(tex, uint2(x, y));
+            if (isClipped(adu, u.clipADU)) {
+                return kClipColor;
+            }
+            raw = float(adu) / 65535.0;
         } else {
             float2 coord = uv * float2(w, h) - 0.5;
             coord = clamp(coord, float2(0), float2(w - 1.001, h - 1.001));
             uint2 p00 = uint2(coord);
             uint2 p11 = uint2(min(coord + 1.0, float2(w - 1, h - 1)));
             float2 f = fract(coord);
-            float v00 = float(tex.read(p00).r);
-            float v10 = float(tex.read(uint2(p11.x, p00.y)).r);
-            float v01 = float(tex.read(uint2(p00.x, p11.y)).r);
-            float v11 = float(tex.read(p11).r);
-            raw = mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y) / 65535.0;
-            if (v00 >= 65535.0 || v10 >= 65535.0 || v01 >= 65535.0 || v11 >= 65535.0) {
-                return float4(1.0, 0.18, 0.14, 1.0);
+            ushort a00 = readADU(tex, p00);
+            ushort a10 = readADU(tex, uint2(p11.x, p00.y));
+            ushort a01 = readADU(tex, uint2(p00.x, p11.y));
+            ushort a11 = readADU(tex, p11);
+            if (isClipped(a00, u.clipADU) || isClipped(a10, u.clipADU)
+                || isClipped(a01, u.clipADU) || isClipped(a11, u.clipADU)) {
+                return kClipColor;
             }
-        }
-        if (raw >= 1.0) {
-            return float4(1.0, 0.18, 0.14, 1.0);
+            raw = mix(mix(float(a00), float(a10), f.x), mix(float(a01), float(a11), f.x), f.y) / 65535.0;
         }
         float t = saturate((raw - u.black) / max(u.white - u.black, 1e-6));
         if (u.mode > 0.5) {

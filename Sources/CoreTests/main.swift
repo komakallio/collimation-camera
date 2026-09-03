@@ -827,7 +827,8 @@ private func testStarQuality() throws {
     try expect(StarQuality.from(peak: 6553) == .faint, "just under 10%")
     try expect(StarQuality.from(peak: 6554) == .good, "10%")
     try expect(StarQuality.from(peak: 52_428) == .good, "80%")
-    try expect(StarQuality.from(peak: 65_534) == .good, "almost full")
+    try expect(StarQuality.from(peak: 65_519) == .good, "just under 12-bit full well")
+    try expect(StarQuality.from(peak: 65_520) == .saturated, "12-bit left-aligned clip")
     try expect(StarQuality.from(peak: 65_535) == .saturated, "full well")
 }
 
