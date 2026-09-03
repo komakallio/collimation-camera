@@ -119,6 +119,7 @@ public final class CollimationEngine: ObservableObject {
     private var lastSentGain: Int?
     private var sensorWidth = CameraDescriptor.simulator.sensorWidth
     private var sensorHeight = CameraDescriptor.simulator.sensorHeight
+    private var optics = TelescopeOptics.poseidon
     nonisolated public let stabilization = StabilizationController()
     nonisolated private let softwareCrop = SoftwareCropController()
     private var cancellables = Set<AnyCancellable>()
@@ -233,6 +234,7 @@ public final class CollimationEngine: ObservableObject {
             device = newDevice
             sensorWidth = newDevice.descriptor.sensorWidth
             sensorHeight = newDevice.descriptor.sensorHeight
+            optics = TelescopeOptics.forCameraName(newDevice.descriptor.name)
             exposureRange = Double(ExposureControl.minMicroseconds)...Double(ExposureControl.maxMicroseconds)
             gainRange = Double(newDevice.controls.gainRange.lowerBound)...Double(newDevice.controls.gainRange.upperBound)
             let clampedExposure = ExposureControl.clamp(newDevice.controls.exposureMicroseconds)
@@ -370,6 +372,7 @@ public final class CollimationEngine: ObservableObject {
         frameSlot.clear()
         softwareCrop.reset()
         stabilization.reset()
+        optics = .poseidon
         updateStabilization()
         statusText = "Disconnected"
     }
@@ -986,7 +989,8 @@ public final class CollimationEngine: ObservableObject {
             autoSearch: autoSearch && !holdsROI,
             sensorWidth: sensorWidth,
             sensorHeight: sensorHeight,
-            holdROI: holdsROI
+            holdROI: holdsROI,
+            optics: optics
         )
     }
 

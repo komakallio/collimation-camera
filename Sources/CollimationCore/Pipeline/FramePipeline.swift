@@ -20,6 +20,7 @@ final class FramePipeline: @unchecked Sendable {
     private var holdROI = false
     private var sensorWidth = CameraDescriptor.simulator.sensorWidth
     private var sensorHeight = CameraDescriptor.simulator.sensorHeight
+    private var optics = TelescopeOptics.poseidon
     private var lastSensorCentroid: SIMD2<Double>?
     private var generation = 0
 
@@ -28,7 +29,8 @@ final class FramePipeline: @unchecked Sendable {
         autoSearch: Bool,
         sensorWidth: Int,
         sensorHeight: Int,
-        holdROI: Bool = false
+        holdROI: Bool = false,
+        optics: TelescopeOptics = .poseidon
     ) {
         lock.lock()
         self.autoCenter = autoCenter
@@ -36,6 +38,7 @@ final class FramePipeline: @unchecked Sendable {
         self.sensorWidth = sensorWidth
         self.sensorHeight = sensorHeight
         self.holdROI = holdROI
+        self.optics = optics
         lock.unlock()
     }
 
@@ -62,6 +65,7 @@ final class FramePipeline: @unchecked Sendable {
         let holdROI = self.holdROI
         let sensorWidth = self.sensorWidth
         let sensorHeight = self.sensorHeight
+        let optics = self.optics
         let seed = lastSensorCentroid.map { frame.roi.framePixel(fromSensorPoint: $0) }
         lock.unlock()
 
@@ -126,7 +130,7 @@ final class FramePipeline: @unchecked Sendable {
 
         var fwhm: FWHMResult?
         if trackingState == .tracking, let centroid = next.centroidInFrame {
-            fwhm = fwhmEstimator.measure(frame: display, centroid: centroid)
+            fwhm = fwhmEstimator.measure(frame: display, centroid: centroid, optics: optics)
         }
 
         lock.lock()

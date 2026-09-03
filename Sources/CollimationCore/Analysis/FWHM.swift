@@ -1,15 +1,59 @@
 import Foundation
 
 /// Telescope plate scale used to convert FWHM from pixels to arcseconds.
-public enum TelescopeOptics {
-    public static let focalLengthMillimeters = 1600.0
+///
+/// Native focal length is 1600 mm. A connected **Xena** (585M) is assumed to
+/// have 2.9 µm pixels and a 4× Barlow; a **Poseidon** (IMX571) has 3.76 µm
+/// pixels and no Barlow. Other cameras use the Poseidon scale.
+public struct TelescopeOptics: Equatable, Sendable {
+    public var focalLengthMillimeters: Double
+    public var pixelSizeMicrons: Double
+    public var barlow: Double
+
+    public init(
+        focalLengthMillimeters: Double = TelescopeOptics.nativeFocalLengthMillimeters,
+        pixelSizeMicrons: Double,
+        barlow: Double
+    ) {
+        self.focalLengthMillimeters = focalLengthMillimeters
+        self.pixelSizeMicrons = pixelSizeMicrons
+        self.barlow = max(barlow, 1e-9)
+    }
+
+    public var effectiveFocalLengthMillimeters: Double {
+        focalLengthMillimeters * barlow
+    }
+
+    /// Arcseconds per unbinned pixel: 206.265 × pixel(µm) / f_eff(mm).
+    public var arcsecondsPerUnbinnedPixel: Double {
+        206.264806247 * pixelSizeMicrons / effectiveFocalLengthMillimeters
+    }
+
+    public func arcseconds(framePixels: Double, binning: Int) -> Double {
+        framePixels * Double(max(1, binning)) * arcsecondsPerUnbinnedPixel
+    }
+
+    public static let nativeFocalLengthMillimeters = 1600.0
+
+    /// Poseidon-M / IMX571 at native focal length.
+    public static let poseidon = TelescopeOptics(pixelSizeMicrons: 3.76, barlow: 1)
+    /// Xena-M / IMX585 with a 4× Barlow.
+    public static let xena585M = TelescopeOptics(pixelSizeMicrons: 2.9, barlow: 4)
+
+    /// Native focal length with no Barlow. Poseidon IMX571 sampling.
     public static let pixelSizeMicrons = 3.76
-    /// Arcseconds per unbinned pixel: 206.265 × pixel(µm) / f(mm).
-    public static let arcsecondsPerUnbinnedPixel =
-        206.264806247 * pixelSizeMicrons / focalLengthMillimeters
+    public static let focalLengthMillimeters = nativeFocalLengthMillimeters
+    public static var arcsecondsPerUnbinnedPixel: Double { poseidon.arcsecondsPerUnbinnedPixel }
 
     public static func arcseconds(framePixels: Double, binning: Int) -> Double {
-        framePixels * Double(max(1, binning)) * arcsecondsPerUnbinnedPixel
+        poseidon.arcseconds(framePixels: framePixels, binning: binning)
+    }
+
+    public static func forCameraName(_ name: String) -> TelescopeOptics {
+        let folded = name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        if folded.contains("xena") { return .xena585M }
+        if folded.contains("poseidon") { return .poseidon }
+        return .poseidon
     }
 }
 
@@ -21,19 +65,23 @@ public struct FWHMResult: Equatable, Sendable {
     public var arcseconds: Double
     public var binning: Int
 
-    public init(framePixels: Double, binning: Int) {
+    public init(framePixels: Double, binning: Int, optics: TelescopeOptics = .poseidon) {
         let bin = max(1, binning)
         self.framePixels = framePixels
         self.binning = bin
         self.sensorPixels = framePixels * Double(bin)
-        self.arcseconds = TelescopeOptics.arcseconds(framePixels: framePixels, binning: bin)
+        self.arcseconds = optics.arcseconds(framePixels: framePixels, binning: bin)
     }
 }
 
 public struct FWHMEstimator: Sendable {
     public init() {}
 
-    public func measure(frame: Frame, centroid: SIMD2<Double>) -> FWHMResult? {
+    public func measure(
+        frame: Frame,
+        centroid: SIMD2<Double>,
+        optics: TelescopeOptics = .poseidon
+    ) -> FWHMResult? {
         let width = frame.width
         let height = frame.height
         guard width > 8, height > 8 else { return nil }
@@ -57,7 +105,7 @@ public struct FWHMEstimator: Sendable {
             y1: y1,
             maxRadius: maxRadius
         ) {
-            return FWHMResult(framePixels: radial, binning: frame.roi.binning)
+            return FWHMResult(framePixels: radial, binning: frame.roi.binning, optics: optics)
         }
         if let moment = momentFWHM(
             frame: frame,
@@ -69,7 +117,7 @@ public struct FWHMEstimator: Sendable {
             y1: y1,
             maxRadius: maxRadius
         ) {
-            return FWHMResult(framePixels: moment, binning: frame.roi.binning)
+            return FWHMResult(framePixels: moment, binning: frame.roi.binning, optics: optics)
         }
         return nil
     }

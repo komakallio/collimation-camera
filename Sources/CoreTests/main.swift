@@ -14,6 +14,7 @@ struct CoreTests {
         failures += run("moment centroid", testMomentCentroid)
         failures += run("empty sky", testEmptySky)
         failures += run("star fwhm", testStarFWHM)
+        failures += run("telescope optics from camera name", testTelescopeOpticsFromCameraName)
         failures += run("airy diffraction", testAiryDiffraction)
         failures += run("airy simulator device", testAirySimulatorDevice)
         failures += run("circle fit", testCircleFit)
@@ -291,6 +292,31 @@ private func testStarFWHM() throws {
     }
     try expect(abs(fwhm2.sensorPixels - fwhm2.framePixels * 2) < 1e-12, "bin2 sensor")
     try expect(abs(fwhm2.arcseconds - fwhm2.sensorPixels * scale) < 1e-9, "bin2 arcsec")
+
+    guard let xena = FWHMEstimator().measure(
+        frame: frame,
+        centroid: SIMD2(cx, cy),
+        optics: .xena585M
+    ) else {
+        throw Expectation(description: "expected Xena FWHM")
+    }
+    let xenaScale = 206.264806247 * 2.9 / (1600.0 * 4.0)
+    try expect(abs(TelescopeOptics.xena585M.arcsecondsPerUnbinnedPixel - xenaScale) < 1e-12, "xena scale")
+    try expect(abs(xena.arcseconds - xena.sensorPixels * xenaScale) < 1e-9, "xena arcsec \(xena.arcseconds)")
+    try expect(abs(xena.framePixels - fwhm.framePixels) < 1e-12, "pixels unchanged")
+}
+
+private func testTelescopeOpticsFromCameraName() throws {
+    try expect(TelescopeOptics.forCameraName("Xena-M") == .xena585M, "Xena-M")
+    try expect(TelescopeOptics.forCameraName("Player One Xena") == .xena585M, "Xena substring")
+    try expect(TelescopeOptics.forCameraName("xena 585m") == .xena585M, "case")
+    try expect(TelescopeOptics.forCameraName("Poseidon-M") == .poseidon, "Poseidon-M")
+    try expect(TelescopeOptics.forCameraName("POSEIDON") == .poseidon, "POSEIDON")
+    try expect(TelescopeOptics.forCameraName("Simulator (Airy)") == .poseidon, "simulator default")
+    try expect(TelescopeOptics.xena585M.pixelSizeMicrons == 2.9, "2.9 µm")
+    try expect(TelescopeOptics.xena585M.barlow == 4, "4× Barlow")
+    try expect(TelescopeOptics.poseidon.pixelSizeMicrons == 3.76, "3.76 µm")
+    try expect(TelescopeOptics.poseidon.barlow == 1, "no Barlow")
 }
 
 private func testAiryDiffraction() throws {
