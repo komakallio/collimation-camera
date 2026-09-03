@@ -209,12 +209,15 @@ struct ContentView: View {
                             OverlayLegendView()
                         }
                         if engine.overlay.sensorWidth > 0, engine.overlay.sensorHeight > 0 {
-                            ROIMapView(
-                                sensorWidth: engine.overlay.sensorWidth,
-                                sensorHeight: engine.overlay.sensorHeight,
-                                roi: pose?.roi ?? engine.overlay.roi,
-                                centroidInFrame: pose?.stabilizeCentroid ?? engine.overlay.centroid
-                            )
+                            HStack(alignment: .bottom, spacing: 6) {
+                                StarProfileView(profile: engine.starProfile)
+                                ROIMapView(
+                                    sensorWidth: engine.overlay.sensorWidth,
+                                    sensorHeight: engine.overlay.sensorHeight,
+                                    roi: pose?.roi ?? engine.overlay.roi,
+                                    centroidInFrame: pose?.stabilizeCentroid ?? engine.overlay.centroid
+                                )
+                            }
                         }
                     }
                 }

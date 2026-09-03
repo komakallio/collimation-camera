@@ -34,6 +34,7 @@ struct CoreTests {
         failures += run("sensor center overlay", testSensorCenterOverlay)
         failures += run("auto exposure", testAutoExposure)
         failures += run("star quality from peak", testStarQuality)
+        failures += run("star intensity profile", testStarIntensityProfile)
         failures += run("digital stabilize pan", testDigitalStabilizePan)
         failures += run("digital stabilize hold", testDigitalStabilizeHold)
         failures += run("digital stabilize size change relocks", testDigitalStabilizeSizeChangeRelocks)
@@ -830,6 +831,61 @@ private func testStarQuality() throws {
     try expect(StarQuality.from(peak: 65_519) == .good, "just under 12-bit full well")
     try expect(StarQuality.from(peak: 65_520) == .saturated, "12-bit left-aligned clip")
     try expect(StarQuality.from(peak: 65_535) == .saturated, "full well")
+}
+
+private func testStarIntensityProfile() throws {
+    let width = 128
+    let height = 128
+    let cx = 63.5
+    let cy = 63.5
+    let peak = 40_000.0
+    var pixels = [UInt16](repeating: 800, count: width * height)
+    for y in 0..<height {
+        for x in 0..<width {
+            let dx = Double(x) - cx
+            let dy = Double(y) - cy
+            let amp = peak * exp(-(dx * dx + dy * dy) / (2 * 4.0 * 4.0))
+            pixels[y * width + x] = UInt16(min(65535, 800 + amp))
+        }
+    }
+    let frame = Frame(
+        width: width,
+        height: height,
+        pixels: pixels,
+        roi: ROI(x: 0, y: 0, width: width, height: height)
+    )
+    guard let profile = StarProfileSampler().measure(
+        frame: frame,
+        centroid: SIMD2(cx, cy),
+        radiusPixels: 24
+    ) else {
+        throw Expectation(description: "expected profile")
+    }
+    try expect(profile.samples.count >= 9, "samples \(profile.samples.count)")
+    let mid = profile.samples[profile.samples.count / 2]
+    let edge = profile.samples[0]
+    try expect(mid > 0.5, "center \(mid) should be near peak/65535")
+    try expect(abs(mid - (800 + peak) / 65535.0) < 0.08, "center vs full well \(mid)")
+    try expect(edge < 0.08, "edge \(edge) stays near background on 0…1 scale")
+    try expect(mid < 0.95, "must not autoscale a 40k peak to full well")
+    let mirror = profile.samples[profile.samples.count - 1]
+    try expect(abs(edge - mirror) < 0.02, "symmetric \(edge) vs \(mirror)")
+
+    pixels[Int(cy) * width + Int(cx)] = 65_535
+    let clipped = Frame(
+        width: width,
+        height: height,
+        pixels: pixels,
+        roi: ROI(x: 0, y: 0, width: width, height: height)
+    )
+    guard let saturated = StarProfileSampler().measure(
+        frame: clipped,
+        centroid: SIMD2(cx, cy),
+        radiusPixels: 8
+    ) else {
+        throw Expectation(description: "expected clipped profile")
+    }
+    try expect(saturated.samples[saturated.samples.count / 2] > 0.7, "clipped center")
 }
 
 private func testDigitalStabilizePan() throws {

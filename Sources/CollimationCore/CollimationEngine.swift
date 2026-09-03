@@ -83,6 +83,7 @@ public final class CollimationEngine: ObservableObject {
     @Published public var tracking = TrackingStatus()
     @Published public var coma: ComaResult?
     @Published public var fwhm: FWHMResult?
+    @Published public var starProfile: StarIntensityProfile?
     @Published public var overlay = OverlayModel()
     @Published public var frameSequence: UInt64 = 0
     @Published public var fps: Double = 0
@@ -368,6 +369,7 @@ public final class CollimationEngine: ObservableObject {
         tracking = TrackingStatus()
         coma = nil
         fwhm = nil
+        starProfile = nil
         overlay = OverlayModel()
         frameSlot.clear()
         softwareCrop.reset()
@@ -538,6 +540,7 @@ public final class CollimationEngine: ObservableObject {
         tracking = processed.tracking
         coma = processed.coma
         fwhm = processed.fwhm
+        starProfile = processed.starProfile
         overlay = processed.overlay
         updateStabilization()
         guard !isStacking else { return }

@@ -5,6 +5,7 @@ struct ProcessedFrame: Sendable {
     var tracking: TrackingStatus
     var coma: ComaResult?
     var fwhm: FWHMResult?
+    var starProfile: StarIntensityProfile?
     var overlay: OverlayModel
     var displayFrame: Frame
 }
@@ -15,6 +16,7 @@ final class FramePipeline: @unchecked Sendable {
     private let detector = StarDetector()
     private let analyzer = ComaAnalyzer()
     private let fwhmEstimator = FWHMEstimator()
+    private let profileSampler = StarProfileSampler()
     private var autoCenter = true
     private var autoSearch = false
     private var holdROI = false
@@ -133,6 +135,18 @@ final class FramePipeline: @unchecked Sendable {
             fwhm = fwhmEstimator.measure(frame: display, centroid: centroid, optics: optics)
         }
 
+        var starProfile: StarIntensityProfile?
+        if trackingState == .tracking, let centroid = next.centroidInFrame {
+            let radius = result?.outer.radius
+                ?? fwhm.map { max($0.framePixels * 2.5, 12) }
+                ?? 32
+            starProfile = profileSampler.measure(
+                frame: display,
+                centroid: centroid,
+                radiusPixels: radius
+            )
+        }
+
         lock.lock()
         guard generation == self.generation else {
             lock.unlock()
@@ -141,6 +155,7 @@ final class FramePipeline: @unchecked Sendable {
         if trackingState != .tracking {
             result = nil
             fwhm = nil
+            starProfile = nil
         }
         let overlay = OverlayModel(
             imageWidth: display.width,
@@ -161,6 +176,7 @@ final class FramePipeline: @unchecked Sendable {
             tracking: next,
             coma: result,
             fwhm: fwhm,
+            starProfile: starProfile,
             overlay: overlay,
             displayFrame: display
         )

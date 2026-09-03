@@ -388,3 +388,79 @@ struct ROIMapView: View {
         return CGSize(width: sw * scale + 8, height: sh * scale + 8)
     }
 }
+
+struct StarProfileView: View {
+    let profile: StarIntensityProfile?
+    var width: CGFloat = 148
+    var height: CGFloat = 102
+
+    var body: some View {
+        Canvas { context, canvas in
+            let pad = CGRect(x: 10, y: 6, width: canvas.width - 18, height: canvas.height - 16)
+            drawAxes(context: &context, in: pad)
+            if let profile, profile.samples.count >= 2 {
+                drawProfile(context: &context, in: pad, samples: profile.samples)
+            }
+        }
+        .frame(width: width, height: height)
+        .background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .strokeBorder(.white.opacity(0.2), lineWidth: 1)
+        )
+        .help("Average of four cuts through the star (horizontal, vertical, both diagonals). Vertical scale is 0 to 16-bit full well.")
+    }
+
+    private func drawAxes(context: inout GraphicsContext, in rect: CGRect) {
+        var grid = Path()
+        for t in [0.0, 0.5, 1.0] {
+            let y = rect.maxY - CGFloat(t) * rect.height
+            grid.move(to: CGPoint(x: rect.minX, y: y))
+            grid.addLine(to: CGPoint(x: rect.maxX, y: y))
+        }
+        context.stroke(grid, with: .color(.white.opacity(0.16)), lineWidth: 0.5)
+
+        var mid = Path()
+        let cx = rect.midX
+        mid.move(to: CGPoint(x: cx, y: rect.minY))
+        mid.addLine(to: CGPoint(x: cx, y: rect.maxY))
+        context.stroke(mid, with: .color(.white.opacity(0.28)), lineWidth: 0.6)
+
+        context.stroke(Path(rect), with: .color(.white.opacity(0.45)), lineWidth: 0.7)
+
+        let font = Font.system(size: 8, weight: .medium, design: .monospaced)
+        context.draw(
+            Text("100%").font(font).foregroundColor(.white.opacity(0.7)),
+            at: CGPoint(x: rect.minX - 2, y: rect.minY + 1),
+            anchor: .topTrailing
+        )
+        context.draw(
+            Text("0").font(font).foregroundColor(.white.opacity(0.7)),
+            at: CGPoint(x: rect.minX - 2, y: rect.maxY),
+            anchor: .bottomTrailing
+        )
+    }
+
+    private func drawProfile(context: inout GraphicsContext, in rect: CGRect, samples: [Double]) {
+        let last = samples.count - 1
+        var line = Path()
+        var fill = Path()
+        for (i, value) in samples.enumerated() {
+            let x = rect.minX + rect.width * CGFloat(i) / CGFloat(last)
+            let y = rect.maxY - CGFloat(min(max(value, 0), 1)) * rect.height
+            let p = CGPoint(x: x, y: y)
+            if i == 0 {
+                fill.move(to: CGPoint(x: x, y: rect.maxY))
+                fill.addLine(to: p)
+                line.move(to: p)
+            } else {
+                fill.addLine(to: p)
+                line.addLine(to: p)
+            }
+        }
+        fill.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        fill.closeSubpath()
+        context.fill(fill, with: .color(OverlayChrome.starGood.opacity(0.22)))
+        context.stroke(line, with: .color(OverlayChrome.starGood), lineWidth: 1.4)
+    }
+}
