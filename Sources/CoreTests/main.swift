@@ -767,6 +767,21 @@ private func testSoftwareCrop() throws {
     try expect(!CaptureLayout.isTrackingCapture(search), "full-frame search is not a tracking window")
     let shown = CaptureLayout.displayFrame(from: search, tracking: .searching, centroid: SIMD2(10, 10))
     try expect(shown.width == search.width, "search shows the full frame")
+
+    var fullPixels = [UInt16](repeating: 0, count: 2000 * 1500)
+    fullPixels[800 * 2000 + 1000] = 40000
+    let centering = Frame(
+        width: 2000,
+        height: 1500,
+        pixels: fullPixels,
+        roi: ROI(x: 0, y: 0, width: 2000, height: 1500)
+    )
+    try expect(!CaptureLayout.isTrackingCapture(centering), "unbinned full frame is not a tracking window")
+    let local = CaptureLayout.analysisFrame(from: centering, seed: SIMD2(1000, 800))
+    try expect(local.width == CaptureLayout.displayCropSize, "centering analysis crop \(local.width)")
+    try expect(local.pixel(x: 256, y: 256) == 40000, "star centered in the centering crop")
+    let scan = CaptureLayout.analysisFrame(from: centering, seed: nil)
+    try expect(scan.width == centering.width, "search without a seed stays full")
 }
 
 private func testReadoutFPSCap() throws {

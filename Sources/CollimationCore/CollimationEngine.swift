@@ -854,6 +854,8 @@ public final class CollimationEngine: ObservableObject {
         mountHoldsROI = holdROI
         applyPipelineConfig()
         if useFullFrame {
+            coalescer.cancel()
+            softwareCrop.reset()
             session.requestROI(
                 Alignment.fullFrameROI(sensorWidth: sensorWidth, sensorHeight: sensorHeight, binning: 1)
             )

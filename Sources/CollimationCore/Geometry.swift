@@ -74,10 +74,16 @@ public enum CaptureLayout {
         return longest - shortest <= hardwareSizeSlack * 8
     }
 
-    /// 512×512 around the last centroid (or the window center) on a tracking
-    /// capture; search and mount-centering frames stay full.
+    /// 512×512 around the last centroid when the frame is larger than the crop.
+    /// Binned full-frame search (no seed) stays full so the whole sensor can be
+    /// scanned. Unbinned mount-centering still gets a local crop so detection
+    /// stays fast while the live view shows the full sensor.
     public static func analysisFrame(from frame: Frame, seed: SIMD2<Double>?) -> Frame {
-        guard isTrackingCapture(frame) else { return frame }
+        let shortest = min(frame.width, frame.height)
+        guard shortest > displayCropSize else { return frame }
+        if !isTrackingCapture(frame), seed == nil {
+            return frame
+        }
         let center = seed ?? SIMD2(Double(frame.width) / 2, Double(frame.height) / 2)
         return frame.cropped(around: center, size: displayCropSize)
     }

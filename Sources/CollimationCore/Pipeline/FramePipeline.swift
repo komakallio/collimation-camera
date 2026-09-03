@@ -122,8 +122,9 @@ final class FramePipeline: @unchecked Sendable {
 
         let histogram = Histogram.compute(from: display, stride: max(1, display.pixelCount / 80_000))
 
+        let metricsOnDisplay = display.width == window.width && display.height == window.height
         var result: ComaResult?
-        if trackingState == .tracking,
+        if trackingState == .tracking, metricsOnDisplay,
            let analysisDetection = next.detection,
            let analyzed = analyzer.analyze(frame: display, detection: analysisDetection),
            analyzed.quality >= 0.4 {
@@ -131,12 +132,12 @@ final class FramePipeline: @unchecked Sendable {
         }
 
         var fwhm: FWHMResult?
-        if trackingState == .tracking, let centroid = next.centroidInFrame {
+        if trackingState == .tracking, metricsOnDisplay, let centroid = next.centroidInFrame {
             fwhm = fwhmEstimator.measure(frame: display, centroid: centroid, optics: optics)
         }
 
         var starProfile: StarIntensityProfile?
-        if trackingState == .tracking, let centroid = next.centroidInFrame {
+        if trackingState == .tracking, metricsOnDisplay, let centroid = next.centroidInFrame {
             let radius = result?.outer.radius
                 ?? fwhm.map { max($0.framePixels * 2.5, 12) }
                 ?? 32
