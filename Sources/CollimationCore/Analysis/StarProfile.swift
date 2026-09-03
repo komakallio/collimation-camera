@@ -3,7 +3,7 @@ import Foundation
 /// Intensity along a cut through the star, averaged over several diameters.
 ///
 /// `samples` run from −radius to +radius (center in the middle). Each value is
-/// ADU / 65535, so the plot’s vertical axis is 0…full well.
+/// ADU / 65535. The live plot uses a logarithmic vertical axis from 0.15% to full well.
 public struct StarIntensityProfile: Equatable, Sendable {
     public var samples: [Double]
     public var radiusPixels: Double

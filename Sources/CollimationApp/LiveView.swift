@@ -394,13 +394,29 @@ struct StarProfileView: View {
     var width: CGFloat = 148
     var height: CGFloat = 102
 
+    /// 0.15% of 16-bit full well; log(0) is undefined.
+    private static let logFloor = 0.0015
+    private static let logMin = log10(logFloor)
+
     var body: some View {
         Canvas { context, canvas in
-            let pad = CGRect(x: 10, y: 6, width: canvas.width - 18, height: canvas.height - 16)
-            drawAxes(context: &context, in: pad)
-            if let profile, profile.samples.count >= 2 {
-                drawProfile(context: &context, in: pad, samples: profile.samples)
+            let pad: CGFloat = 4
+            let plot = CGRect(
+                x: pad,
+                y: pad,
+                width: canvas.width - pad * 2,
+                height: canvas.height - pad * 2
+            )
+            context.fill(Path(roundedRect: plot, cornerRadius: 1), with: .color(Color.white.opacity(0.08)))
+            context.drawLayer { ctx in
+                ctx.clip(to: Path(roundedRect: plot, cornerRadius: 1))
+                drawGrid(context: &ctx, in: plot)
+                if let profile, profile.samples.count >= 2 {
+                    drawProfile(context: &ctx, in: plot, samples: profile.samples)
+                }
             }
+            context.stroke(Path(roundedRect: plot, cornerRadius: 1), with: .color(.white.opacity(0.75)), lineWidth: 1)
+            drawLogLabels(context: &context, in: plot)
         }
         .frame(width: width, height: height)
         .background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
@@ -408,36 +424,57 @@ struct StarProfileView: View {
             RoundedRectangle(cornerRadius: 4, style: .continuous)
                 .strokeBorder(.white.opacity(0.2), lineWidth: 1)
         )
-        .help("Average of four cuts through the star (horizontal, vertical, both diagonals). Vertical scale is 0 to 16-bit full well.")
+        .help("Average of four cuts through the star (horizontal, vertical, both diagonals). Vertical scale is logarithmic, 0.15% to 16-bit full well.")
     }
 
-    private func drawAxes(context: inout GraphicsContext, in rect: CGRect) {
-        var grid = Path()
-        for t in [0.0, 0.5, 1.0] {
-            let y = rect.maxY - CGFloat(t) * rect.height
-            grid.move(to: CGPoint(x: rect.minX, y: y))
-            grid.addLine(to: CGPoint(x: rect.maxX, y: y))
+    private func drawGrid(context: inout GraphicsContext, in rect: CGRect) {
+        var minor = Path()
+        var major = Path()
+        let n = 4
+        for i in 1..<n {
+            let x = rect.minX + rect.width * CGFloat(i) / CGFloat(n)
+            var path = Path()
+            path.move(to: CGPoint(x: x, y: rect.minY))
+            path.addLine(to: CGPoint(x: x, y: rect.maxY))
+            if i * 2 == n {
+                major.addPath(path)
+            } else {
+                minor.addPath(path)
+            }
         }
-        context.stroke(grid, with: .color(.white.opacity(0.16)), lineWidth: 0.5)
+        for decade in [1e-2, 1e-1] {
+            let y = yPosition(decade, in: rect)
+            var path = Path()
+            path.move(to: CGPoint(x: rect.minX, y: y))
+            path.addLine(to: CGPoint(x: rect.maxX, y: y))
+            if decade == 1e-1 {
+                major.addPath(path)
+            } else {
+                minor.addPath(path)
+            }
+        }
+        context.stroke(minor, with: .color(.white.opacity(0.14)), lineWidth: 0.5)
+        context.stroke(major, with: .color(.white.opacity(0.32)), lineWidth: 0.6)
+    }
 
-        var mid = Path()
-        let cx = rect.midX
-        mid.move(to: CGPoint(x: cx, y: rect.minY))
-        mid.addLine(to: CGPoint(x: cx, y: rect.maxY))
-        context.stroke(mid, with: .color(.white.opacity(0.28)), lineWidth: 0.6)
-
-        context.stroke(Path(rect), with: .color(.white.opacity(0.45)), lineWidth: 0.7)
-
+    private func drawLogLabels(context: inout GraphicsContext, in rect: CGRect) {
         let font = Font.system(size: 8, weight: .medium, design: .monospaced)
+        let color = Color.white.opacity(0.7)
+        let x = rect.minX + 3
         context.draw(
-            Text("100%").font(font).foregroundColor(.white.opacity(0.7)),
-            at: CGPoint(x: rect.minX - 2, y: rect.minY + 1),
-            anchor: .topTrailing
+            Text("100%").font(font).foregroundColor(color),
+            at: CGPoint(x: x, y: rect.minY + 2),
+            anchor: .topLeading
         )
         context.draw(
-            Text("0").font(font).foregroundColor(.white.opacity(0.7)),
-            at: CGPoint(x: rect.minX - 2, y: rect.maxY),
-            anchor: .bottomTrailing
+            Text("1%").font(font).foregroundColor(color),
+            at: CGPoint(x: x, y: yPosition(0.01, in: rect)),
+            anchor: .leading
+        )
+        context.draw(
+            Text("0.15%").font(font).foregroundColor(color),
+            at: CGPoint(x: x, y: rect.maxY - 2),
+            anchor: .bottomLeading
         )
     }
 
@@ -447,8 +484,7 @@ struct StarProfileView: View {
         var fill = Path()
         for (i, value) in samples.enumerated() {
             let x = rect.minX + rect.width * CGFloat(i) / CGFloat(last)
-            let y = rect.maxY - CGFloat(min(max(value, 0), 1)) * rect.height
-            let p = CGPoint(x: x, y: y)
+            let p = CGPoint(x: x, y: yPosition(value, in: rect))
             if i == 0 {
                 fill.move(to: CGPoint(x: x, y: rect.maxY))
                 fill.addLine(to: p)
@@ -461,6 +497,12 @@ struct StarProfileView: View {
         fill.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
         fill.closeSubpath()
         context.fill(fill, with: .color(OverlayChrome.starGood.opacity(0.22)))
-        context.stroke(line, with: .color(OverlayChrome.starGood), lineWidth: 1.4)
+        context.stroke(line, with: .color(OverlayChrome.starGood), lineWidth: 1.2)
+    }
+
+    private func yPosition(_ value: Double, in rect: CGRect) -> CGFloat {
+        let v = min(max(value, Self.logFloor), 1)
+        let t = (log10(v) - Self.logMin) / -Self.logMin
+        return rect.maxY - CGFloat(t) * rect.height
     }
 }
