@@ -7,11 +7,13 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private let device: MTLDevice
     private let queue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
-    private var texture: MTLTexture?
+    private var textures: [MTLTexture?] = [nil, nil]
     private var textureWidth = 0
     private var textureHeight = 0
+    private var writeIndex = 0
     private var lastSequence: UInt64 = .max
     private var lastStabilizedSequence: UInt64 = .max
+    private let gpuCentroid: GPUCentroid?
 
     let frames: FrameSlot
     let renderState: RenderStateSlot
@@ -45,6 +47,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         desc.colorAttachments[0].pixelFormat = .bgra8Unorm
         guard let pipeline = try? device.makeRenderPipelineState(descriptor: desc) else { return nil }
         self.pipeline = pipeline
+        self.gpuCentroid = GPUCentroid(device: device)
 
         super.init()
     }
@@ -52,15 +55,6 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
     func draw(in view: MTKView) {
-        guard let descriptor = view.currentRenderPassDescriptor else { return }
-        descriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0.04, green: 0.045, blue: 0.055, alpha: 1)
-        descriptor.colorAttachments[0].loadAction = .clear
-
-        guard let drawable = view.currentDrawable,
-              let command = queue.makeCommandBuffer(),
-              let encoder = command.makeRenderCommandEncoder(descriptor: descriptor)
-        else { return }
-
         // Layout in view points so the quad matches the SwiftUI overlay. Using
         // `drawableSize` (pixels) on Retina made the image half as large as the rings.
         let viewWidth = max(Double(view.bounds.width), 1)
@@ -73,8 +67,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             }
             if stabilization.isEnabled {
                 if latest.sequence != lastStabilizedSequence {
-                    let pose = stabilization.process(
-                        latest.frame,
+                    let pose = stabilizePose(
+                        frame: latest.frame,
                         viewWidth: viewWidth,
                         viewHeight: viewHeight
                     )
@@ -92,7 +86,16 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             }
         }
 
-        guard let texture else {
+        guard let descriptor = view.currentRenderPassDescriptor else { return }
+        descriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0.04, green: 0.045, blue: 0.055, alpha: 1)
+        descriptor.colorAttachments[0].loadAction = .clear
+
+        guard let drawable = view.currentDrawable,
+              let command = queue.makeCommandBuffer(),
+              let encoder = command.makeRenderCommandEncoder(descriptor: descriptor)
+        else { return }
+
+        guard let texture = textures[writeIndex] else {
             encoder.endEncoding()
             command.present(drawable)
             command.commit()
@@ -149,21 +152,50 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         command.commit()
     }
 
+    private func stabilizePose(frame: Frame, viewWidth: Double, viewHeight: Double) -> StabilizationPose {
+        let measured: SIMD2<Double>?
+        if stabilization.measuresCentroid {
+            if let gpuCentroid, let texture = textures[writeIndex],
+               texture.width == frame.width, texture.height == frame.height {
+                measured = gpuCentroid.measure(
+                    queue: queue,
+                    texture: texture,
+                    seed: stabilization.measurementSeed(in: frame)
+                )
+            } else {
+                return stabilization.process(frame, viewWidth: viewWidth, viewHeight: viewHeight)
+            }
+        } else {
+            measured = nil
+        }
+        return stabilization.applyMeasured(
+            measured,
+            frame: frame,
+            viewWidth: viewWidth,
+            viewHeight: viewHeight
+        )
+    }
+
     private func upload(_ frame: Frame) {
-        if texture == nil || textureWidth != frame.width || textureHeight != frame.height {
-            let desc = MTLTextureDescriptor.texture2DDescriptor(
-                pixelFormat: .r16Uint,
-                width: frame.width,
-                height: frame.height,
-                mipmapped: false
-            )
-            desc.usage = [.shaderRead]
-            desc.storageMode = .shared
-            texture = device.makeTexture(descriptor: desc)
+        if textures[0] == nil || textureWidth != frame.width || textureHeight != frame.height {
+            for i in 0..<2 {
+                let desc = MTLTextureDescriptor.texture2DDescriptor(
+                    pixelFormat: .r16Uint,
+                    width: frame.width,
+                    height: frame.height,
+                    mipmapped: false
+                )
+                desc.usage = [.shaderRead]
+                desc.storageMode = .shared
+                textures[i] = device.makeTexture(descriptor: desc)
+            }
             textureWidth = frame.width
             textureHeight = frame.height
+            writeIndex = 0
+        } else {
+            writeIndex ^= 1
         }
-        guard let texture else { return }
+        guard let texture = textures[writeIndex] else { return }
         frame.pixels.withUnsafeBytes { raw in
             texture.replace(
                 region: MTLRegionMake2D(0, 0, frame.width, frame.height),

@@ -83,13 +83,9 @@ public struct DigitalStabilizer: Equatable, Sendable {
     }
 }
 
-/// Per-frame digital stabilization. A windowed intensity centroid is measured on
-/// the frame about to be drawn so the live pan matches that image even when the
-/// star jitters a lot from frame to frame.
-///
-/// A GPU reduction was considered and rejected for these ROIs: 256–2048 frames
-/// are already in RAM, a ~400² window is microseconds on CPU, and a compute
-/// shader would add encode + readback latency without helping the overlay lock.
+/// Per-frame digital stabilization. The live view measures a windowed intensity
+/// centroid on the GPU from the texture about to be drawn; tests and fallback
+/// use `process`, which does the same reduction on the CPU.
 public final class StabilizationController: @unchecked Sendable {
     /// Drop a measurement that jumped this far from the last sensor seed. The
     /// tracking ROI recenters at ~15% of the frame; beyond that the blob is not
@@ -113,6 +109,13 @@ public final class StabilizationController: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return enabled
+    }
+
+    /// True when a new centroid should be measured on the displayed frame.
+    public var measuresCentroid: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return enabled && tracking == .tracking
     }
 
     public func configure(
@@ -153,51 +156,67 @@ public final class StabilizationController: @unchecked Sendable {
         return lastPose
     }
 
+    /// Last accepted centroid mapped into `frame`, for a windowed GPU/CPU measure.
+    public func measurementSeed(in frame: Frame) -> SIMD2<Double>? {
+        lock.lock()
+        defer { lock.unlock() }
+        let mapped = lastSensorCentroid.map { frame.roi.framePixel(fromSensorPoint: $0) }
+        return Self.inFrame(mapped, width: frame.width, height: frame.height)
+    }
+
+    /// CPU centroid of `frame`, then lock/pan. Used by tests; the live view
+    /// measures on the GPU and calls `applyMeasured`.
     public func process(
         _ frame: Frame,
         viewWidth viewWidthOverride: Double? = nil,
         viewHeight viewHeightOverride: Double? = nil
     ) -> StabilizationPose {
+        let measured = measuresCentroid
+            ? detector.momentCentroid(in: frame, around: measurementSeed(in: frame))
+            : nil
+        return applyMeasured(
+            measured,
+            frame: frame,
+            viewWidth: viewWidthOverride,
+            viewHeight: viewHeightOverride
+        )
+    }
+
+    /// Apply a centroid already measured on the frame about to be drawn.
+    public func applyMeasured(
+        _ measured: SIMD2<Double>?,
+        frame: Frame,
+        viewWidth viewWidthOverride: Double? = nil,
+        viewHeight viewHeightOverride: Double? = nil
+    ) -> StabilizationPose {
         lock.lock()
-        let enabled = self.enabled
-        let tracking = self.tracking
+        defer { lock.unlock() }
         let viewWidth = viewWidthOverride ?? self.viewWidth
         let viewHeight = viewHeightOverride ?? self.viewHeight
         let zoom = self.zoom
-        let mappedSeed = lastSensorCentroid.map { frame.roi.framePixel(fromSensorPoint: $0) }
-        let seed = Self.inFrame(mappedSeed, width: frame.width, height: frame.height)
         if !enabled || tracking == .searching {
             stabilizer.reset()
             lastSensorCentroid = nil
             lastPose = StabilizationPose()
-            let pose = lastPose
-            lock.unlock()
-            return pose
+            return lastPose
         }
-        lock.unlock()
-
-        let measured = tracking == .tracking
-            ? detector.momentCentroid(in: frame, around: seed)
-            : nil
-        let centroid = Self.acceptedCentroid(measured, seed: seed)
-
-        lock.lock()
+        let mappedSeed = lastSensorCentroid.map { frame.roi.framePixel(fromSensorPoint: $0) }
+        let seed = Self.inFrame(mappedSeed, width: frame.width, height: frame.height)
+        let centroid = tracking == .tracking ? Self.acceptedCentroid(measured, seed: seed) : nil
         if let centroid {
             lastSensorCentroid = frame.roi.sensorPoint(fromFramePixel: centroid)
         }
         lastPose = stabilizer.update(
-            enabled: self.enabled,
+            enabled: enabled,
             centroid: centroid,
-            tracking: self.tracking,
+            tracking: tracking,
             imageWidth: frame.width,
             imageHeight: frame.height,
             viewWidth: viewWidth,
             viewHeight: viewHeight,
             zoom: zoom
         )
-        let pose = lastPose
-        lock.unlock()
-        return pose
+        return lastPose
     }
 
     public func reset() {

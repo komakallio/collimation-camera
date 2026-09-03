@@ -284,8 +284,8 @@ public struct StarDetector: Sendable {
         )
     }
 
-    /// Intensity-weighted centroid in a window. Cheap enough to run on every live frame
-    /// for digital stabilization; skips the flood-fill used by `detect`.
+    /// Intensity-weighted centroid in a window. The live view uses a GPU copy of
+    /// this reduction; this CPU path is for detection, stacking, and tests.
     public func momentCentroid(
         in frame: Frame,
         around seed: SIMD2<Double>?,
