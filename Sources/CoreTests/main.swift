@@ -24,6 +24,7 @@ struct CoreTests {
         failures += run("in-focus coma horizontal", testInFocusComaHorizontal)
         failures += run("in-focus coma symmetric", testInFocusComaSymmetric)
         failures += run("airy coma footprint", testAiryComaFootprint)
+        failures += run("airy coma large footprint", testAiryComaLargeFootprint)
         failures += run("coma ring size on crop", testComaRingSizeOnCrop)
         failures += run("tracker recenter", testTrackerRecenter)
         failures += run("tracker hold when lost", testTrackerHoldWhenLost)
@@ -505,6 +506,33 @@ private func testAiryComaFootprint() throws {
     try expect(abs(coma.outer.radius - firstMin) < 2.5, "flare footprint \(coma.outer.radius)")
     try expect(coma.magnitudePixels > 0.08, "mag \(coma.magnitudePixels)")
     try expect(minAngleDelta(coma.directionDegrees, 0) < 30, "dir \(coma.directionDegrees)")
+}
+
+private func testAiryComaLargeFootprint() throws {
+    let firstMin = 32.0
+    let center = SIMD2(128.0, 128.0)
+    var rng = RNG(seed: 9)
+    let frame = AiryRenderer(
+        scene: AiryScene(
+            sensorWidth: 256,
+            sensorHeight: 256,
+            starPosition: center,
+            firstMinimumPixels: firstMin,
+            peakADU: 40_000,
+            backgroundADU: 800,
+            noiseSigma: 0,
+            seeingJitter: 0
+        )
+    ).render(roi: ROI(x: 0, y: 0, width: 256, height: 256), jitter: .zero, rng: &rng)
+    guard let result = ComaAnalyzer().analyze(
+        frame: frame,
+        detection: StarDetector().detect(in: frame)
+    ) else {
+        throw Expectation(description: "expected large Airy coma")
+    }
+    try expect(result.isDonut == false, "in-focus")
+    try expect(abs(result.outer.radius - firstMin) < 3.0, "footprint \(result.outer.radius) vs \(firstMin)")
+    try expect(result.magnitudeNormalized < 0.08, "symmetric \(result.magnitudeNormalized)")
 }
 
 /// Circular star whose brightness can be shifted so the photocenter leaves the geometric center.

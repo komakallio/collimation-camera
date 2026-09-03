@@ -137,7 +137,7 @@ public struct ComaAnalyzer: Sendable {
             ?? outer.center
         let maxRadius = min(
             Double(min(frame.width, frame.height)) / 2 - 1,
-            max(outer.radius * 3.5, 24)
+            max(outer.radius * 8, 96)
         )
         let footprint = firstVisibleMinimum(
             frame: frame,
@@ -223,7 +223,7 @@ public struct ComaAnalyzer: Sendable {
     }
 
     /// Azimuthally averaged first dark ring after the core, confirmed by a rise
-    /// into the first diffraction ring.
+    /// into the first diffraction ring. Ignores wiggles still inside the bright core.
     private func firstVisibleMinimum(
         frame: Frame,
         center: SIMD2<Double>,
@@ -236,45 +236,70 @@ public struct ComaAnalyzer: Sendable {
             background: background,
             maxRadius: maxRadius
         )
-        guard profile.count >= 8 else { return nil }
-        var smooth = profile
-        if profile.count >= 3 {
-            for i in 1..<(profile.count - 1) {
-                smooth[i].intensity =
-                    (profile[i - 1].intensity + profile[i].intensity + profile[i + 1].intensity) / 3
-            }
-        }
+        let smooth = smoothedRadial(profile)
+        guard smooth.count >= 12 else { return nil }
         guard let peakIndex = smooth.indices.max(by: { smooth[$0].intensity < smooth[$1].intensity }) else {
             return nil
         }
         let peak = smooth[peakIndex].intensity
         guard peak > 20 else { return nil }
+        let coreFloor = peak * 0.08
 
-        var dropped = false
         var i = peakIndex + 1
-        while i < smooth.count - 2 {
+        while i < smooth.count, smooth[i].intensity > coreFloor {
+            i += 1
+        }
+        guard i < smooth.count - 3, smooth[i].radius >= 3 else { return nil }
+
+        while i < smooth.count - 3 {
             let cur = smooth[i].intensity
-            if cur < peak * 0.45 { dropped = true }
-            if dropped {
-                let prev = smooth[i - 1].intensity
-                let next = smooth[i + 1].intensity
-                if cur <= prev, cur <= next, cur < peak * 0.2 {
-                    let r = smooth[i].radius
-                    var ringPeak = cur
-                    var j = i + 1
-                    while j < smooth.count, smooth[j].radius <= r * 1.85 {
-                        ringPeak = max(ringPeak, smooth[j].intensity)
-                        j += 1
-                    }
-                    let rise = max(12.0, 0.002 * peak)
-                    if ringPeak > cur + rise, ringPeak > cur * 1.15 {
-                        return r
-                    }
+            let windowLow = min(
+                smooth[i - 2].intensity,
+                smooth[i - 1].intensity,
+                cur,
+                smooth[i + 1].intensity,
+                smooth[i + 2].intensity
+            )
+            if cur <= coreFloor,
+               cur <= windowLow + 1e-6,
+               cur <= smooth[i - 1].intensity,
+               cur <= smooth[i + 1].intensity {
+                let r = smooth[i].radius
+                var ringPeak = cur
+                var j = i + 1
+                while j < smooth.count, smooth[j].radius <= r * 2.2 {
+                    ringPeak = max(ringPeak, smooth[j].intensity)
+                    j += 1
+                }
+                let rise = max(20.0, 0.004 * peak)
+                if ringPeak > cur + rise, ringPeak > cur * 1.25 {
+                    return r
+                }
+                // Dark floor with no usable first ring: still the first large minimum.
+                if cur < peak * 0.04, r < maxRadius * 0.85 {
+                    return r
                 }
             }
             i += 1
         }
         return nil
+    }
+
+    private func smoothedRadial(
+        _ profile: [(radius: Double, intensity: Double)]
+    ) -> [(radius: Double, intensity: Double)] {
+        guard profile.count >= 5 else { return profile }
+        var smooth = profile
+        for i in 2..<(profile.count - 2) {
+            smooth[i].intensity = (
+                profile[i - 2].intensity
+                    + profile[i - 1].intensity
+                    + profile[i].intensity
+                    + profile[i + 1].intensity
+                    + profile[i + 2].intensity
+            ) / 5
+        }
+        return smooth
     }
 
     /// If the first Airy ring is not visible, stop at the core's outer falloff.
@@ -295,7 +320,7 @@ public struct ComaAnalyzer: Sendable {
         }
         let peak = profile[peakIndex].intensity
         guard peak > 20 else { return nil }
-        let floor = peak * 0.08
+        let floor = peak * 0.05
         var i = peakIndex
         while i < profile.count {
             if profile[i].intensity < floor {
