@@ -229,6 +229,14 @@ struct ContentView: View {
 
     private var stateChip: some View {
         let (label, color): (String, Color) = {
+            if let work = engine.mountWork {
+                switch work {
+                case .calibrating:
+                    return ("CALIBRATING", Color(red: 0.95, green: 0.72, blue: 0.22))
+                case .centering:
+                    return ("CENTERING", Color(red: 0.45, green: 0.75, blue: 1))
+                }
+            }
             switch engine.tracking.state {
             case .tracking: return ("TRACKING", Color(red: 0.35, green: 0.85, blue: 0.45))
             case .searching: return ("SEARCHING", .orange)

@@ -61,6 +61,11 @@ public struct OverlayModel: Equatable, Sendable {
     }
 }
 
+public enum MountWork: Equatable, Sendable {
+    case calibrating
+    case centering
+}
+
 @MainActor
 public final class CollimationEngine: ObservableObject {
     nonisolated public let frameSlot = FrameSlot()
@@ -98,6 +103,7 @@ public final class CollimationEngine: ObservableObject {
     @Published public var selectedSerialPort = ""
     @Published public private(set) var isMountConnected = false
     @Published public private(set) var isMountBusy = false
+    @Published public private(set) var mountWork: MountWork?
     @Published public private(set) var isStacking = false
     @Published public var mountStatus = "No mount"
     @Published public private(set) var guideCalibration: GuideCalibration?
@@ -134,7 +140,6 @@ public final class CollimationEngine: ObservableObject {
     private var stackTask: Task<Void, Never>?
     private var filterWheelTask: Task<Void, Never>?
     private var mountHoldsROI = false
-    private var restoreROIAfterMount = false
     private var hardwareFilterPosition: Int?
     private static let serialPortDefaultsKey = "mount.serialPort"
     private static let filterWheelDefaultsKey = "filterWheel.id"
@@ -530,7 +535,7 @@ public final class CollimationEngine: ObservableObject {
             session.requestROI(roi)
         }
         softwareCrop.update(
-            enabled: CaptureLayout.isTrackingCapture(frame) && processed.tracking.state == .tracking,
+            enabled: CaptureLayout.isTrackingCapture(frame),
             sensorCentroid: processed.tracking.centroidOnSensor
         )
         frameSlot.store(processed.displayFrame)
@@ -596,12 +601,14 @@ public final class CollimationEngine: ObservableObject {
                 }.value
                 isMountConnected = true
                 isMountBusy = false
+                mountWork = nil
                 mountStatus = isMountCalibrated
                     ? "Connected — \(name), tracking off"
                     : "Connected — \(name), tracking off. Calibrate before centering."
             } catch {
                 isMountConnected = false
                 isMountBusy = false
+                mountWork = nil
                 mountStatus = "Not connected"
                 presentError(error)
             }
@@ -614,12 +621,12 @@ public final class CollimationEngine: ObservableObject {
         mount.disconnect()
         isMountConnected = false
         isMountBusy = false
-        let restoreROI = restoreROIAfterMount
+        mountWork = nil
+        let restoreDisplay = mountHoldsROI
         mountHoldsROI = false
-        restoreROIAfterMount = false
         applyPipelineConfig()
-        if restoreROI {
-            applyROISize()
+        if restoreDisplay {
+            restoreTrackingDisplay()
         }
         mountStatus = isMountCalibrated ? "Calibrated — mount disconnected" : "No mount"
     }
@@ -768,7 +775,7 @@ public final class CollimationEngine: ObservableObject {
 
     private func runCalibration() async {
         do {
-            try beginMountWork("Calibrating — measuring east…", holdROI: true)
+            try beginMountWork("Calibrating — measuring east…", holdROI: true, work: .calibrating)
             let duration = MountGuide.calibrationPulseMs
             let beforeEast = try await waitForCentroid()
             try await sendPulse(.east, milliseconds: duration)
@@ -821,7 +828,7 @@ public final class CollimationEngine: ObservableObject {
             guard let calibration = guideCalibration, calibration.isValid else {
                 throw MountError.notCalibrated
             }
-            try beginMountWork("Centering on sensor…", holdROI: true, useFullFrame: true)
+            try beginMountWork("Centering on sensor…", holdROI: true, useFullFrame: true, work: .centering)
             try await centerWithPadNudges(calibration: calibration)
             let centroid = try await waitForCentroid()
             let lastError = MountGuide.errorLength(centroid - sensorCenter())
@@ -838,13 +845,13 @@ public final class CollimationEngine: ObservableObject {
         }
     }
 
-    private func beginMountWork(_ status: String, holdROI: Bool, useFullFrame: Bool = false) throws {
+    private func beginMountWork(_ status: String, holdROI: Bool, useFullFrame: Bool = false, work: MountWork) throws {
         guard isMountConnected else { throw MountError.notConnected }
         guard isConnected else { throw CameraError.notConnected }
         isMountBusy = true
+        mountWork = work
         mountStatus = status
         mountHoldsROI = holdROI
-        restoreROIAfterMount = useFullFrame
         applyPipelineConfig()
         if useFullFrame {
             session.requestROI(
@@ -855,16 +862,30 @@ public final class CollimationEngine: ObservableObject {
 
     private func endMountWork(_ status: String) {
         mount.haltMotions()
-        let restoreROI = restoreROIAfterMount
         mountHoldsROI = false
-        restoreROIAfterMount = false
         applyPipelineConfig()
-        if restoreROI {
-            applyROISize()
-        }
         isMountBusy = false
+        mountWork = nil
         mountStatus = status
         mountTask = nil
+        restoreTrackingDisplay()
+    }
+
+    /// Put the camera back on the 2048 tracking window so the live view is the 512 crop.
+    private func restoreTrackingDisplay() {
+        guard isConnected, !isStacking else { return }
+        coalescer.cancel()
+        let center = tracking.centroidOnSensor
+            ?? SIMD2(Double(sensorWidth) / 2, Double(sensorHeight) / 2)
+        softwareCrop.update(enabled: true, sensorCentroid: center)
+        session.requestROI(
+            Alignment.centeredROI(
+                around: center,
+                size: CaptureLayout.trackingHardwareSize,
+                sensorWidth: sensorWidth,
+                sensorHeight: sensorHeight
+            )
+        )
     }
 
     private func centerWithPadNudges(calibration: GuideCalibration) async throws {

@@ -110,7 +110,7 @@ final class FramePipeline: @unchecked Sendable {
         lock.unlock()
 
         let display: Frame
-        if trackingState == .tracking, CaptureLayout.isTrackingCapture(frame) {
+        if CaptureLayout.isTrackingCapture(frame) {
             display = window
             next.centroidInFrame = next.centroidInFrame.map { $0 - origin }
             if let detection = next.detection {
