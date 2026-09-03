@@ -40,8 +40,8 @@ public struct StretchParams: Equatable, Sendable {
     }
 
     public static let `default` = StretchParams()
-    /// Upper bound for the black point (5% of the 16-bit range).
-    public static let blackRange: ClosedRange<Double> = 0...0.05
+    /// Upper bound for the black point (1% of the 16-bit range).
+    public static let blackRange: ClosedRange<Double> = 0...0.01
     /// Midtones below 0.5 lift shadows. Lower bound is 3× below the previous 0.01 floor.
     public static let midtonesRange: ClosedRange<Double> = (0.01 / 3)...0.99
     public static let arcsinhRange: ClosedRange<Double> = 0.1...1_500
