@@ -1577,7 +1577,11 @@ private func testMonoTIFF() throws {
 }
 
 private func testFrameStacker() throws {
-    try expect(FrameStacker.subframeCount == 100, "100 subframes")
+    try expect(FrameStacker.defaultSubframeCount == 100, "100 subframes")
+    try expect(FrameStacker.subframeCount == 100, "legacy 100")
+    try expect(FrameStacker.subframeCounts == [10, 50, 100, 500, 1000], "count choices")
+    try expect(FrameStacker.clampedCount(50) == 50, "valid count")
+    try expect(FrameStacker.clampedCount(7) == 100, "invalid count falls back")
     let mid = FrameStacker.bilinearSample(pixels: [10, 20, 30, 40], width: 2, height: 2, x: 0.5, y: 0)
     try expect(mid != nil && abs(mid! - 15) < 1e-9, "horizontal bilinear \(String(describing: mid))")
     let exact = FrameStacker.bilinearSample(pixels: [10, 20, 30, 40], width: 2, height: 2, x: 1, y: 0)

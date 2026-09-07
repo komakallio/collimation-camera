@@ -110,6 +110,7 @@ public final class CollimationEngine: ObservableObject {
     @Published public private(set) var isMountBusy = false
     @Published public private(set) var mountWork: MountWork?
     @Published public private(set) var isStacking = false
+    @Published public var stackFrameCount = FrameStacker.defaultSubframeCount
     @Published public private(set) var stackWork: StackWork?
     @Published public private(set) var isAutoExposing = false
     @Published public var mountStatus = "No mount"
@@ -287,7 +288,7 @@ public final class CollimationEngine: ObservableObject {
     }
 
     public func suggestedStackedName() -> String {
-        let label = "stack\(FrameStacker.subframeCount)"
+        let label = "stack\(FrameStacker.clampedCount(stackFrameCount))"
         if let frame = frameSlot.peek()?.frame {
             return MonoTIFF.suggestedFileName(
                 width: frame.width,
@@ -320,17 +321,17 @@ public final class CollimationEngine: ObservableObject {
         errorMessage = nil
         stackTask?.cancel()
         isStacking = true
-        let target = FrameStacker.subframeCount
+        let target = FrameStacker.clampedCount(stackFrameCount)
         stackWork = .capturing(collected: 0, target: target)
         applyPipelineConfig()
         coalescer.cancel()
         stackCapture.begin(target: target)
         session.requestFrameLimit(CaptureLayout.unlimitedReadoutFPS)
         statusText = "Stacking 0/\(target)…"
-        stackTask = Task { await self.runStackedSnapshot(to: url) }
+        stackTask = Task { await self.runStackedSnapshot(to: url, frameCount: target) }
     }
 
-    private func runStackedSnapshot(to url: URL) async {
+    private func runStackedSnapshot(to url: URL, frameCount: Int) async {
         defer {
             stackCapture.cancel()
             session.requestFrameLimit(CaptureLayout.maxReadoutFPS)
@@ -340,7 +341,7 @@ public final class CollimationEngine: ObservableObject {
             applyPipelineConfig()
         }
         do {
-            let frames = try await collectStackedFrames()
+            let frames = try await collectStackedFrames(target: frameCount)
             try Task.checkCancellation()
             session.requestFrameLimit(CaptureLayout.maxReadoutFPS)
             stackWork = .combining
@@ -361,8 +362,7 @@ public final class CollimationEngine: ObservableObject {
         }
     }
 
-    private func collectStackedFrames() async throws -> [Frame] {
-        let target = FrameStacker.subframeCount
+    private func collectStackedFrames(target: Int) async throws -> [Frame] {
         let frameBudget = max(2.0, exposureMicroseconds / 1_000_000.0 + 1.0)
         let deadline = Date().addingTimeInterval(frameBudget * Double(target) + 30)
         var lastCount = -1

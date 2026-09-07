@@ -107,9 +107,21 @@ struct SidebarView: View {
                 Button("Save TIFF…") { SnapshotExport.present(engine: engine) }
                     .disabled(!engine.isConnected || engine.isStacking)
                     .help("Save the current ROI as an uncompressed 16-bit mono TIFF")
-                Button("Save Stacked") { SnapshotExport.presentStacked(engine: engine) }
-                    .disabled(!engine.isConnected || engine.isStacking || engine.isMountBusy || engine.tracking.state != .tracking)
-                    .help("Capture 100 ROI frames at full camera readout, register them on the star centroid, average, and save a 32-bit float TIFF")
+                HStack(spacing: 8) {
+                    Button("Save Stacked") { SnapshotExport.presentStacked(engine: engine) }
+                        .disabled(!engine.isConnected || engine.isStacking || engine.isMountBusy || engine.tracking.state != .tracking)
+                    Picker("Frames", selection: $engine.stackFrameCount) {
+                        ForEach(FrameStacker.subframeCounts, id: \.self) { count in
+                            Text("\(count)").tag(count)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .fixedSize()
+                    .disabled(engine.isStacking)
+                    .help("Number of ROI frames to capture and average")
+                }
+                .help("Capture ROI frames at full camera readout, register them on the star centroid, average, and save a 32-bit float TIFF")
 
                 HStack(alignment: .bottom, spacing: 8) {
                     CommitSlider(

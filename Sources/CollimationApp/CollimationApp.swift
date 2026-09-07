@@ -293,7 +293,7 @@ enum SnapshotExport {
         panel.allowedContentTypes = [.tiff]
         panel.nameFieldStringValue = engine.suggestedStackedName()
         panel.title = "Save stacked TIFF"
-        panel.message = "Captures 100 ROI frames at full camera readout, registers them on the star centroid, averages, and writes a 32-bit float mono TIFF."
+        panel.message = "Captures \(engine.stackFrameCount) ROI frames at full camera readout, registers them on the star centroid, averages, and writes a 32-bit float mono TIFF."
         if let saved = UserDefaults.standard.string(forKey: directoryDefaultsKey) {
             panel.directoryURL = URL(fileURLWithPath: saved, isDirectory: true)
         }

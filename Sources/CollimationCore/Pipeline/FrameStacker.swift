@@ -156,7 +156,13 @@ public struct StackedImage: Sendable {
 }
 
 public enum FrameStacker {
-    public static let subframeCount = 100
+    public static let subframeCounts = [10, 50, 100, 500, 1000]
+    public static let defaultSubframeCount = 100
+    public static let subframeCount = defaultSubframeCount
+
+    public static func clampedCount(_ count: Int) -> Int {
+        subframeCounts.contains(count) ? count : defaultSubframeCount
+    }
 
     public static func average(_ subframes: [(frame: Frame, centroid: SIMD2<Double>)]) throws -> StackedImage {
         guard let first = subframes.first else {
