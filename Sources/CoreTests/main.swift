@@ -33,6 +33,7 @@ struct CoreTests {
         failures += run("software crop", testSoftwareCrop)
         failures += run("readout fps cap", testReadoutFPSCap)
         failures += run("stack capture buffer", testStackCaptureBuffer)
+        failures += run("constellation layout", testConstellationLayout)
         failures += run("sensor center overlay", testSensorCenterOverlay)
         failures += run("auto exposure", testAutoExposure)
         failures += run("star quality from peak", testStarQuality)
@@ -1566,6 +1567,13 @@ private func testMonoTIFF() throws {
         label: "stack100"
     )
     try expect(stackedName.contains("-stack100-"), "stack label \(stackedName)")
+    let constellationName = MonoTIFF.suggestedFileName(
+        width: 1536,
+        height: 1536,
+        date: Date(timeIntervalSince1970: 1_700_000_000),
+        label: "constellation-stack100"
+    )
+    try expect(constellationName.contains("-constellation-stack100-"), "constellation label \(constellationName)")
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("collimation-tiff-test.tif")
     try MonoTIFF.write(
         frame: Frame(width: 2, height: 2, pixels: pixels, roi: ROI(x: 0, y: 0, width: 2, height: 2)),
@@ -1694,4 +1702,46 @@ private func testMonoTIFFFloat32() throws {
 private func tiffShortValue(_ data: Data, ifdOffset: Int, entry: Int) -> UInt16 {
     let o = ifdOffset + 2 + entry * 12 + 8
     return UInt16(data[o]) | UInt16(data[o + 1]) << 8
+}
+
+private func testConstellationLayout() throws {
+    let width = 6252
+    let height = 4176
+    let positions = ConstellationCapture.positions(sensorWidth: width, sensorHeight: height)
+    try expect(positions.count == 9, "nine positions")
+    try expect(positions[0].label == "C", "center first")
+    try expect(positions[0].row == 1 && positions[0].column == 1, "center cell")
+    let center = MountGuide.frameCenter(width: width, height: height)
+    try expect(abs(positions[0].sensorPoint.x - center.x) < 1e-9, "center x")
+    try expect(abs(positions[0].sensorPoint.y - center.y) < 1e-9, "center y")
+
+    let cells = Set(positions.map { "\($0.row),\($0.column)" })
+    try expect(cells.count == 9, "unique mosaic cells")
+    for row in 0..<3 {
+        for column in 0..<3 {
+            try expect(cells.contains("\(row),\(column)"), "missing cell \(row),\(column)")
+        }
+    }
+
+    let north = positions.first { $0.label == "N" }!
+    let south = positions.first { $0.label == "S" }!
+    let east = positions.first { $0.label == "E" }!
+    let west = positions.first { $0.label == "W" }!
+    let diameter = south.sensorPoint.y - north.sensorPoint.y
+    try expect(abs(diameter - 0.8 * Double(height)) < 1, "circle diameter \(diameter)")
+    try expect(abs(east.sensorPoint.x - west.sensorPoint.x - diameter) < 1, "east-west \(east.sensorPoint.x - west.sensorPoint.x)")
+    try expect(north.row == 0 && north.column == 1, "north cell")
+    try expect(east.row == 1 && east.column == 2, "east cell")
+
+    let tileA = StackedImage(width: 2, height: 2, pixels: [1, 2, 3, 4], roi: ROI(x: 0, y: 0, width: 2, height: 2))
+    let tileB = StackedImage(width: 2, height: 2, pixels: [9, 8, 7, 6], roi: ROI(x: 0, y: 0, width: 2, height: 2))
+    let mosaic = try ConstellationCapture.mosaic([
+        (row: 0, column: 0, image: tileA),
+        (row: 1, column: 1, image: tileB)
+    ])
+    try expect(mosaic.width == 6 && mosaic.height == 6, "3×2 mosaic \(mosaic.width)×\(mosaic.height)")
+    try expect(mosaic.pixels[0] == 1 && mosaic.pixels[1] == 2, "NW row0")
+    try expect(mosaic.pixels[6] == 3 && mosaic.pixels[7] == 4, "NW row1")
+    try expect(mosaic.pixels[2 * 6 + 2] == 9, "center tile origin")
+    try expect(mosaic.pixels[5] == 0, "empty NE")
 }

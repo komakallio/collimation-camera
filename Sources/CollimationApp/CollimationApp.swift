@@ -35,6 +35,15 @@ struct CollimationApp: App {
                 Button("Save Stacked…") { SnapshotExport.presentStacked(engine: engine) }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
                     .disabled(!engine.isConnected || engine.isStacking || engine.isMountBusy || engine.tracking.state != .tracking)
+                Button("Save Constellation…") { SnapshotExport.presentConstellation(engine: engine) }
+                    .disabled(
+                        !engine.isConnected
+                            || !engine.isMountConnected
+                            || !engine.isMountCalibrated
+                            || engine.isStacking
+                            || engine.isMountBusy
+                            || engine.tracking.state != .tracking
+                    )
                 Toggle("Search Full Frame", isOn: $engine.autoSearch)
                     .keyboardShortcut("f", modifiers: [.command])
                 Toggle("Stabilize View", isOn: $engine.stabilize)
@@ -234,8 +243,15 @@ struct ContentView: View {
                 switch stack {
                 case .capturing(let collected, let target):
                     return ("STACKING \(collected)/\(target)", Color(red: 0.55, green: 0.85, blue: 0.95))
-                case .combining:
+                case .combining, .constellationCombining:
                     return ("COMBINING", Color(red: 0.55, green: 0.85, blue: 0.95))
+                case .constellationMoving(let step, let steps):
+                    return ("CONSTELLATION \(step)/\(steps)", Color(red: 0.55, green: 0.85, blue: 0.95))
+                case .constellationCapturing(let step, let steps, let collected, let target):
+                    return (
+                        "CONST \(step)/\(steps)  \(collected)/\(target)",
+                        Color(red: 0.55, green: 0.85, blue: 0.95)
+                    )
                 }
             }
             if let work = engine.mountWork {
@@ -300,5 +316,22 @@ enum SnapshotExport {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         UserDefaults.standard.set(url.deletingLastPathComponent().path, forKey: directoryDefaultsKey)
         engine.saveStackedSnapshot(to: url)
+    }
+
+    @MainActor
+    static func presentConstellation(engine: CollimationEngine) {
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.allowedContentTypes = [.tiff]
+        panel.nameFieldStringValue = engine.suggestedConstellationName()
+        panel.title = "Save constellation TIFF"
+        panel.message = "Moves the star to the sensor center and eight points on a circle 80% of the frame height, stacks \(engine.stackFrameCount) frames at each 512 crop, and writes a 3×3 mosaic."
+        if let saved = UserDefaults.standard.string(forKey: directoryDefaultsKey) {
+            panel.directoryURL = URL(fileURLWithPath: saved, isDirectory: true)
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        UserDefaults.standard.set(url.deletingLastPathComponent().path, forKey: directoryDefaultsKey)
+        engine.saveConstellation(to: url)
     }
 }

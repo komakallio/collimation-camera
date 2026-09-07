@@ -122,6 +122,9 @@ struct SidebarView: View {
                     .help("Number of ROI frames to capture and average")
                 }
                 .help("Capture ROI frames at full camera readout, register them on the star centroid, average, and save a 32-bit float TIFF")
+                Button("Save Constellation") { SnapshotExport.presentConstellation(engine: engine) }
+                    .disabled(!canSaveConstellation)
+                    .help("Move the star to the sensor center and eight points on an 80% circle, stack each 512 crop, and save a 3×3 mosaic.")
 
                 HStack(alignment: .bottom, spacing: 8) {
                     CommitSlider(
@@ -269,6 +272,10 @@ struct SidebarView: View {
 
     private var canCenterStar: Bool {
         canCalibrateMount && engine.isMountCalibrated
+    }
+
+    private var canSaveConstellation: Bool {
+        canCenterStar
     }
 
     private var roiSection: some View {

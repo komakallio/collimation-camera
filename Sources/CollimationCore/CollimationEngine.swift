@@ -69,6 +69,9 @@ public enum MountWork: Equatable, Sendable {
 public enum StackWork: Equatable, Sendable {
     case capturing(collected: Int, target: Int)
     case combining
+    case constellationMoving(step: Int, steps: Int)
+    case constellationCapturing(step: Int, steps: Int, collected: Int, target: Int)
+    case constellationCombining
 }
 
 @MainActor
@@ -302,6 +305,22 @@ public final class CollimationEngine: ObservableObject {
         return MonoTIFF.suggestedFileName(width: max(size, 1), height: max(height, 1), label: label)
     }
 
+    public func suggestedConstellationName() -> String {
+        let frames = FrameStacker.clampedCount(stackFrameCount)
+        let cell = CaptureLayout.displayCropSize
+        let side = cell * ConstellationCapture.gridSize
+        let label = "constellation-stack\(frames)"
+        if let frame = frameSlot.peek()?.frame {
+            return MonoTIFF.suggestedFileName(
+                width: side,
+                height: side,
+                date: frame.timestamp,
+                label: label
+            )
+        }
+        return MonoTIFF.suggestedFileName(width: side, height: side, label: label)
+    }
+
     public func saveSnapshot(to url: URL) {
         errorMessage = nil
         guard let frame = frameSlot.peek()?.frame else {
@@ -324,34 +343,33 @@ public final class CollimationEngine: ObservableObject {
         let target = FrameStacker.clampedCount(stackFrameCount)
         stackWork = .capturing(collected: 0, target: target)
         applyPipelineConfig()
-        coalescer.cancel()
-        stackCapture.begin(target: target)
-        session.requestFrameLimit(CaptureLayout.unlimitedReadoutFPS)
         statusText = "Stacking 0/\(target)…"
         stackTask = Task { await self.runStackedSnapshot(to: url, frameCount: target) }
     }
 
+    public func saveConstellation(to url: URL) {
+        guard isConnected, !isStacking, !isMountBusy, isMountConnected, isMountCalibrated else { return }
+        errorMessage = nil
+        stackTask?.cancel()
+        isStacking = true
+        let steps = ConstellationCapture.positionCount
+        stackWork = .constellationMoving(step: 1, steps: steps)
+        applyPipelineConfig()
+        statusText = "Constellation 1/\(steps)…"
+        stackTask = Task { await self.runConstellation(to: url) }
+    }
+
     private func runStackedSnapshot(to url: URL, frameCount: Int) async {
-        defer {
-            stackCapture.cancel()
-            session.requestFrameLimit(CaptureLayout.maxReadoutFPS)
-            isStacking = false
-            stackWork = nil
-            stackTask = nil
-            applyPipelineConfig()
-        }
+        defer { finishStacking() }
         do {
-            let frames = try await collectStackedFrames(target: frameCount)
+            let stacked = try await captureStackedImage(frameCount: frameCount) { collected, target in
+                self.stackWork = .capturing(collected: collected, target: target)
+                self.statusText = "Stacking \(collected)/\(target)…"
+                self.fps = self.fpsMeter.current
+            }
             try Task.checkCancellation()
-            session.requestFrameLimit(CaptureLayout.maxReadoutFPS)
             stackWork = .combining
-            statusText = "Combining \(frames.count) frames…"
-            fps = fpsMeter.current
-            let seed = overlay.centroid ?? tracking.centroidInFrame
-            let stacked = try await Task.detached(priority: .userInitiated) {
-                try FrameStacker.average(frames, seed: seed)
-            }.value
-            try Task.checkCancellation()
+            statusText = "Combining \(frameCount) frames…"
             try MonoTIFF.write(stacked, to: url)
             statusText = "Saved \(url.lastPathComponent)"
         } catch is CancellationError {
@@ -362,7 +380,126 @@ public final class CollimationEngine: ObservableObject {
         }
     }
 
-    private func collectStackedFrames(target: Int) async throws -> [Frame] {
+    private func runConstellation(to url: URL) async {
+        let frameCount = FrameStacker.clampedCount(stackFrameCount)
+        let steps = ConstellationCapture.positionCount
+        var startedMount = false
+        defer {
+            finishStacking()
+            if startedMount {
+                if statusText.hasPrefix("Saved") {
+                    endMountWork("Constellation saved")
+                } else if statusText.contains("cancelled") {
+                    endMountWork("Constellation cancelled")
+                } else {
+                    endMountWork("Constellation stopped")
+                }
+            } else {
+                restoreTrackingDisplay()
+            }
+        }
+        do {
+            guard let calibration = guideCalibration, calibration.isValid else {
+                throw MountError.notCalibrated
+            }
+            let positions = ConstellationCapture.positions(
+                sensorWidth: sensorWidth,
+                sensorHeight: sensorHeight
+            )
+            try beginMountWork(
+                "Constellation 1/\(steps)…",
+                holdROI: true,
+                useFullFrame: true,
+                work: .centering
+            )
+            startedMount = true
+
+            var tiles: [(row: Int, column: Int, image: StackedImage)] = []
+            tiles.reserveCapacity(positions.count)
+
+            for (index, position) in positions.enumerated() {
+                let step = index + 1
+                try Task.checkCancellation()
+                stackWork = .constellationMoving(step: step, steps: steps)
+                statusText = "Constellation \(step)/\(steps) — moving to \(position.label)…"
+                mountStatus = statusText
+
+                if index == 0 {
+                    _ = try await waitForCentroid(minNewFrames: 2, timeout: 12)
+                } else {
+                    try await enterFullFrame()
+                }
+                try await moveStar(to: position.sensorPoint, calibration: calibration)
+                let around = tracking.centroidOnSensor ?? position.sensorPoint
+                try await prepareStackWindow(around: around)
+
+                stackWork = .constellationCapturing(
+                    step: step,
+                    steps: steps,
+                    collected: 0,
+                    target: frameCount
+                )
+                statusText = "Constellation \(step)/\(steps) — stacking 0/\(frameCount)…"
+                let stacked = try await captureStackedImage(frameCount: frameCount) { collected, target in
+                    self.stackWork = .constellationCapturing(
+                        step: step,
+                        steps: steps,
+                        collected: collected,
+                        target: target
+                    )
+                    self.statusText = "Constellation \(step)/\(steps) — stacking \(collected)/\(target)…"
+                    self.fps = self.fpsMeter.current
+                }
+                tiles.append((position.row, position.column, stacked))
+            }
+
+            stackWork = .constellationCombining
+            statusText = "Combining constellation…"
+            let mosaic = try ConstellationCapture.mosaic(tiles)
+            try MonoTIFF.write(mosaic, to: url)
+            statusText = "Saved \(url.lastPathComponent)"
+        } catch is CancellationError {
+            statusText = "Constellation cancelled"
+        } catch {
+            presentError(error)
+            statusText = "Constellation failed"
+        }
+    }
+
+    private func finishStacking() {
+        stackCapture.cancel()
+        session.requestFrameLimit(CaptureLayout.maxReadoutFPS)
+        isStacking = false
+        stackWork = nil
+        stackTask = nil
+        applyPipelineConfig()
+    }
+
+    private func captureStackedImage(
+        frameCount: Int,
+        onProgress: @escaping (Int, Int) -> Void
+    ) async throws -> StackedImage {
+        coalescer.cancel()
+        stackCapture.begin(target: frameCount)
+        session.requestFrameLimit(CaptureLayout.unlimitedReadoutFPS)
+        defer {
+            stackCapture.cancel()
+            session.requestFrameLimit(CaptureLayout.maxReadoutFPS)
+        }
+        onProgress(0, frameCount)
+        let frames = try await collectStackedFrames(target: frameCount, onProgress: onProgress)
+        try Task.checkCancellation()
+        session.requestFrameLimit(CaptureLayout.maxReadoutFPS)
+        let seed = overlay.centroid ?? tracking.centroidInFrame
+        return try await Task.detached(priority: .userInitiated) {
+            try FrameStacker.average(frames, seed: seed)
+        }.value
+    }
+
+    private func collectStackedFrames(
+        target: Int,
+        onProgress: @escaping (Int, Int) -> Void
+    ) async throws -> [Frame] {
         let frameBudget = max(2.0, exposureMicroseconds / 1_000_000.0 + 1.0)
         let deadline = Date().addingTimeInterval(frameBudget * Double(target) + 30)
         var lastCount = -1
@@ -375,14 +512,10 @@ public final class CollimationEngine: ObservableObject {
             let count = stackCapture.count
             if count != lastCount {
                 lastCount = count
-                stackWork = .capturing(collected: count, target: target)
-                statusText = "Stacking \(count)/\(target)…"
-                fps = fpsMeter.current
+                onProgress(count, target)
             }
             if let frames = stackCapture.takeIfComplete() {
-                stackWork = .capturing(collected: frames.count, target: target)
-                statusText = "Stacking \(frames.count)/\(target)…"
-                fps = fpsMeter.current
+                onProgress(frames.count, target)
                 return frames
             }
             try await Task.sleep(nanoseconds: 8_000_000)
@@ -921,7 +1054,7 @@ public final class CollimationEngine: ObservableObject {
                 throw MountError.notCalibrated
             }
             try beginMountWork("Centering on sensor…", holdROI: true, useFullFrame: true, work: .centering)
-            try await centerWithPadNudges(calibration: calibration)
+            try await moveStar(to: sensorCenter(), calibration: calibration)
             let centroid = try await waitForCentroid()
             let lastError = MountGuide.errorLength(centroid - sensorCenter())
             if MountGuide.isCentered(errorPixels: centroid - sensorCenter()) {
@@ -968,13 +1101,17 @@ public final class CollimationEngine: ObservableObject {
     /// Put the camera back on the 2048 tracking window so the live view is the 512 crop.
     private func restoreTrackingDisplay() {
         guard isConnected, !isStacking else { return }
-        coalescer.cancel()
         let center = tracking.centroidOnSensor
             ?? SIMD2(Double(sensorWidth) / 2, Double(sensorHeight) / 2)
-        softwareCrop.update(enabled: true, sensorCentroid: center)
+        applyTrackingWindow(around: center)
+    }
+
+    private func applyTrackingWindow(around sensor: SIMD2<Double>) {
+        coalescer.cancel()
+        softwareCrop.update(enabled: true, sensorCentroid: sensor)
         session.requestROI(
             Alignment.centeredROI(
-                around: center,
+                around: sensor,
                 size: CaptureLayout.trackingHardwareSize,
                 sensorWidth: sensorWidth,
                 sensorHeight: sensorHeight
@@ -982,8 +1119,21 @@ public final class CollimationEngine: ObservableObject {
         )
     }
 
-    private func centerWithPadNudges(calibration: GuideCalibration) async throws {
-        let target = sensorCenter()
+    private func enterFullFrame() async throws {
+        coalescer.cancel()
+        softwareCrop.reset()
+        session.requestROI(
+            Alignment.fullFrameROI(sensorWidth: sensorWidth, sensorHeight: sensorHeight, binning: 1)
+        )
+        _ = try await waitForCentroid(minNewFrames: 2, timeout: 12)
+    }
+
+    private func prepareStackWindow(around sensor: SIMD2<Double>) async throws {
+        applyTrackingWindow(around: sensor)
+        _ = try await waitForCentroid(minNewFrames: 2, timeout: 12)
+    }
+
+    private func moveStar(to target: SIMD2<Double>, calibration: GuideCalibration) async throws {
         var centroid = try await waitForSettledCentroid()
         if MountGuide.isCentered(errorPixels: centroid - target) { return }
 
