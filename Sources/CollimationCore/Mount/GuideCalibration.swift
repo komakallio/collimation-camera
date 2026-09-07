@@ -37,12 +37,18 @@ public struct GuideCalibration: Equatable, Sendable, Codable {
     public var northY: Double
     public var sampleDurationMs: Int
     public var calibratedAt: Date
+    /// Lost on-axis pixels when RA reverses, from the east-return residual.
+    public var raBacklashPixels: Double
+    /// Lost on-axis pixels when Dec reverses, from the north-return residual.
+    public var decBacklashPixels: Double
 
     public init(
         eastRate: SIMD2<Double>,
         northRate: SIMD2<Double>,
         sampleDurationMs: Int,
-        calibratedAt: Date = Date()
+        calibratedAt: Date = Date(),
+        raBacklashPixels: Double = 0,
+        decBacklashPixels: Double = 0
     ) {
         self.eastX = eastRate.x
         self.eastY = eastRate.y
@@ -50,6 +56,25 @@ public struct GuideCalibration: Equatable, Sendable, Codable {
         self.northY = northRate.y
         self.sampleDurationMs = sampleDurationMs
         self.calibratedAt = calibratedAt
+        self.raBacklashPixels = max(0, raBacklashPixels)
+        self.decBacklashPixels = max(0, decBacklashPixels)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        eastX = try c.decode(Double.self, forKey: .eastX)
+        eastY = try c.decode(Double.self, forKey: .eastY)
+        northX = try c.decode(Double.self, forKey: .northX)
+        northY = try c.decode(Double.self, forKey: .northY)
+        sampleDurationMs = try c.decode(Int.self, forKey: .sampleDurationMs)
+        calibratedAt = try c.decode(Date.self, forKey: .calibratedAt)
+        raBacklashPixels = max(0, try c.decodeIfPresent(Double.self, forKey: .raBacklashPixels) ?? 0)
+        decBacklashPixels = max(0, try c.decodeIfPresent(Double.self, forKey: .decBacklashPixels) ?? 0)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case eastX, eastY, northX, northY, sampleDurationMs, calibratedAt
+        case raBacklashPixels, decBacklashPixels
     }
 
     public var eastRate: SIMD2<Double> { SIMD2(eastX, eastY) }
@@ -119,6 +144,38 @@ public struct GuideCalibration: Equatable, Sendable, Codable {
             return northRate * times.northMs
         }
     }
+
+    public func backlashPixels(on axis: MountAxis) -> Double {
+        switch axis {
+        case .ra: return raBacklashPixels
+        case .dec: return decBacklashPixels
+        }
+    }
+
+    /// Extra on-axis pixels to command when this move reverses (or the last
+    /// direction is unknown). Same-direction follow-ups take up none.
+    public func takeupPixels(
+        on axis: MountAxis,
+        direction: GuideDirection,
+        lastDirection: GuideDirection?
+    ) -> Double {
+        let backlash = backlashPixels(on: axis)
+        guard backlash > 0 else { return 0 }
+        guard let lastDirection else { return backlash }
+        return lastDirection == direction.opposite ? backlash : 0
+    }
+
+    public func travelPixels(
+        on axis: MountAxis,
+        remaining: Double,
+        lastDirection: GuideDirection?
+    ) -> Double {
+        let distance = abs(remaining)
+        guard let direction = AxisCentering.direction(axis: axis, remainingPixels: remaining) else {
+            return distance
+        }
+        return distance + takeupPixels(on: axis, direction: direction, lastDirection: lastDirection)
+    }
 }
 
 public enum MountAxis: String, Equatable, Sendable {
@@ -131,6 +188,31 @@ public enum MountAxis: String, Equatable, Sendable {
         switch self {
         case .ra: return "RA"
         case .dec: return "Dec"
+        }
+    }
+}
+
+/// Last commanded direction on each axis, used to apply backlash only on reverse.
+public struct AxisDirectionMemory: Equatable, Sendable {
+    public var ra: GuideDirection?
+    public var dec: GuideDirection?
+
+    public init(ra: GuideDirection? = nil, dec: GuideDirection? = nil) {
+        self.ra = ra
+        self.dec = dec
+    }
+
+    public func last(on axis: MountAxis) -> GuideDirection? {
+        switch axis {
+        case .ra: return ra
+        case .dec: return dec
+        }
+    }
+
+    public mutating func record(_ direction: GuideDirection) {
+        switch direction {
+        case .east, .west: ra = direction
+        case .north, .south: dec = direction
         }
     }
 }
@@ -195,13 +277,14 @@ public enum AxisCentering {
         axis: MountAxis,
         remainingPixels: Double,
         pixelsPerMsAt1x: Double,
-        lastSign: Double? = nil
+        lastSign: Double? = nil,
+        travelPixels: Double? = nil
     ) -> Plan? {
         guard !isAxisCentered(remainingPixels),
               let direction = Self.direction(axis: axis, remainingPixels: remainingPixels)
         else { return nil }
         let speed = MountGuide.slewSpeed(
-            remainingPixels: remainingPixels,
+            remainingPixels: travelPixels ?? abs(remainingPixels),
             pixelsPerMsAt1x: pixelsPerMsAt1x
         )
         return Plan(
@@ -266,6 +349,22 @@ public enum MountGuide {
     public static func rate(before: SIMD2<Double>, after: SIMD2<Double>, durationMs: Double) -> SIMD2<Double> {
         guard durationMs > 0 else { return .zero }
         return (after - before) / durationMs
+    }
+
+    /// On-axis leftover after an outbound pulse and an equal reverse pulse.
+    /// The leftover is the backlash: reverse motion spent taking up slack
+    /// instead of moving the star back to `start`.
+    public static func backlashPixels(
+        start: SIMD2<Double>,
+        afterOutbound: SIMD2<Double>,
+        afterReturn: SIMD2<Double>
+    ) -> Double {
+        let outbound = afterOutbound - start
+        let length = hypot(outbound.x, outbound.y)
+        guard length > 1e-6 else { return 0 }
+        let residual = afterReturn - start
+        let along = (residual.x * outbound.x + residual.y * outbound.y) / length
+        return max(0, along)
     }
 
     public static func isCentered(errorPixels: SIMD2<Double>) -> Bool {

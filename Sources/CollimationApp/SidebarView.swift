@@ -241,7 +241,7 @@ struct SidebarView: View {
                 HStack {
                     Button("Calibrate") { engine.calibrateMount() }
                         .disabled(!canCalibrateMount)
-                        .help("Pulse-guide east and north, measure how the star moves in the image, and save that mapping.")
+                        .help("Pulse-guide east and north, measure how the star moves, and measure backlash from where it returns.")
                     Button("Center") { engine.centerStar() }
                         .disabled(!canCenterStar)
                         .help("Centers one axis at a time on the full sensor. Each move lasts about 1 s at the speed needed to cover the remaining distance.")
@@ -256,6 +256,15 @@ struct SidebarView: View {
                     Text(calibration.calibratedAt.formatted(date: .abbreviated, time: .shortened))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
+                    if calibration.raBacklashPixels > 0.5 || calibration.decBacklashPixels > 0.5 {
+                        Text(String(
+                            format: "Backlash  RA %.0f px  ·  Dec %.0f px",
+                            calibration.raBacklashPixels,
+                            calibration.decBacklashPixels
+                        ))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    }
                 }
             }
         }

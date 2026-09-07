@@ -163,6 +163,7 @@ public final class CollimationEngine: ObservableObject {
     private var filterWheelTask: Task<Void, Never>?
     private var mountHoldsROI = false
     private var zoomBeforeFullFrame: Double?
+    private var axisDirections = AxisDirectionMemory()
     private var hardwareFilterPosition: Int?
     private static let serialPortDefaultsKey = "mount.serialPort"
     private static let filterWheelDefaultsKey = "filterWheel.id"
@@ -860,6 +861,7 @@ public final class CollimationEngine: ObservableObject {
         isMountConnected = false
         isMountBusy = false
         mountWork = nil
+        axisDirections = AxisDirectionMemory()
         let restoreDisplay = mountHoldsROI
         mountHoldsROI = false
         applyPipelineConfig()
@@ -1025,7 +1027,12 @@ public final class CollimationEngine: ObservableObject {
 
             mountStatus = "Calibrating — returning from east…"
             try await sendPulse(.west, milliseconds: duration)
-            _ = try await waitForSettledCentroid()
+            let afterWest = try await waitForSettledCentroid()
+            let raBacklash = MountGuide.backlashPixels(
+                start: beforeEast,
+                afterOutbound: afterEast,
+                afterReturn: afterWest
+            )
 
             mountStatus = "Calibrating — measuring north…"
             let beforeNorth = try await waitForCentroid()
@@ -1038,21 +1045,24 @@ public final class CollimationEngine: ObservableObject {
 
             mountStatus = "Calibrating — returning from north…"
             try await sendPulse(.south, milliseconds: duration)
-            _ = try await waitForSettledCentroid()
+            let afterSouth = try await waitForSettledCentroid()
+            let decBacklash = MountGuide.backlashPixels(
+                start: beforeNorth,
+                afterOutbound: afterNorth,
+                afterReturn: afterSouth
+            )
 
             let calibration = GuideCalibration(
                 eastRate: eastRate,
                 northRate: northRate,
-                sampleDurationMs: duration
+                sampleDurationMs: duration,
+                raBacklashPixels: raBacklash,
+                decBacklashPixels: decBacklash
             )
             guard calibration.isValid else { throw MountError.calibrationTooSmall("mount axes") }
             try GuideCalibrationStore.save(calibration)
             guideCalibration = calibration
-            endMountWork(String(
-                format: "Calibrated — east %.3f px/ms, north %.3f px/ms",
-                hypot(eastRate.x, eastRate.y),
-                hypot(northRate.x, northRate.y)
-            ))
+            endMountWork(Self.calibratedStatus(calibration))
         } catch is CancellationError {
             endMountWork("Calibration cancelled")
         } catch {
@@ -1222,22 +1232,39 @@ public final class CollimationEngine: ObservableObject {
             }
             let remaining = axis == .ra ? axisPixels.ra : axisPixels.dec
             let pxPerMs = calibration.pixelsPerMillisecond(on: axis)
+            let travel = calibration.travelPixels(
+                on: axis,
+                remaining: remaining,
+                lastDirection: axisDirections.last(on: axis)
+            )
             guard let plan = AxisCentering.plan(
                 axis: axis,
                 remainingPixels: remaining,
                 pixelsPerMsAt1x: pxPerMs,
-                lastSign: lastSign
+                lastSign: lastSign,
+                travelPixels: travel
             ) else { return }
 
             lastSign = remaining
-
-            mountStatus = String(
-                format: "Centering %@ %.1f× — %.0f px on axis",
-                axis.displayName,
-                plan.siderealMultiple,
-                abs(remaining)
-            )
+            let takeup = travel - abs(remaining)
+            if takeup > 0.5 {
+                mountStatus = String(
+                    format: "Centering %@ %.1f× — %.0f px + %.0f px backlash",
+                    axis.displayName,
+                    plan.siderealMultiple,
+                    abs(remaining),
+                    takeup
+                )
+            } else {
+                mountStatus = String(
+                    format: "Centering %@ %.1f× — %.0f px on axis",
+                    axis.displayName,
+                    plan.siderealMultiple,
+                    abs(remaining)
+                )
+            }
             try await mount.applyNudge(plan.nudge)
+            axisDirections.record(plan.direction)
             try await sleepMilliseconds(plan.durationMs)
             try await mount.applyNudge(nil)
 
@@ -1248,6 +1275,23 @@ public final class CollimationEngine: ObservableObject {
     private func sendPulse(_ direction: GuideDirection, milliseconds: Int) async throws {
         try Task.checkCancellation()
         try await mount.pulse(direction, milliseconds: milliseconds)
+        axisDirections.record(direction)
+    }
+
+    private static func calibratedStatus(_ calibration: GuideCalibration) -> String {
+        var text = String(
+            format: "Calibrated — east %.3f px/ms, north %.3f px/ms",
+            hypot(calibration.eastRate.x, calibration.eastRate.y),
+            hypot(calibration.northRate.x, calibration.northRate.y)
+        )
+        if calibration.raBacklashPixels > 0.5 || calibration.decBacklashPixels > 0.5 {
+            text += String(
+                format: ", backlash RA %.0f px / Dec %.0f px",
+                calibration.raBacklashPixels,
+                calibration.decBacklashPixels
+            )
+        }
+        return text
     }
 
     private func waitForSettledCentroid() async throws -> SIMD2<Double> {

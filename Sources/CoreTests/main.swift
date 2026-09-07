@@ -57,6 +57,7 @@ struct CoreTests {
         failures += run("guide nudge slice", testGuideNudgeSlice)
         failures += run("synscan fixed rate", testSynScanFixedRate)
         failures += run("guide calibration store", testGuideCalibrationStore)
+        failures += run("mount backlash", testMountBacklash)
         failures += run("guide slew axes", testGuideSlewAxes)
         failures += run("guide slew commit", testGuideSlewCommit)
         failures += run("synscan pad nudge", testSynScanPadNudge)
@@ -1408,11 +1409,76 @@ private func testGuideCalibrationStore() throws {
         eastRate: SIMD2(0.012, -0.001),
         northRate: SIMD2(0.002, 0.011),
         sampleDurationMs: 800,
-        calibratedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        calibratedAt: Date(timeIntervalSince1970: 1_700_000_000),
+        raBacklashPixels: 14.5,
+        decBacklashPixels: 9
     )
     try GuideCalibrationStore.save(original, to: url)
     let loaded = GuideCalibrationStore.load(from: url)
     try expect(loaded == original, "round-trip \(String(describing: loaded))")
+
+    let encoded = try JSONEncoder().encode(GuideCalibration(
+        eastRate: SIMD2(0.01, 0),
+        northRate: SIMD2(0, 0.01),
+        sampleDurationMs: 800,
+        calibratedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    ))
+    var object = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+    object.removeValue(forKey: "raBacklashPixels")
+    object.removeValue(forKey: "decBacklashPixels")
+    let stripped = try JSONSerialization.data(withJSONObject: object)
+    let legacy = try JSONDecoder().decode(GuideCalibration.self, from: stripped)
+    try expect(legacy.raBacklashPixels == 0 && legacy.decBacklashPixels == 0, "old files have no backlash")
+}
+
+private func testMountBacklash() throws {
+    try expect(
+        abs(MountGuide.backlashPixels(start: SIMD2(0, 0), afterOutbound: SIMD2(30, 0), afterReturn: SIMD2(5, 0)) - 5) < 1e-9,
+        "leftover along east is backlash"
+    )
+    try expect(
+        MountGuide.backlashPixels(start: SIMD2(0, 0), afterOutbound: SIMD2(30, 0), afterReturn: SIMD2(0, 0)) == 0,
+        "perfect return"
+    )
+    try expect(
+        MountGuide.backlashPixels(start: SIMD2(0, 0), afterOutbound: SIMD2(30, 0), afterReturn: SIMD2(-2, 0)) == 0,
+        "overshoot is not backlash"
+    )
+    try expect(
+        abs(MountGuide.backlashPixels(start: SIMD2(10, 10), afterOutbound: SIMD2(10, 40), afterReturn: SIMD2(10, 14)) - 4) < 1e-9,
+        "north leftover"
+    )
+
+    let calibration = GuideCalibration(
+        eastRate: SIMD2(0.01, 0),
+        northRate: SIMD2(0, 0.01),
+        sampleDurationMs: 800,
+        raBacklashPixels: 12,
+        decBacklashPixels: 8
+    )
+    try expect(calibration.takeupPixels(on: .ra, direction: .east, lastDirection: .west) == 12, "reverse RA")
+    try expect(calibration.takeupPixels(on: .ra, direction: .east, lastDirection: .east) == 0, "same RA")
+    try expect(calibration.takeupPixels(on: .ra, direction: .east, lastDirection: nil) == 12, "unknown takes up")
+    try expect(calibration.takeupPixels(on: .dec, direction: .south, lastDirection: .north) == 8, "reverse Dec")
+    try expect(calibration.travelPixels(on: .ra, remaining: 87, lastDirection: .west) == 99, "87 px + 12 px")
+    try expect(calibration.travelPixels(on: .ra, remaining: 87, lastDirection: .east) == 87, "no extra")
+
+    var memory = AxisDirectionMemory()
+    try expect(memory.last(on: .ra) == nil, "start unknown")
+    memory.record(.east)
+    memory.record(.south)
+    try expect(memory.last(on: .ra) == .east && memory.last(on: .dec) == .south, "independent axes")
+    memory.record(.west)
+    try expect(memory.last(on: .ra) == .west && memory.last(on: .dec) == .south, "RA reverse keeps Dec")
+
+    let withTakeup = AxisCentering.plan(
+        axis: .ra,
+        remainingPixels: 87,
+        pixelsPerMsAt1x: 0.01,
+        travelPixels: 99
+    )
+    try expect(abs((withTakeup?.siderealMultiple ?? 0) - 9.9) < 1e-9, "1 s covers remaining plus backlash")
+    try expect(withTakeup?.durationMs == 1_000, "still about 1 s")
 }
 
 private func testGuideSlewAxes() throws {
