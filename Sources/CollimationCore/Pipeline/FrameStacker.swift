@@ -1,5 +1,76 @@
 import Foundation
 
+/// Collects unique camera frames on the grab thread until `target` is reached.
+public final class StackCaptureBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var frames: [Frame] = []
+    private var target = 0
+    private var capturing = false
+
+    public init() {}
+
+    public var isCapturing: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return capturing
+    }
+
+    public var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return frames.count
+    }
+
+    public var targetCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return target
+    }
+
+    public func begin(target: Int) {
+        lock.lock()
+        frames.removeAll(keepingCapacity: true)
+        self.target = max(0, target)
+        if self.target > 0 {
+            frames.reserveCapacity(self.target)
+        }
+        capturing = self.target > 0
+        lock.unlock()
+    }
+
+    public func cancel() {
+        lock.lock()
+        frames.removeAll(keepingCapacity: true)
+        target = 0
+        capturing = false
+        lock.unlock()
+    }
+
+    /// Append `frame` when a capture is open. Returns the new count.
+    @discardableResult
+    public func offer(_ frame: Frame) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        guard capturing, frames.count < target else { return frames.count }
+        frames.append(frame)
+        if frames.count >= target {
+            capturing = false
+        }
+        return frames.count
+    }
+
+    public func takeIfComplete() -> [Frame]? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard target > 0, frames.count >= target else { return nil }
+        let captured = frames
+        frames = []
+        target = 0
+        capturing = false
+        return captured
+    }
+}
+
 /// Running average of centroid-registered frames, kept in floating point.
 public struct FrameStackAccumulator: Sendable {
     public let width: Int
@@ -98,6 +169,28 @@ public enum FrameStacker {
             }
         }
         return stack.finish(timestamp: first.frame.timestamp)
+    }
+
+    /// Register each frame on its star centroid, then average. Frames without a
+    /// lock or with a mismatched size are skipped.
+    public static func average(_ frames: [Frame], seed: SIMD2<Double>?) throws -> StackedImage {
+        let detector = StarDetector()
+        var seed = seed
+        var pairs: [(frame: Frame, centroid: SIMD2<Double>)] = []
+        pairs.reserveCapacity(frames.count)
+        for frame in frames {
+            if let first = pairs.first,
+               first.frame.width != frame.width || first.frame.height != frame.height {
+                continue
+            }
+            guard let centroid = detector.momentCentroid(in: frame, around: seed) else { continue }
+            seed = centroid
+            pairs.append((frame, centroid))
+        }
+        guard !pairs.isEmpty else {
+            throw CameraError.unsupported("No tracked star. Keep the artificial star in the frame to stack.")
+        }
+        return try average(pairs)
     }
 
     /// Sample `pixels` at a subpixel location. Returns nil when the point is

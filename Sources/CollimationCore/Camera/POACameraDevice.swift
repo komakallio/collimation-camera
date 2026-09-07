@@ -67,8 +67,7 @@ final class POACameraDevice: CameraDevice {
             sensorHeight: descriptor.sensorHeight
         )
         try applyROI(roi)
-        let fps = CaptureLayout.clampedReadoutFPS(range: native.intRange(cameraID, POA_FRAME_LIMIT))
-        try? native.setInt(cameraID, POA_FRAME_LIMIT, fps)
+        applyFrameLimit(CaptureLayout.maxReadoutFPS)
         try applyExposure(controls.exposureMicroseconds)
         try applyGain(controls.gain)
         if let actual = native.getExposureMicroseconds(cameraID) {
@@ -92,6 +91,14 @@ final class POACameraDevice: CameraDevice {
         let clamped = min(max(gain, controls.gainRange.lowerBound), controls.gainRange.upperBound)
         try native.setInt(cameraID, POA_GAIN, clamped)
         controls.gain = clamped
+    }
+
+    func applyFrameLimit(_ fps: Int) {
+        let range = native.intRange(cameraID, POA_FRAME_LIMIT)
+        let value = fps <= CaptureLayout.unlimitedReadoutFPS
+            ? CaptureLayout.stackingReadoutFPS(range: range)
+            : CaptureLayout.clampedReadoutFPS(range: range)
+        try? native.setInt(cameraID, POA_FRAME_LIMIT, value)
     }
 
     func applyROI(_ roi: ROI) throws {

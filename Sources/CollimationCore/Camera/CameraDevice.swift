@@ -80,10 +80,13 @@ public protocol CameraDevice: AnyObject {
     func stopVideo()
     func grabFrame(timeoutMs: Int) throws -> Frame
     func cancelGrab()
+    /// Soft frame-rate cap. `0` means unlimited where the camera supports it.
+    func applyFrameLimit(_ fps: Int)
 }
 
 extension CameraDevice {
     public func cancelGrab() {}
+    public func applyFrameLimit(_ fps: Int) {}
 }
 
 public enum DeviceCatalog {

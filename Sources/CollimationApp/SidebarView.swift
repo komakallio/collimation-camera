@@ -109,7 +109,7 @@ struct SidebarView: View {
                     .help("Save the current ROI as an uncompressed 16-bit mono TIFF")
                 Button("Save Stacked") { SnapshotExport.presentStacked(engine: engine) }
                     .disabled(!engine.isConnected || engine.isStacking || engine.isMountBusy || engine.tracking.state != .tracking)
-                    .help("Capture 100 ROI frames, register them on the star centroid, average, and save a 32-bit float TIFF")
+                    .help("Capture 100 ROI frames at full camera readout, register them on the star centroid, average, and save a 32-bit float TIFF")
 
                 HStack(alignment: .bottom, spacing: 8) {
                     CommitSlider(

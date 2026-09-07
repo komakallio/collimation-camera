@@ -230,6 +230,14 @@ struct ContentView: View {
 
     private var stateChip: some View {
         let (label, color): (String, Color) = {
+            if let stack = engine.stackWork {
+                switch stack {
+                case .capturing(let collected, let target):
+                    return ("STACKING \(collected)/\(target)", Color(red: 0.55, green: 0.85, blue: 0.95))
+                case .combining:
+                    return ("COMBINING", Color(red: 0.55, green: 0.85, blue: 0.95))
+                }
+            }
             if let work = engine.mountWork {
                 switch work {
                 case .calibrating:
@@ -285,7 +293,7 @@ enum SnapshotExport {
         panel.allowedContentTypes = [.tiff]
         panel.nameFieldStringValue = engine.suggestedStackedName()
         panel.title = "Save stacked TIFF"
-        panel.message = "Captures 100 ROI frames, registers them on the star centroid, averages, and writes a 32-bit float mono TIFF."
+        panel.message = "Captures 100 ROI frames at full camera readout, registers them on the star centroid, averages, and writes a 32-bit float mono TIFF."
         if let saved = UserDefaults.standard.string(forKey: directoryDefaultsKey) {
             panel.directoryURL = URL(fileURLWithPath: saved, isDirectory: true)
         }

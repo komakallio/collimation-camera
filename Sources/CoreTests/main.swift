@@ -32,6 +32,7 @@ struct CoreTests {
         failures += run("search recovery", testSearchRecovery)
         failures += run("software crop", testSoftwareCrop)
         failures += run("readout fps cap", testReadoutFPSCap)
+        failures += run("stack capture buffer", testStackCaptureBuffer)
         failures += run("sensor center overlay", testSensorCenterOverlay)
         failures += run("auto exposure", testAutoExposure)
         failures += run("star quality from peak", testStarQuality)
@@ -786,10 +787,14 @@ private func testSoftwareCrop() throws {
 
 private func testReadoutFPSCap() throws {
     try expect(CaptureLayout.maxReadoutFPS == 30, "30 fps")
+    try expect(CaptureLayout.unlimitedReadoutFPS == 0, "unlimited is 0")
     try expect(CaptureLayout.clampedReadoutFPS(range: nil) == 30, "no range")
     try expect(CaptureLayout.clampedReadoutFPS(range: 0...2000) == 30, "unlimited min is 0")
     try expect(CaptureLayout.clampedReadoutFPS(range: 0...20) == 20, "camera max below 30")
     try expect(CaptureLayout.clampedReadoutFPS(range: 50...200) == 50, "camera min above 30")
+    try expect(CaptureLayout.stackingReadoutFPS(range: nil) == 0, "no range stacks unlimited")
+    try expect(CaptureLayout.stackingReadoutFPS(range: 0...2000) == 0, "0 is allowed")
+    try expect(CaptureLayout.stackingReadoutFPS(range: 1...200) == 200, "no unlimited uses max")
 }
 
 private func testSensorCenterOverlay() throws {
@@ -1612,6 +1617,53 @@ private func testFrameStacker() throws {
         (bright, SIMD2(1, 1))
     ])
     try expect(mean.pixels.allSatisfy { abs($0 - 150.5) < 1e-5 }, "float mean \(mean.pixels)")
+
+    let fromSeed = try FrameStacker.average(
+        [hot(x: 3, y: 4, value: 1000), hot(x: 5, y: 4, value: 1000)],
+        seed: SIMD2(3, 4)
+    )
+    try expect(fromSeed.pixels[4 * 8 + 3] == 1000, "seed-aligned peak \(fromSeed.pixels[4 * 8 + 3])")
+    let blank = Frame(width: 8, height: 8, pixels: [UInt16](repeating: 0, count: 64), roi: roi)
+    do {
+        _ = try FrameStacker.average([blank, blank], seed: SIMD2(4, 4))
+        throw Expectation(description: "empty frames must not stack")
+    } catch let error as CameraError {
+        try expect(
+            error.localizedDescription.contains("artificial star"),
+            "star error \(error.localizedDescription)"
+        )
+    }
+}
+
+private func testStackCaptureBuffer() throws {
+    let buffer = StackCaptureBuffer()
+    try expect(!buffer.isCapturing, "idle")
+    try expect(buffer.takeIfComplete() == nil, "empty take")
+
+    let roi = ROI(x: 0, y: 0, width: 2, height: 2)
+    func frame(_ value: UInt16) -> Frame {
+        Frame(width: 2, height: 2, pixels: [value, value, value, value], roi: roi)
+    }
+
+    buffer.begin(target: 2)
+    try expect(buffer.isCapturing, "open")
+    try expect(buffer.offer(frame(1)) == 1, "first")
+    try expect(buffer.takeIfComplete() == nil, "not full")
+    try expect(buffer.offer(frame(2)) == 2, "second")
+    try expect(!buffer.isCapturing, "closes at target")
+    try expect(buffer.offer(frame(3)) == 2, "ignores overflow")
+    guard let captured = buffer.takeIfComplete() else {
+        throw Expectation(description: "expected completed capture")
+    }
+    try expect(captured.count == 2, "two frames")
+    try expect(captured[0].pixels[0] == 1 && captured[1].pixels[0] == 2, "order")
+    try expect(buffer.takeIfComplete() == nil, "consumed")
+
+    buffer.begin(target: 1)
+    _ = buffer.offer(frame(9))
+    buffer.cancel()
+    try expect(!buffer.isCapturing, "cancelled")
+    try expect(buffer.takeIfComplete() == nil, "cancel discards")
 }
 
 private func testMonoTIFFFloat32() throws {

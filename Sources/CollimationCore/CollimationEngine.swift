@@ -66,6 +66,11 @@ public enum MountWork: Equatable, Sendable {
     case centering
 }
 
+public enum StackWork: Equatable, Sendable {
+    case capturing(collected: Int, target: Int)
+    case combining
+}
+
 @MainActor
 public final class CollimationEngine: ObservableObject {
     nonisolated public let frameSlot = FrameSlot()
@@ -105,6 +110,7 @@ public final class CollimationEngine: ObservableObject {
     @Published public private(set) var isMountBusy = false
     @Published public private(set) var mountWork: MountWork?
     @Published public private(set) var isStacking = false
+    @Published public private(set) var stackWork: StackWork?
     @Published public private(set) var isAutoExposing = false
     @Published public var mountStatus = "No mount"
     @Published public private(set) var guideCalibration: GuideCalibration?
@@ -136,6 +142,7 @@ public final class CollimationEngine: ObservableObject {
     private var optics = TelescopeOptics.poseidon
     nonisolated public let stabilization = StabilizationController()
     nonisolated private let softwareCrop = SoftwareCropController()
+    nonisolated private let stackCapture = StackCaptureBuffer()
     private var cancellables = Set<AnyCancellable>()
     private var mountTask: Task<Void, Never>?
     private var stackTask: Task<Void, Never>?
@@ -313,14 +320,36 @@ public final class CollimationEngine: ObservableObject {
         errorMessage = nil
         stackTask?.cancel()
         isStacking = true
+        let target = FrameStacker.subframeCount
+        stackWork = .capturing(collected: 0, target: target)
         applyPipelineConfig()
-        statusText = "Stacking 0/\(FrameStacker.subframeCount)…"
+        coalescer.cancel()
+        stackCapture.begin(target: target)
+        session.requestFrameLimit(CaptureLayout.unlimitedReadoutFPS)
+        statusText = "Stacking 0/\(target)…"
         stackTask = Task { await self.runStackedSnapshot(to: url) }
     }
 
     private func runStackedSnapshot(to url: URL) async {
+        defer {
+            stackCapture.cancel()
+            session.requestFrameLimit(CaptureLayout.maxReadoutFPS)
+            isStacking = false
+            stackWork = nil
+            stackTask = nil
+            applyPipelineConfig()
+        }
         do {
-            let stacked = try await collectStackedFrame()
+            let frames = try await collectStackedFrames()
+            try Task.checkCancellation()
+            session.requestFrameLimit(CaptureLayout.maxReadoutFPS)
+            stackWork = .combining
+            statusText = "Combining \(frames.count) frames…"
+            fps = fpsMeter.current
+            let seed = overlay.centroid ?? tracking.centroidInFrame
+            let stacked = try await Task.detached(priority: .userInitiated) {
+                try FrameStacker.average(frames, seed: seed)
+            }.value
             try Task.checkCancellation()
             try MonoTIFF.write(stacked, to: url)
             statusText = "Saved \(url.lastPathComponent)"
@@ -330,52 +359,42 @@ public final class CollimationEngine: ObservableObject {
             presentError(error)
             statusText = "Stack failed"
         }
-        isStacking = false
-        stackTask = nil
-        applyPipelineConfig()
     }
 
-    private func collectStackedFrame() async throws -> StackedImage {
+    private func collectStackedFrames() async throws -> [Frame] {
         let target = FrameStacker.subframeCount
-        let detector = StarDetector()
-        var seed = overlay.centroid ?? tracking.centroidInFrame
-        var lastSeq: UInt64 = 0
-        var stack: FrameStackAccumulator?
         let frameBudget = max(2.0, exposureMicroseconds / 1_000_000.0 + 1.0)
         let deadline = Date().addingTimeInterval(frameBudget * Double(target) + 30)
+        var lastCount = -1
 
-        while (stack?.count ?? 0) < target {
+        while true {
             try Task.checkCancellation()
             guard isConnected else { throw CameraError.disconnected }
             guard Date() < deadline else { throw CameraError.timeout }
 
-            if let peeked = frameSlot.peek(), peeked.sequence > lastSeq {
-                lastSeq = peeked.sequence
-                let frame = peeked.frame
-                if let centroid = detector.momentCentroid(in: frame, around: seed) {
-                    seed = centroid
-                    if stack == nil {
-                        stack = FrameStackAccumulator(frame: frame, centroid: centroid)
-                    } else if var current = stack {
-                        guard current.add(frame: frame, centroid: centroid) else { continue }
-                        stack = current
-                    }
-                    statusText = "Stacking \(stack?.count ?? 0)/\(target)…"
-                }
+            let count = stackCapture.count
+            if count != lastCount {
+                lastCount = count
+                stackWork = .capturing(collected: count, target: target)
+                statusText = "Stacking \(count)/\(target)…"
+                fps = fpsMeter.current
+            }
+            if let frames = stackCapture.takeIfComplete() {
+                stackWork = .capturing(collected: frames.count, target: target)
+                statusText = "Stacking \(frames.count)/\(target)…"
+                fps = fpsMeter.current
+                return frames
             }
             try await Task.sleep(nanoseconds: 8_000_000)
         }
-
-        guard let stack, stack.count >= target else {
-            throw CameraError.unsupported("No tracked star. Keep the artificial star in the frame to stack.")
-        }
-        return stack.finish()
     }
 
     public func disconnect() {
         stackTask?.cancel()
         stackTask = nil
         isStacking = false
+        stackWork = nil
+        stackCapture.cancel()
         autoExposeTask?.cancel()
         autoExposeTask = nil
         isAutoExposing = false
@@ -593,9 +612,13 @@ public final class CollimationEngine: ObservableObject {
     }
 
     private nonisolated func ingest(_ frame: Frame) {
-        frameSlot.store(softwareCrop.apply(frame))
+        let displayed = softwareCrop.apply(frame)
+        frameSlot.store(displayed)
         _ = fpsMeter.tick()
-        coalescer.submit(frame)
+        stackCapture.offer(displayed)
+        if !stackCapture.isCapturing {
+            coalescer.submit(frame)
+        }
     }
 
     private nonisolated func analyze(_ frame: Frame) {

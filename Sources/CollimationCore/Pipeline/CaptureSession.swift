@@ -11,6 +11,7 @@ public final class CaptureSession: @unchecked Sendable {
     private var pendingROI: ROI?
     private var pendingExposure: Int?
     private var pendingGain: Int?
+    private var pendingFrameLimit: Int?
     private let loopGroup = DispatchGroup()
 
     public init() {}
@@ -29,6 +30,7 @@ public final class CaptureSession: @unchecked Sendable {
         pendingROI = nil
         pendingExposure = nil
         pendingGain = nil
+        pendingFrameLimit = nil
         stateLock.unlock()
 
         loopGroup.enter()
@@ -74,6 +76,13 @@ public final class CaptureSession: @unchecked Sendable {
         stateLock.unlock()
     }
 
+    /// `0` removes the live-view 30 fps cap so stack capture can run at full readout.
+    public func requestFrameLimit(_ fps: Int) {
+        stateLock.lock()
+        pendingFrameLimit = fps
+        stateLock.unlock()
+    }
+
     private func runLoop() {
         stateLock.lock()
         let device = self.device
@@ -88,6 +97,7 @@ public final class CaptureSession: @unchecked Sendable {
         }
 
         var nextFrameDeadline = Date.distantPast
+        var capFPS = CaptureLayout.maxReadoutFPS
         while true {
             stateLock.lock()
             let keepGoing = running
@@ -97,6 +107,8 @@ public final class CaptureSession: @unchecked Sendable {
             pendingExposure = nil
             let gain = pendingGain
             pendingGain = nil
+            let frameLimitRequest = pendingFrameLimit
+            pendingFrameLimit = nil
             stateLock.unlock()
             if !keepGoing { break }
 
@@ -110,7 +122,12 @@ public final class CaptureSession: @unchecked Sendable {
                 if let roi, roi != device.currentROI {
                     try device.applyROI(roi)
                 }
-                if !device.descriptor.isSimulator {
+                if let frameLimitRequest {
+                    capFPS = frameLimitRequest
+                    device.applyFrameLimit(frameLimitRequest)
+                    nextFrameDeadline = Date.distantPast
+                }
+                if !device.descriptor.isSimulator, capFPS > 0 {
                     let now = Date()
                     if now < nextFrameDeadline {
                         Thread.sleep(forTimeInterval: nextFrameDeadline.timeIntervalSince(now))
@@ -122,8 +139,8 @@ public final class CaptureSession: @unchecked Sendable {
                 }
                 let timeout = max(100, device.controls.exposureMicroseconds / 1000 + 400)
                 let frame = try device.grabFrame(timeoutMs: timeout)
-                if !device.descriptor.isSimulator {
-                    nextFrameDeadline = Date().addingTimeInterval(1.0 / Double(CaptureLayout.maxReadoutFPS))
+                if !device.descriptor.isSimulator, capFPS > 0 {
+                    nextFrameDeadline = Date().addingTimeInterval(1.0 / Double(capFPS))
                 }
                 onFrame?(frame)
             } catch CameraError.timeout {

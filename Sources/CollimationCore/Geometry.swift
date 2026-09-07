@@ -54,9 +54,11 @@ public enum CaptureLayout {
     public static let displayCropSize = 512
     /// `centeredROI` may shrink a 2048 request by a few pixels.
     public static let hardwareSizeSlack = 32
-    /// Hardware cameras are capped here even when a small ROI could run faster.
-    /// Player One `POA_FRAME_LIMIT` uses 0 for unlimited.
+    /// Live-view readout cap. Hardware cameras are held here even when a small
+    /// ROI could run faster. Player One `POA_FRAME_LIMIT` uses 0 for unlimited.
     public static let maxReadoutFPS = 30
+    /// Requested `POA_FRAME_LIMIT` while capturing a stack (0 = unlimited).
+    public static let unlimitedReadoutFPS = 0
 
     public static func clampedReadoutFPS(range: ClosedRange<Int>?) -> Int {
         let requested = maxReadoutFPS
@@ -64,6 +66,14 @@ public enum CaptureLayout {
         let lo = max(range.lowerBound, 1)
         let hi = max(range.upperBound, lo)
         return min(max(requested, lo), hi)
+    }
+
+    /// Fastest allowed readout for stack capture. Prefers unlimited (0) when
+    /// the camera accepts it; otherwise the top of the device range.
+    public static func stackingReadoutFPS(range: ClosedRange<Int>?) -> Int {
+        guard let range else { return unlimitedReadoutFPS }
+        if range.lowerBound <= unlimitedReadoutFPS { return unlimitedReadoutFPS }
+        return range.upperBound
     }
 
     public static func isTrackingCapture(_ frame: Frame) -> Bool {
