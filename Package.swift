@@ -19,8 +19,15 @@ let package = Package(
             publicHeadersPath: "include"
         ),
         .target(
+            name: "CollimationKernels",
+            publicHeadersPath: "include",
+            cSettings: [
+                .unsafeFlags(["-O3"], .when(configuration: .debug))
+            ]
+        ),
+        .target(
             name: "CollimationCore",
-            dependencies: ["POACameraC"],
+            dependencies: ["POACameraC", "CollimationKernels"],
             linkerSettings: [
                 .linkedFramework("Accelerate"),
                 .linkedLibrary("dl")

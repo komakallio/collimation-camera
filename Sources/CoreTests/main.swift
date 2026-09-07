@@ -1675,7 +1675,7 @@ private func testMonoTIFF() throws {
 private func testFrameStacker() throws {
     try expect(FrameStacker.defaultSubframeCount == 100, "100 subframes")
     try expect(FrameStacker.subframeCount == 100, "legacy 100")
-    try expect(FrameStacker.subframeCounts == [10, 50, 100, 500, 1000], "count choices")
+    try expect(FrameStacker.subframeCounts == [10, 50, 100, 500, 1000, 5000, 10000], "count choices")
     try expect(FrameStacker.clampedCount(50) == 50, "valid count")
     try expect(FrameStacker.clampedCount(7) == 100, "invalid count falls back")
     let mid = FrameStacker.bilinearSample(pixels: [10, 20, 30, 40], width: 2, height: 2, x: 0.5, y: 0)
@@ -1723,6 +1723,25 @@ private func testFrameStacker() throws {
         seed: SIMD2(3, 4)
     )
     try expect(fromSeed.pixels[4 * 8 + 3] == 1000, "seed-aligned peak \(fromSeed.pixels[4 * 8 + 3])")
+
+    let gradient = Frame(
+        width: 2,
+        height: 2,
+        pixels: [10, 20, 30, 40],
+        roi: ROI(x: 0, y: 0, width: 2, height: 2)
+    )
+    let shifted = try FrameStacker.average([
+        (gradient, SIMD2(0, 0)),
+        (gradient, SIMD2(0.5, 0))
+    ])
+    try expect(abs(shifted.pixels[0] - 12.5) < 1e-3, "half-pixel bilinear mean \(shifted.pixels[0])")
+
+    let many = try FrameStacker.average(
+        Array(repeating: (dark, SIMD2(1.0, 1.0)), count: 4)
+            + Array(repeating: (bright, SIMD2(1.0, 1.0)), count: 4)
+    )
+    try expect(many.pixels.allSatisfy { abs($0 - 150.5) < 1e-4 }, "parallel mean \(many.pixels)")
+
     let blank = Frame(width: 8, height: 8, pixels: [UInt16](repeating: 0, count: 64), roi: roi)
     do {
         _ = try FrameStacker.average([blank, blank], seed: SIMD2(4, 4))

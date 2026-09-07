@@ -1,3 +1,4 @@
+import CollimationKernels
 import Foundation
 
 public struct StarDetection: Equatable, Sendable {
@@ -298,38 +299,23 @@ public struct StarDetector: Sendable {
         let cx = seed.map { Int($0.x.rounded()) } ?? width / 2
         let cy = seed.map { Int($0.y.rounded()) } ?? height / 2
         let hw = max(32, min(halfWindow, max(width, height)))
-        let x0 = max(0, cx - hw)
-        let y0 = max(0, cy - hw)
-        let x1 = min(width, cx + hw + 1)
-        let y1 = min(height, cy + hw + 1)
-        guard x1 > x0, y1 > y0 else { return nil }
-
-        var peak: UInt16 = 0
-        for y in y0..<y1 {
-            let row = y * width
-            for x in x0..<x1 {
-                let value = frame.pixels[row + x]
-                if value > peak { peak = value }
+        return frame.pixels.withUnsafeBufferPointer { buffer in
+            guard let pixels = buffer.baseAddress else { return nil }
+            var x = 0.0
+            var y = 0.0
+            guard collimation_moment_centroid(
+                pixels,
+                Int32(width),
+                Int32(height),
+                Int32(cx),
+                Int32(cy),
+                Int32(hw),
+                &x,
+                &y
+            ) != 0 else {
+                return nil
             }
+            return SIMD2(x, y)
         }
-        guard peak > 0 else { return nil }
-        let threshold = UInt16(max(1, Int(Double(peak) * 0.35)))
-
-        var sumX = 0.0
-        var sumY = 0.0
-        var flux = 0.0
-        for y in y0..<y1 {
-            let row = y * width
-            for x in x0..<x1 {
-                let value = frame.pixels[row + x]
-                if value < threshold { continue }
-                let weight = Double(value)
-                flux += weight
-                sumX += Double(x) * weight
-                sumY += Double(y) * weight
-            }
-        }
-        guard flux > 0 else { return nil }
-        return SIMD2(sumX / flux, sumY / flux)
     }
 }
