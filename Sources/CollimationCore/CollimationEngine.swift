@@ -303,22 +303,21 @@ public final class CollimationEngine: ObservableObject {
 
     public func suggestedStackedName() -> String {
         let label = "stack\(FrameStacker.clampedCount(stackFrameCount))"
+        let size = CaptureLayout.stackingCropSize
         if let frame = frameSlot.peek()?.frame {
             return MonoTIFF.suggestedFileName(
-                width: frame.width,
-                height: frame.height,
+                width: size,
+                height: size,
                 date: frame.timestamp,
                 label: label
             )
         }
-        let size = overlay.imageWidth > 0 ? overlay.imageWidth : CaptureLayout.displayCropSize
-        let height = overlay.imageHeight > 0 ? overlay.imageHeight : size
-        return MonoTIFF.suggestedFileName(width: max(size, 1), height: max(height, 1), label: label)
+        return MonoTIFF.suggestedFileName(width: size, height: size, label: label)
     }
 
     public func suggestedConstellationName() -> String {
         let frames = FrameStacker.clampedCount(stackFrameCount)
-        let cell = CaptureLayout.displayCropSize
+        let cell = CaptureLayout.stackingCropSize
         let side = cell * ConstellationCapture.gridSize
         let label = "constellation-stack\(frames)"
         if let frame = frameSlot.peek()?.frame {
@@ -501,7 +500,7 @@ public final class CollimationEngine: ObservableObject {
         let frames = try await collectStackedFrames(target: frameCount, onProgress: onProgress)
         try Task.checkCancellation()
         session.requestFrameLimit(CaptureLayout.maxReadoutFPS)
-        let seed = overlay.centroid ?? tracking.centroidInFrame
+        let seed = CaptureLayout.stackingSeed()
         return try await Task.detached(priority: .userInitiated) {
             try FrameStacker.average(frames, seed: seed)
         }.value
@@ -762,7 +761,9 @@ public final class CollimationEngine: ObservableObject {
         let displayed = softwareCrop.apply(frame)
         frameSlot.store(displayed)
         _ = fpsMeter.tick()
-        stackCapture.offer(displayed)
+        if stackCapture.isCapturing {
+            stackCapture.offer(CaptureLayout.stackingFrame(from: displayed))
+        }
         if !stackCapture.isCapturing {
             coalescer.submit(frame)
         }

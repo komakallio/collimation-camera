@@ -27,7 +27,7 @@ public enum ConstellationCapture {
     public static func positions(sensorWidth: Int, sensorHeight: Int) -> [ConstellationPosition] {
         let center = MountGuide.frameCenter(width: sensorWidth, height: sensorHeight)
         let radius = circleDiameterFraction / 2 * Double(max(sensorHeight, 1))
-        let margin = Double(CaptureLayout.displayCropSize) / 2
+        let margin = Double(CaptureLayout.stackingCropSize) / 2
         func clamp(_ point: SIMD2<Double>) -> SIMD2<Double> {
             let maxX = max(margin, Double(max(sensorWidth, 1) - 1) - margin)
             let maxY = max(margin, Double(max(sensorHeight, 1) - 1) - margin)

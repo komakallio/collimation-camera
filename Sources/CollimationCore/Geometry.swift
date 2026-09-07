@@ -52,6 +52,8 @@ public enum CaptureLayout {
     public static let trackingHardwareSize = 2048
     /// Software crop for detection, histogram, coma, FWHM, and live view while tracking.
     public static let displayCropSize = 512
+    /// Crop recorded for Save Stacked and Save Constellation.
+    public static let stackingCropSize = 256
     /// `centeredROI` may shrink a 2048 request by a few pixels.
     public static let hardwareSizeSlack = 32
     /// Live-view readout cap. Hardware cameras are held here even when a small
@@ -96,6 +98,20 @@ public enum CaptureLayout {
         }
         let center = seed ?? SIMD2(Double(frame.width) / 2, Double(frame.height) / 2)
         return frame.cropped(around: center, size: displayCropSize)
+    }
+
+    /// 256×256 around the star for stacked TIFFs. Uses `seed` when given,
+    /// otherwise the frame center (the live 512 crop is already on the star).
+    public static func stackingFrame(from frame: Frame, seed: SIMD2<Double>? = nil) -> Frame {
+        let size = stackingCropSize
+        let shortest = min(frame.width, frame.height)
+        guard shortest > size else { return frame }
+        let center = seed ?? SIMD2(Double(frame.width) / 2, Double(frame.height) / 2)
+        return frame.cropped(around: center, size: size)
+    }
+
+    public static func stackingSeed(cropSize: Int = stackingCropSize) -> SIMD2<Double> {
+        SIMD2(Double(max(cropSize, 1) - 1) / 2, Double(max(cropSize, 1) - 1) / 2)
     }
 
     /// 512×512 around the star on a tracking capture; otherwise the full frame

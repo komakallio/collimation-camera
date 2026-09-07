@@ -801,6 +801,18 @@ private func testSoftwareCrop() throws {
     try expect(shownFull.width == centering.width, "centering preview stays full frame")
     let scan = CaptureLayout.analysisFrame(from: centering, seed: nil)
     try expect(scan.width == centering.width, "search without a seed stays full")
+
+    try expect(CaptureLayout.stackingCropSize == 256, "stack crop")
+    let stackedFromView = CaptureLayout.stackingFrame(from: display)
+    try expect(stackedFromView.width == 256 && stackedFromView.height == 256, "stack from 512 view")
+    try expect(stackedFromView.pixel(x: 128, y: 128) == 999, "star centered in the 256 stack crop")
+    let stackedFromSeed = CaptureLayout.stackingFrame(from: tracking, seed: SIMD2(300, 400))
+    try expect(stackedFromSeed.width == 256, "stack from tracking window")
+    try expect(stackedFromSeed.pixel(x: 128, y: 128) == 999, "seeded stack crop")
+    try expect(
+        CaptureLayout.stackingSeed() == SIMD2(127.5, 127.5),
+        "stack seed \(CaptureLayout.stackingSeed())"
+    )
 }
 
 private func testReadoutFPSCap() throws {

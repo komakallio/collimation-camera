@@ -309,7 +309,7 @@ enum SnapshotExport {
         panel.allowedContentTypes = [.tiff]
         panel.nameFieldStringValue = engine.suggestedStackedName()
         panel.title = "Save stacked TIFF"
-        panel.message = "Captures \(engine.stackFrameCount) ROI frames at full camera readout, registers them on the star centroid, averages, and writes a 32-bit float mono TIFF."
+        panel.message = "Captures \(engine.stackFrameCount) 256×256 crops at full camera readout, registers them on the star centroid, averages, and writes a 32-bit float mono TIFF."
         if let saved = UserDefaults.standard.string(forKey: directoryDefaultsKey) {
             panel.directoryURL = URL(fileURLWithPath: saved, isDirectory: true)
         }
@@ -326,7 +326,7 @@ enum SnapshotExport {
         panel.allowedContentTypes = [.tiff]
         panel.nameFieldStringValue = engine.suggestedConstellationName()
         panel.title = "Save constellation TIFF"
-        panel.message = "Moves the star to the sensor center and eight points on a circle 80% of the frame height, stacks \(engine.stackFrameCount) frames at each 512 crop, and writes a 3×3 mosaic."
+        panel.message = "Moves the star to the sensor center and eight points on a circle 80% of the frame height, stacks \(engine.stackFrameCount) frames at each 256 crop, and writes a 3×3 mosaic."
         if let saved = UserDefaults.standard.string(forKey: directoryDefaultsKey) {
             panel.directoryURL = URL(fileURLWithPath: saved, isDirectory: true)
         }

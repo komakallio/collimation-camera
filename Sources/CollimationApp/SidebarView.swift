@@ -119,12 +119,12 @@ struct SidebarView: View {
                     .pickerStyle(.menu)
                     .fixedSize()
                     .disabled(engine.isStacking)
-                    .help("Number of ROI frames to capture and average")
+                    .help("Number of 256×256 frames to capture and average")
                 }
-                .help("Capture ROI frames at full camera readout, register them on the star centroid, average, and save a 32-bit float TIFF")
+                .help("Capture 256×256 crops at full camera readout, register them on the star centroid, average, and save a 32-bit float TIFF")
                 Button("Save Constellation") { SnapshotExport.presentConstellation(engine: engine) }
                     .disabled(!canSaveConstellation)
-                    .help("Move the star to the sensor center and eight points on an 80% circle, stack each 512 crop, and save a 3×3 mosaic.")
+                    .help("Move the star to the sensor center and eight points on an 80% circle, stack each 256 crop, and save a 3×3 mosaic.")
 
                 HStack(alignment: .bottom, spacing: 8) {
                     CommitSlider(
