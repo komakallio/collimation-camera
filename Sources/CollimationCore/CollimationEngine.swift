@@ -111,6 +111,7 @@ public final class CollimationEngine: ObservableObject {
     @Published public var selectedSerialPort = ""
     @Published public private(set) var isMountConnected = false
     @Published public private(set) var isMountBusy = false
+    @Published public private(set) var showingFullFramePreview = false
     @Published public private(set) var mountWork: MountWork?
     @Published public private(set) var isStacking = false
     @Published public var stackFrameCount = FrameStacker.defaultSubframeCount
@@ -128,8 +129,16 @@ public final class CollimationEngine: ObservableObject {
     @Published public var selectedFilterPosition = 0
 
     public static let minZoom = 0.25
+    /// Below `minZoom` so an unbinned full sensor can fit in a typical window.
+    public static let minFullFrameZoom = 0.05
     public static let maxZoom = 8.0
     public var isMountCalibrated: Bool { guideCalibration?.isValid == true }
+
+    /// Lower zoom bound. Full-frame centering/constellation slews must go
+    /// below `minZoom` or the live view still clips stars near the edges.
+    public var zoomFloor: Double {
+        showingFullFramePreview ? Self.minFullFrameZoom : Self.minZoom
+    }
 
     nonisolated private let session = CaptureSession()
     nonisolated private let pipeline = FramePipeline()
@@ -153,6 +162,7 @@ public final class CollimationEngine: ObservableObject {
     private var autoExposeTask: Task<Void, Never>?
     private var filterWheelTask: Task<Void, Never>?
     private var mountHoldsROI = false
+    private var zoomBeforeFullFrame: Double?
     private var hardwareFilterPosition: Int?
     private static let serialPortDefaultsKey = "mount.serialPort"
     private static let filterWheelDefaultsKey = "filterWheel.id"
@@ -542,6 +552,8 @@ public final class CollimationEngine: ObservableObject {
         frameSlot.clear()
         softwareCrop.reset()
         stabilization.reset()
+        showingFullFramePreview = false
+        zoomBeforeFullFrame = nil
         optics = .poseidon
         updateStabilization()
         statusText = "Disconnected"
@@ -695,21 +707,22 @@ public final class CollimationEngine: ObservableObject {
     public func fitZoom(viewWidth: Double? = nil, viewHeight: Double? = nil) {
         let size = overlay.imageWidth == 0 ? CaptureLayout.displayCropSize : overlay.imageWidth
         let height = overlay.imageHeight == 0 ? size : overlay.imageHeight
-        zoom = min(
-            Self.maxZoom,
-            max(Self.minZoom, ImageLayout.fitZoom(
-                imageWidth: size,
-                imageHeight: height,
-                viewWidth: viewWidth ?? self.viewWidth,
-                viewHeight: viewHeight ?? self.viewHeight
-            ))
-        )
+        zoom = clampedZoom(ImageLayout.fitZoom(
+            imageWidth: size,
+            imageHeight: height,
+            viewWidth: viewWidth ?? self.viewWidth,
+            viewHeight: viewHeight ?? self.viewHeight
+        ))
         updateStabilization()
     }
 
     public func clampZoom() {
-        zoom = min(Self.maxZoom, max(Self.minZoom, zoom))
+        zoom = clampedZoom(zoom)
         updateStabilization()
+    }
+
+    public func clampedZoom(_ value: Double) -> Double {
+        min(Self.maxZoom, max(zoomFloor, value))
     }
 
     public func updateStabilization() {
@@ -737,7 +750,7 @@ public final class CollimationEngine: ObservableObject {
             // Lock and centroid for a live frame are written by the renderer.
             // Drop them here when they must not apply: stab off, or a full-frame
             // search whose pixels are not the crop the lock was measured on.
-            if !stabilize || tracking.state == .searching {
+            if !stabilize || tracking.state == .searching || showingFullFramePreview {
                 state.stabilizeLock = nil
                 state.stabilizeCentroid = nil
             }
@@ -1079,11 +1092,7 @@ public final class CollimationEngine: ObservableObject {
         mountHoldsROI = holdROI
         applyPipelineConfig()
         if useFullFrame {
-            coalescer.cancel()
-            softwareCrop.reset()
-            session.requestROI(
-                Alignment.fullFrameROI(sensorWidth: sensorWidth, sensorHeight: sensorHeight, binning: 1)
-            )
+            showFullFramePreview()
         }
     }
 
@@ -1107,6 +1116,8 @@ public final class CollimationEngine: ObservableObject {
     }
 
     private func applyTrackingWindow(around sensor: SIMD2<Double>) {
+        showingFullFramePreview = false
+        restoreZoomAfterFullFrame()
         coalescer.cancel()
         softwareCrop.update(enabled: true, sensorCentroid: sensor)
         session.requestROI(
@@ -1119,12 +1130,34 @@ public final class CollimationEngine: ObservableObject {
         )
     }
 
-    private func enterFullFrame() async throws {
+    private func showFullFramePreview() {
         coalescer.cancel()
         softwareCrop.reset()
+        showingFullFramePreview = true
+        if zoomBeforeFullFrame == nil {
+            zoomBeforeFullFrame = zoom
+        }
         session.requestROI(
             Alignment.fullFrameROI(sensorWidth: sensorWidth, sensorHeight: sensorHeight, binning: 1)
         )
+        zoom = clampedZoom(ImageLayout.fitZoom(
+            imageWidth: sensorWidth,
+            imageHeight: sensorHeight,
+            viewWidth: viewWidth,
+            viewHeight: viewHeight
+        ))
+        updateStabilization()
+    }
+
+    private func restoreZoomAfterFullFrame() {
+        guard let saved = zoomBeforeFullFrame else { return }
+        zoomBeforeFullFrame = nil
+        zoom = min(Self.maxZoom, max(Self.minZoom, saved))
+        updateStabilization()
+    }
+
+    private func enterFullFrame() async throws {
+        showFullFramePreview()
         _ = try await waitForCentroid(minNewFrames: 2, timeout: 12)
     }
 
@@ -1189,9 +1222,11 @@ public final class CollimationEngine: ObservableObject {
                 return
             }
             let remaining = axis == .ra ? axisPixels.ra : axisPixels.dec
+            let pxPerMs = calibration.pixelsPerMillisecond(on: axis)
             guard let plan = AxisCentering.plan(
                 axis: axis,
                 remainingPixels: remaining,
+                pixelsPerMsAt1x: pxPerMs,
                 lastRate: lastRate,
                 lastSign: lastSign
             ) else { return }
@@ -1199,11 +1234,9 @@ public final class CollimationEngine: ObservableObject {
             lastRate = plan.rate
             lastSign = remaining
 
-            let remainingOnAxis = calibration.remainingOnAxis(axis, movingStarBy: target - centroid)
-                ?? (target - centroid)
             let sliceMs = MountGuide.nudgeSliceMilliseconds(
-                remaining: remainingOnAxis,
-                calibration: calibration,
+                remainingPixels: remaining,
+                pixelsPerMsAt1x: pxPerMs,
                 rate: plan.rate
             )
             mountStatus = String(

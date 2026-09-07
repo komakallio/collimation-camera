@@ -23,12 +23,12 @@ struct LiveView: NSViewRepresentable {
         view.onScroll = { delta in
             Task { @MainActor in
                 let factor = delta > 0 ? 1.08 : 0.92
-                engine.zoom = min(CollimationEngine.maxZoom, max(CollimationEngine.minZoom, engine.zoom * factor))
+                engine.zoom = engine.clampedZoom(engine.zoom * factor)
             }
         }
         view.onMagnify = { magnification in
             Task { @MainActor in
-                engine.zoom = min(CollimationEngine.maxZoom, max(CollimationEngine.minZoom, engine.zoom * Double(magnification)))
+                engine.zoom = engine.clampedZoom(engine.zoom * Double(magnification))
             }
         }
         return view

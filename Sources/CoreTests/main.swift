@@ -782,6 +782,8 @@ private func testSoftwareCrop() throws {
     let local = CaptureLayout.analysisFrame(from: centering, seed: SIMD2(1000, 800))
     try expect(local.width == CaptureLayout.displayCropSize, "centering analysis crop \(local.width)")
     try expect(local.pixel(x: 256, y: 256) == 40000, "star centered in the centering crop")
+    let shownFull = CaptureLayout.displayFrame(from: centering, tracking: .tracking, centroid: SIMD2(1000, 800))
+    try expect(shownFull.width == centering.width, "centering preview stays full frame")
     let scan = CaptureLayout.analysisFrame(from: centering, seed: nil)
     try expect(scan.width == centering.width, "search without a seed stays full")
 }
@@ -1370,11 +1372,17 @@ private func testGuideNudgeSlice() throws {
         sampleDurationMs: 800
     )
     let far = MountGuide.nudgeSliceMilliseconds(
-        remaining: SIMD2(20_000, 0),
-        calibration: calibration,
+        remainingPixels: 20_000,
+        pixelsPerMsAt1x: 0.01,
         rate: 4
     )
     try expect(far == MountGuide.maxNudgeSliceMs, "cap long slews \(far)")
+    let oneSecond = MountGuide.nudgeSliceMilliseconds(
+        remainingPixels: 320,
+        pixelsPerMsAt1x: 0.01,
+        rate: 4
+    )
+    try expect(abs(oneSecond - 1_000) <= 20, "32x covers 320 px in ~1s \(oneSecond)")
     let near = MountGuide.nudgeSliceMilliseconds(
         remaining: SIMD2(20, 0),
         calibration: calibration,
@@ -1382,6 +1390,8 @@ private func testGuideNudgeSlice() throws {
     )
     try expect(near >= MountGuide.minNudgeSliceMs, "minimum \(near)")
     try expect(near <= MountGuide.maxNudgeSliceMs, "not over cap \(near)")
+    try expect(abs(calibration.pixelsPerMillisecond(on: .ra) - 0.01) < 1e-12, "ra 1x rate")
+    try expect(abs(calibration.pixelsPerMillisecond(on: .dec) - 0.01) < 1e-12, "dec 1x rate")
 }
 
 private func testSynScanFixedRate() throws {
@@ -1438,9 +1448,11 @@ private func testSynScanPadNudge() throws {
     try expect(SynScanGuide.siderealMultiple(1) == 1, "rate 1")
     try expect(SynScanGuide.siderealMultiple(2) == 8, "rate 2")
     try expect(SynScanGuide.siderealMultiple(9) == 800, "rate 9")
-    try expect(SynScanGuide.rate(forDistancePixels: 3000) == 4, "far")
-    try expect(SynScanGuide.rate(forDistancePixels: 80) == 2, "near")
-    try expect(SynScanGuide.rate(forDistancePixels: 20) == 1, "fine")
+    try expect(SynScanGuide.rateForTargetDuration(remainingPixels: 10, pixelsPerMsAt1x: 0.01) == 1, "10 px ~1s at 1x")
+    try expect(SynScanGuide.rateForTargetDuration(remainingPixels: 80, pixelsPerMsAt1x: 0.01) == 2, "80 px ~1s at 8x")
+    try expect(SynScanGuide.rateForTargetDuration(remainingPixels: 160, pixelsPerMsAt1x: 0.01) == 3, "160 px ~1s at 16x")
+    try expect(SynScanGuide.rateForTargetDuration(remainingPixels: 320, pixelsPerMsAt1x: 0.01) == 4, "320 px ~1s at 32x")
+    try expect(SynScanGuide.rateForTargetDuration(remainingPixels: 2_000, pixelsPerMsAt1x: 0.01) == 4, "far stays at pad 4")
     try expect(PadNudge(ra: .east, dec: nil, rate: 9).rate == 4, "never above pad rate 4")
     let calibration = GuideCalibration(
         eastRate: SIMD2(0.01, 0),
@@ -1504,26 +1516,26 @@ private func testAxisCentering() throws {
     try expect(!AxisCentering.overshot(remaining: 50, previousSign: 80), "same sign")
     try expect(AxisCentering.overshot(remaining: -40, previousSign: 80), "sign flip")
 
-    try expect(AxisCentering.nextRate(remainingPixels: 800, lastRate: nil, overshot: false) == 4, "start far")
-    try expect(AxisCentering.nextRate(remainingPixels: 200, lastRate: 4, overshot: false) == 3, "slow as we close")
-    try expect(AxisCentering.nextRate(remainingPixels: -80, lastRate: 3, overshot: true) == 2, "overshoot drops rate")
-    try expect(AxisCentering.nextRate(remainingPixels: 200, lastRate: 2, overshot: false) == 2, "do not speed back up")
-    try expect(AxisCentering.nextRate(remainingPixels: 10, lastRate: 1, overshot: true) == 1, "rate 1 stays 1")
+    try expect(AxisCentering.nextRate(remainingPixels: 800, pixelsPerMsAt1x: 0.01, lastRate: nil, overshot: false) == 4, "start far")
+    try expect(AxisCentering.nextRate(remainingPixels: 160, pixelsPerMsAt1x: 0.01, lastRate: 4, overshot: false) == 3, "slow as we close")
+    try expect(AxisCentering.nextRate(remainingPixels: -80, pixelsPerMsAt1x: 0.01, lastRate: 3, overshot: true) == 2, "overshoot drops rate")
+    try expect(AxisCentering.nextRate(remainingPixels: 200, pixelsPerMsAt1x: 0.01, lastRate: 2, overshot: false) == 2, "do not speed back up")
+    try expect(AxisCentering.nextRate(remainingPixels: 10, pixelsPerMsAt1x: 0.01, lastRate: 1, overshot: true) == 1, "rate 1 stays 1")
 
     try expect(AxisCentering.direction(axis: .ra, remainingPixels: 50) == .east, "east")
     try expect(AxisCentering.direction(axis: .ra, remainingPixels: -50) == .west, "west")
     try expect(AxisCentering.direction(axis: .dec, remainingPixels: 50) == .north, "north")
     try expect(AxisCentering.direction(axis: .dec, remainingPixels: -50) == .south, "south")
 
-    let first = AxisCentering.plan(axis: .ra, remainingPixels: 800, lastRate: nil, lastSign: nil)
+    let first = AxisCentering.plan(axis: .ra, remainingPixels: 800, pixelsPerMsAt1x: 0.01, lastRate: nil, lastSign: nil)
     try expect(first?.direction == .east && first?.rate == 4 && first?.overshot == false, "first ra plan")
     try expect(first?.padNudge.ra == .east && first?.padNudge.dec == nil, "single-axis ra nudge")
-    let reverse = AxisCentering.plan(axis: .ra, remainingPixels: -90, lastRate: 4, lastSign: 800)
+    let reverse = AxisCentering.plan(axis: .ra, remainingPixels: -90, pixelsPerMsAt1x: 0.01, lastRate: 4, lastSign: 800)
     try expect(reverse?.direction == .west && reverse?.rate == 3 && reverse?.overshot == true, "overshoot reverse")
     try expect(reverse?.padNudge.dec == nil, "still only ra")
-    let decPlan = AxisCentering.plan(axis: .dec, remainingPixels: 200, lastRate: nil, lastSign: nil)
+    let decPlan = AxisCentering.plan(axis: .dec, remainingPixels: 200, pixelsPerMsAt1x: 0.01, lastRate: nil, lastSign: nil)
     try expect(decPlan?.direction == .north && decPlan?.padNudge.ra == nil, "single-axis dec")
-    try expect(AxisCentering.plan(axis: .ra, remainingPixels: 10, lastRate: 1, lastSign: 10) == nil, "axis done")
+    try expect(AxisCentering.plan(axis: .ra, remainingPixels: 10, pixelsPerMsAt1x: 0.01, lastRate: 1, lastSign: 10) == nil, "axis done")
 }
 
 private func testFilterSlotDisplayName() throws {

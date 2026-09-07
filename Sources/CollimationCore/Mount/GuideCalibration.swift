@@ -65,6 +65,14 @@ public struct GuideCalibration: Equatable, Sendable, Codable {
             && hypot(northX, northY) > 1e-5
     }
 
+    /// Sidereal (rate 1) speed of this axis in sensor pixels per millisecond.
+    public func pixelsPerMillisecond(on axis: MountAxis) -> Double {
+        switch axis {
+        case .ra: return hypot(eastX, eastY)
+        case .dec: return hypot(northX, northY)
+        }
+    }
+
     /// Pulse durations that move the star by `delta` sensor pixels.
     /// Negative East time means West; negative North time means South.
     public func pulses(toMoveStarBy delta: SIMD2<Double>) -> (eastMs: Double, northMs: Double)? {
@@ -173,10 +181,14 @@ public enum AxisCentering {
 
     public static func nextRate(
         remainingPixels: Double,
+        pixelsPerMsAt1x: Double,
         lastRate: UInt8?,
         overshot: Bool
     ) -> UInt8 {
-        let suggested = SynScanGuide.rate(forDistancePixels: abs(remainingPixels))
+        let suggested = SynScanGuide.rateForTargetDuration(
+            remainingPixels: abs(remainingPixels),
+            pixelsPerMsAt1x: pixelsPerMsAt1x
+        )
         guard let lastRate else { return suggested }
         if overshot {
             return max(1, lastRate - 1)
@@ -195,6 +207,7 @@ public enum AxisCentering {
     public static func plan(
         axis: MountAxis,
         remainingPixels: Double,
+        pixelsPerMsAt1x: Double,
         lastRate: UInt8?,
         lastSign: Double?
     ) -> Plan? {
@@ -202,7 +215,12 @@ public enum AxisCentering {
               let direction = Self.direction(axis: axis, remainingPixels: remainingPixels)
         else { return nil }
         let didOvershoot = Self.overshot(remaining: remainingPixels, previousSign: lastSign)
-        let rate = nextRate(remainingPixels: remainingPixels, lastRate: lastRate, overshot: didOvershoot)
+        let rate = nextRate(
+            remainingPixels: remainingPixels,
+            pixelsPerMsAt1x: pixelsPerMsAt1x,
+            lastRate: lastRate,
+            overshot: didOvershoot
+        )
         return Plan(axis: axis, direction: direction, rate: rate, overshot: didOvershoot)
     }
 }
@@ -248,9 +266,9 @@ public enum MountGuide {
     public static let slewAxisStopPixels = 40.0
     public static let minCalibrationMovePixels = 3.0
     public static let settleMilliseconds = 1_200
-    public static let minNudgeSliceMs = 80
-    public static let maxNudgeSliceMs = 5_000
-    public static let nudgeSliceFraction = 0.45
+    public static let minNudgeSliceMs = 200
+    public static let maxNudgeSliceMs = 1_500
+    public static let targetSlewMilliseconds = 1_000.0
 
     public static func frameCenter(width: Int, height: Int) -> SIMD2<Double> {
         SIMD2(Double(max(width, 1) - 1) / 2, Double(max(height, 1) - 1) / 2)
@@ -281,20 +299,31 @@ public enum MountGuide {
         hypot(error.x, error.y)
     }
 
-    /// How long to run a pad-rate nudge before stopping to measure again.
-    /// Full-frame centering is slow, so a continuous slew overshoots badly.
+    /// Run a pad-rate slew so the remaining on-axis distance takes about 1 s.
+    public static func nudgeSliceMilliseconds(
+        remainingPixels: Double,
+        pixelsPerMsAt1x: Double,
+        rate: UInt8
+    ) -> Int {
+        let multiple = max(SynScanGuide.siderealMultiple(rate), 1)
+        let pxPerMs = pixelsPerMsAt1x * multiple
+        guard pxPerMs > 1e-9 else { return Int(targetSlewMilliseconds) }
+        let ms = abs(remainingPixels) / pxPerMs
+        return Int(min(max(ms, Double(minNudgeSliceMs)), Double(maxNudgeSliceMs)).rounded())
+    }
+
     public static func nudgeSliceMilliseconds(
         remaining: SIMD2<Double>,
         calibration: GuideCalibration,
         rate: UInt8
     ) -> Int {
-        guard let times = calibration.pulses(toMoveStarBy: remaining) else {
-            return minNudgeSliceMs
-        }
-        let multiple = max(SynScanGuide.siderealMultiple(rate), 1)
-        let msAtRate = max(abs(times.eastMs), abs(times.northMs)) / multiple
-        let sliced = msAtRate * nudgeSliceFraction
-        return Int(min(max(sliced, Double(minNudgeSliceMs)), Double(maxNudgeSliceMs)).rounded())
+        let px = max(abs(remaining.x), abs(remaining.y))
+        let axis: MountAxis = abs(remaining.x) >= abs(remaining.y) ? .ra : .dec
+        return nudgeSliceMilliseconds(
+            remainingPixels: px,
+            pixelsPerMsAt1x: calibration.pixelsPerMillisecond(on: axis),
+            rate: rate
+        )
     }
 }
 
@@ -429,6 +458,22 @@ public enum SynScanGuide {
         case 40...: return 2
         default: return 1
         }
+    }
+
+    /// Slowest pad rate (1–4) that covers `remainingPixels` in about one second.
+    public static func rateForTargetDuration(
+        remainingPixels: Double,
+        pixelsPerMsAt1x: Double,
+        targetMs: Double = MountGuide.targetSlewMilliseconds
+    ) -> UInt8 {
+        let px = abs(remainingPixels)
+        let duration = max(targetMs, 1)
+        guard pixelsPerMsAt1x > 1e-9 else { return 1 }
+        let neededMultiple = px / (pixelsPerMsAt1x * duration)
+        for rate: UInt8 in 1...4 {
+            if siderealMultiple(rate) + 1e-9 >= neededMultiple { return rate }
+        }
+        return 4
     }
 
     public static func nudge(

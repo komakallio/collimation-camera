@@ -281,7 +281,7 @@ struct SidebarView: View {
     private var roiSection: some View {
         GroupBox("ROI & zoom") {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Camera 2048×2048, view 512×512 around the star. Full frame while searching.")
+                Text("Camera 2048×2048, view 512×512 around the star. Full frame while searching, centering, or saving a constellation.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -297,7 +297,7 @@ struct SidebarView: View {
 
                 HStack {
                     Text("Zoom")
-                    Slider(value: $engine.zoom, in: CollimationEngine.minZoom...CollimationEngine.maxZoom)
+                    Slider(value: $engine.zoom, in: engine.zoomFloor...CollimationEngine.maxZoom)
                     Text(String(format: "%.0f%%", engine.zoom * 100))
                         .font(.caption.monospacedDigit())
                         .frame(width: 48, alignment: .trailing)
