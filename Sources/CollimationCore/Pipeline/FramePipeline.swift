@@ -52,6 +52,13 @@ final class FramePipeline: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Drop analysis that is already in `process` so it cannot apply a stale ROI.
+    func dropInFlight() {
+        lock.lock()
+        generation &+= 1
+        lock.unlock()
+    }
+
     func markSearching() {
         lock.lock()
         tracker.markSearching()
@@ -62,9 +69,6 @@ final class FramePipeline: @unchecked Sendable {
     func process(_ frame: Frame) -> ProcessedFrame? {
         lock.lock()
         let generation = self.generation
-        let autoCenter = self.autoCenter
-        let autoSearch = self.autoSearch
-        let holdROI = self.holdROI
         let sensorWidth = self.sensorWidth
         let sensorHeight = self.sensorHeight
         let optics = self.optics
@@ -101,13 +105,15 @@ final class FramePipeline: @unchecked Sendable {
         var next = tracker.process(
             frame: frame,
             detection: found?.offsetBy(origin),
-            autoCenter: autoCenter && !holdROI,
-            autoSearch: autoSearch && !holdROI,
+            autoCenter: self.autoCenter && !self.holdROI,
+            autoSearch: self.autoSearch && !self.holdROI,
             trackingROISize: CaptureLayout.trackingHardwareSize,
             sensorWidth: sensorWidth,
             sensorHeight: sensorHeight
         )
-        if holdROI {
+        // Re-read after detection: Center can raise holdROI while this frame
+        // was still being searched, and a stale 2048 request would win.
+        if self.holdROI {
             next.requestedROI = nil
         }
         if let sensor = next.centroidOnSensor {

@@ -771,7 +771,7 @@ public final class CollimationEngine: ObservableObject {
     private nonisolated func analyze(_ frame: Frame) {
         guard let processed = pipeline.process(frame) else { return }
         if let roi = processed.tracking.requestedROI {
-            session.requestROI(roi)
+            session.requestTrackerROI(roi)
         }
         softwareCrop.update(
             enabled: CaptureLayout.isTrackingCapture(frame),
@@ -863,11 +863,11 @@ public final class CollimationEngine: ObservableObject {
         mountWork = nil
         axisDirections = AxisDirectionMemory()
         let restoreDisplay = mountHoldsROI
-        mountHoldsROI = false
-        applyPipelineConfig()
         if restoreDisplay {
             restoreTrackingDisplay()
         }
+        mountHoldsROI = false
+        applyPipelineConfig()
         mountStatus = isMountCalibrated ? "Calibrated — mount disconnected" : "No mount"
     }
 
@@ -1108,13 +1108,13 @@ public final class CollimationEngine: ObservableObject {
 
     private func endMountWork(_ status: String) {
         mount.haltMotions()
+        restoreTrackingDisplay()
         mountHoldsROI = false
         applyPipelineConfig()
         isMountBusy = false
         mountWork = nil
         mountStatus = status
         mountTask = nil
-        restoreTrackingDisplay()
     }
 
     /// Put the camera back on the 2048 tracking window so the live view is the 512 crop.
@@ -1129,6 +1129,8 @@ public final class CollimationEngine: ObservableObject {
         showingFullFramePreview = false
         restoreZoomAfterFullFrame()
         coalescer.cancel()
+        pipeline.dropInFlight()
+        softwareCrop.setHoldDisabled(false)
         softwareCrop.update(enabled: true, sensorCentroid: sensor)
         session.requestROI(
             Alignment.centeredROI(
@@ -1142,7 +1144,8 @@ public final class CollimationEngine: ObservableObject {
 
     private func showFullFramePreview() {
         coalescer.cancel()
-        softwareCrop.reset()
+        pipeline.dropInFlight()
+        softwareCrop.setHoldDisabled(true)
         showingFullFramePreview = true
         if zoomBeforeFullFrame == nil {
             zoomBeforeFullFrame = zoom
@@ -1335,6 +1338,7 @@ public final class CollimationEngine: ObservableObject {
             holdROI: holdsROI,
             optics: optics
         )
+        session.setHoldROI(holdsROI)
     }
 
     private var holdsROI: Bool { mountHoldsROI || isStacking }

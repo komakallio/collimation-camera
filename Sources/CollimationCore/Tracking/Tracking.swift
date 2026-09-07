@@ -88,13 +88,18 @@ public struct Tracker: Sendable {
             lastSensorCentroid = sensor
 
             if state == .searching {
-                let roi = Alignment.centeredROI(
-                    around: sensor,
-                    size: trackingROISize,
-                    sensorWidth: sensorWidth,
-                    sensorHeight: sensorHeight,
-                    binning: 1
-                )
+                let roi: ROI?
+                if autoCenter || autoSearch {
+                    roi = Alignment.centeredROI(
+                        around: sensor,
+                        size: trackingROISize,
+                        sensorWidth: sensorWidth,
+                        sensorHeight: sensorHeight,
+                        binning: 1
+                    )
+                } else {
+                    roi = nil
+                }
                 state = .tracking
                 lastMove = now
                 return TrackingStatus(

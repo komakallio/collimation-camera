@@ -103,19 +103,40 @@ public final class FrameSlot: @unchecked Sendable {
 public final class SoftwareCropController: @unchecked Sendable {
     private let lock = NSLock()
     private var enabled = false
+    private var holdDisabled = false
     private var sensorCentroid: SIMD2<Double>?
 
     public init() {}
 
     public func update(enabled: Bool, sensorCentroid: SIMD2<Double>?) {
         lock.lock()
+        if holdDisabled {
+            lock.unlock()
+            return
+        }
         self.enabled = enabled
         self.sensorCentroid = sensorCentroid
         lock.unlock()
     }
 
+    /// Full-frame mount slews: ignore leftover tracking frames that would
+    /// turn the 512 crop back on.
+    public func setHoldDisabled(_ hold: Bool) {
+        lock.lock()
+        holdDisabled = hold
+        if hold {
+            enabled = false
+            sensorCentroid = nil
+        }
+        lock.unlock()
+    }
+
     public func reset() {
-        update(enabled: false, sensorCentroid: nil)
+        lock.lock()
+        holdDisabled = false
+        enabled = false
+        sensorCentroid = nil
+        lock.unlock()
     }
 
     public func apply(_ frame: Frame) -> Frame {

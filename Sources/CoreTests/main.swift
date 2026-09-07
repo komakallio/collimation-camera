@@ -718,6 +718,20 @@ private func testSearchRecovery() throws {
         status.requestedROI?.width == 800 || status.requestedROI?.width == 796,
         "tracking window \(String(describing: status.requestedROI?.width))"
     )
+
+    var held = Tracker()
+    held.markSearching()
+    let heldStatus = held.process(
+        frame: frame,
+        detection: detection,
+        autoCenter: false,
+        autoSearch: false,
+        trackingROISize: CaptureLayout.trackingHardwareSize,
+        sensorWidth: 800,
+        sensorHeight: 600
+    )
+    try expect(heldStatus.state == TrackingState.tracking, "still tracking")
+    try expect(heldStatus.requestedROI == nil, "mount hold must not snap back to 2048")
 }
 
 private func testSoftwareCrop() throws {

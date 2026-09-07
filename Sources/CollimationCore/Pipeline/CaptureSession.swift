@@ -12,6 +12,9 @@ public final class CaptureSession: @unchecked Sendable {
     private var pendingExposure: Int?
     private var pendingGain: Int?
     private var pendingFrameLimit: Int?
+    /// When true, tracker-driven ROI changes are ignored so a full-frame
+    /// centering slew cannot be snapped back to the 2048 window.
+    private var holdROI = false
     private let loopGroup = DispatchGroup()
 
     public init() {}
@@ -31,6 +34,7 @@ public final class CaptureSession: @unchecked Sendable {
         pendingExposure = nil
         pendingGain = nil
         pendingFrameLimit = nil
+        holdROI = false
         stateLock.unlock()
 
         loopGroup.enter()
@@ -59,9 +63,25 @@ public final class CaptureSession: @unchecked Sendable {
     }
 
     public func requestROI(_ roi: ROI) {
+        requestROI(roi, fromTracker: false)
+    }
+
+    /// Tracker recenters. Ignored while mount work is holding the ROI.
+    public func requestTrackerROI(_ roi: ROI) {
+        requestROI(roi, fromTracker: true)
+    }
+
+    public func setHoldROI(_ hold: Bool) {
         stateLock.lock()
-        pendingROI = roi
+        holdROI = hold
         stateLock.unlock()
+    }
+
+    private func requestROI(_ roi: ROI, fromTracker: Bool) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        if fromTracker, holdROI { return }
+        pendingROI = roi
     }
 
     public func requestExposure(_ microseconds: Int) {
