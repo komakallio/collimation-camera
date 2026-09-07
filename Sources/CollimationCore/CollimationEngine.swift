@@ -1211,7 +1211,6 @@ public final class CollimationEngine: ObservableObject {
         centroid: inout SIMD2<Double>,
         deadline: Date
     ) async throws {
-        var lastRate: UInt8?
         var lastSign: Double?
 
         while Date() < deadline {
@@ -1227,26 +1226,19 @@ public final class CollimationEngine: ObservableObject {
                 axis: axis,
                 remainingPixels: remaining,
                 pixelsPerMsAt1x: pxPerMs,
-                lastRate: lastRate,
                 lastSign: lastSign
             ) else { return }
 
-            lastRate = plan.rate
             lastSign = remaining
 
-            let sliceMs = MountGuide.nudgeSliceMilliseconds(
-                remainingPixels: remaining,
-                pixelsPerMsAt1x: pxPerMs,
-                rate: plan.rate
-            )
             mountStatus = String(
-                format: "Centering %@ %.0fx — %.0f px on axis",
+                format: "Centering %@ %.1f× — %.0f px on axis",
                 axis.displayName,
-                SynScanGuide.siderealMultiple(plan.rate),
+                plan.siderealMultiple,
                 abs(remaining)
             )
-            try await mount.applyNudge(plan.padNudge)
-            try await sleepMilliseconds(sliceMs)
+            try await mount.applyNudge(plan.nudge)
+            try await sleepMilliseconds(plan.durationMs)
             try await mount.applyNudge(nil)
 
             centroid = try await waitForSettledCentroid()

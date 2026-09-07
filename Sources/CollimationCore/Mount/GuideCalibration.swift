@@ -136,18 +136,22 @@ public enum MountAxis: String, Equatable, Sendable {
 }
 
 /// Sequential one-axis centering: finish RA or Dec, then the other.
-/// An overshoot drops the SynScan pad rate by one for the reverse correction.
+/// Each slew uses the sidereal multiple that covers the remaining distance
+/// in about one second.
 public enum AxisCentering {
     public struct Plan: Equatable, Sendable {
         public var axis: MountAxis
         public var direction: GuideDirection
-        public var rate: UInt8
+        public var siderealMultiple: Double
+        public var durationMs: Int
         public var overshot: Bool
 
-        public var padNudge: PadNudge {
+        public var nudge: SlewNudge {
             switch axis {
-            case .ra: return PadNudge(ra: direction, dec: nil, rate: rate)
-            case .dec: return PadNudge(ra: nil, dec: direction, rate: rate)
+            case .ra:
+                return SlewNudge(ra: direction, dec: nil, siderealMultiple: siderealMultiple)
+            case .dec:
+                return SlewNudge(ra: nil, dec: direction, siderealMultiple: siderealMultiple)
             }
         }
     }
@@ -179,23 +183,6 @@ public enum AxisCentering {
         return (previous > 0) != (remaining > 0)
     }
 
-    public static func nextRate(
-        remainingPixels: Double,
-        pixelsPerMsAt1x: Double,
-        lastRate: UInt8?,
-        overshot: Bool
-    ) -> UInt8 {
-        let suggested = SynScanGuide.rateForTargetDuration(
-            remainingPixels: abs(remainingPixels),
-            pixelsPerMsAt1x: pixelsPerMsAt1x
-        )
-        guard let lastRate else { return suggested }
-        if overshot {
-            return max(1, lastRate - 1)
-        }
-        return min(suggested, lastRate)
-    }
-
     public static func direction(axis: MountAxis, remainingPixels: Double) -> GuideDirection? {
         guard remainingPixels != 0 else { return nil }
         switch axis {
@@ -208,20 +195,22 @@ public enum AxisCentering {
         axis: MountAxis,
         remainingPixels: Double,
         pixelsPerMsAt1x: Double,
-        lastRate: UInt8?,
-        lastSign: Double?
+        lastSign: Double? = nil
     ) -> Plan? {
         guard !isAxisCentered(remainingPixels),
               let direction = Self.direction(axis: axis, remainingPixels: remainingPixels)
         else { return nil }
-        let didOvershoot = Self.overshot(remaining: remainingPixels, previousSign: lastSign)
-        let rate = nextRate(
+        let speed = MountGuide.slewSpeed(
             remainingPixels: remainingPixels,
-            pixelsPerMsAt1x: pixelsPerMsAt1x,
-            lastRate: lastRate,
-            overshot: didOvershoot
+            pixelsPerMsAt1x: pixelsPerMsAt1x
         )
-        return Plan(axis: axis, direction: direction, rate: rate, overshot: didOvershoot)
+        return Plan(
+            axis: axis,
+            direction: direction,
+            siderealMultiple: speed.siderealMultiple,
+            durationMs: speed.durationMs,
+            overshot: Self.overshot(remaining: remainingPixels, previousSign: lastSign)
+        )
     }
 }
 
@@ -299,32 +288,31 @@ public enum MountGuide {
         hypot(error.x, error.y)
     }
 
-    /// Run a pad-rate slew so the remaining on-axis distance takes about 1 s.
-    public static func nudgeSliceMilliseconds(
-        remainingPixels: Double,
-        pixelsPerMsAt1x: Double,
-        rate: UInt8
-    ) -> Int {
-        let multiple = max(SynScanGuide.siderealMultiple(rate), 1)
-        let pxPerMs = pixelsPerMsAt1x * multiple
-        guard pxPerMs > 1e-9 else { return Int(targetSlewMilliseconds) }
-        let ms = abs(remainingPixels) / pxPerMs
-        return Int(min(max(ms, Double(minNudgeSliceMs)), Double(maxNudgeSliceMs)).rounded())
+    public struct SlewSpeed: Equatable, Sendable {
+        public var siderealMultiple: Double
+        public var durationMs: Int
     }
 
-    public static func nudgeSliceMilliseconds(
-        remaining: SIMD2<Double>,
-        calibration: GuideCalibration,
-        rate: UInt8
-    ) -> Int {
-        let px = max(abs(remaining.x), abs(remaining.y))
-        let axis: MountAxis = abs(remaining.x) >= abs(remaining.y) ? .ra : .dec
-        return nudgeSliceMilliseconds(
-            remainingPixels: px,
-            pixelsPerMsAt1x: calibration.pixelsPerMillisecond(on: axis),
-            rate: rate
-        )
+    /// Sidereal multiple and run time so `remainingPixels` is covered in about 1 s.
+    public static func slewSpeed(
+        remainingPixels: Double,
+        pixelsPerMsAt1x: Double,
+        targetMs: Double = targetSlewMilliseconds,
+        maxMultiple: Double = SkyWatcherEncoding.maxSlowSlewMultiple
+    ) -> SlewSpeed {
+        let px = abs(remainingPixels)
+        let duration = max(targetMs, 1)
+        guard pixelsPerMsAt1x > 1e-9 else {
+            return SlewSpeed(siderealMultiple: minSiderealMultiple, durationMs: Int(duration.rounded()))
+        }
+        let needed = px / (pixelsPerMsAt1x * duration)
+        let multiple = min(max(needed, minSiderealMultiple), max(maxMultiple, minSiderealMultiple))
+        let ms = px / (pixelsPerMsAt1x * multiple)
+        let slice = Int(min(max(ms, Double(minNudgeSliceMs)), Double(maxNudgeSliceMs)).rounded())
+        return SlewSpeed(siderealMultiple: multiple, durationMs: slice)
     }
+
+    public static let minSiderealMultiple = 0.25
 }
 
 public enum GuideCalibrationStore {
@@ -399,6 +387,7 @@ public enum SkyWatcherEncoding {
 
     /// Typical EQ6 T1 interval for 1× sidereal in slow slew mode.
     public static let defaultSiderealPeriod = 620
+    public static let minSlowSlewPeriod = 16
 
     public static func plausibleSiderealPeriod(_ value: Int?) -> Int? {
         guard let value, (50...50_000).contains(value) else { return nil }
@@ -409,25 +398,34 @@ public enum SkyWatcherEncoding {
         max(plausibleSiderealPeriod(sidereal) ?? defaultSiderealPeriod, 50)
     }
 
-    /// Step-timer period for a SynScan pad rate in slow slew mode (`:G*10` / `:G*11`).
-    /// High-speed gearbox mode is not used for rates 1–4: it is loud on EQ6 and
-    /// much faster than the same rate in the SynScan app.
-    public static func slowSlewPeriod(sidereal: Int, rate: UInt8) -> Int {
-        let multiple = max(SynScanGuide.siderealMultiple(rate), 1)
+    /// Fastest slow-slew multiple (`:G*10` / `:G*11` with period ≥ `minSlowSlewPeriod`).
+    /// High-speed gearbox mode is not used: it is loud on EQ6.
+    public static var maxSlowSlewMultiple: Double {
+        maxSlowSlewMultiple(sidereal: defaultSiderealPeriod)
+    }
+
+    public static func maxSlowSlewMultiple(sidereal: Int) -> Double {
+        Double(trackingPeriod(sidereal: sidereal)) / Double(minSlowSlewPeriod)
+    }
+
+    /// Step-timer period for a sidereal multiple in slow slew mode.
+    public static func slowSlewPeriod(sidereal: Int, siderealMultiple: Double) -> Int {
+        let multiple = max(siderealMultiple, MountGuide.minSiderealMultiple)
         let base = Double(trackingPeriod(sidereal: sidereal))
-        return max(16, Int((base / multiple).rounded()))
+        return max(minSlowSlewPeriod, Int((base / multiple).rounded()))
     }
 }
 
-public struct PadNudge: Equatable, Sendable {
+public struct SlewNudge: Equatable, Sendable {
     public var ra: GuideDirection?
     public var dec: GuideDirection?
-    public var rate: UInt8
+    /// Motor speed in units of sidereal (1×).
+    public var siderealMultiple: Double
 
-    public init(ra: GuideDirection?, dec: GuideDirection?, rate: UInt8) {
+    public init(ra: GuideDirection?, dec: GuideDirection?, siderealMultiple: Double) {
         self.ra = ra
         self.dec = dec
-        self.rate = (ra == nil && dec == nil) ? 0 : min(max(rate, 1), 4)
+        self.siderealMultiple = (ra == nil && dec == nil) ? 0 : max(siderealMultiple, 0)
     }
 
     public var isIdle: Bool { ra == nil && dec == nil }
@@ -451,40 +449,20 @@ public enum SynScanGuide {
         }
     }
 
-    public static func rate(forDistancePixels distance: Double) -> UInt8 {
-        switch distance {
-        case 400...: return 4
-        case 150...: return 3
-        case 40...: return 2
-        default: return 1
-        }
-    }
-
-    /// Slowest pad rate (1–4) that covers `remainingPixels` in about one second.
-    public static func rateForTargetDuration(
-        remainingPixels: Double,
-        pixelsPerMsAt1x: Double,
-        targetMs: Double = MountGuide.targetSlewMilliseconds
-    ) -> UInt8 {
-        let px = abs(remainingPixels)
-        let duration = max(targetMs, 1)
-        guard pixelsPerMsAt1x > 1e-9 else { return 1 }
-        let neededMultiple = px / (pixelsPerMsAt1x * duration)
+    /// Closest slow-slew P-command rate (1–4) to a continuous sidereal multiple.
+    /// Used only when the mount speaks SynScan/LX200, which cannot set an exact speed.
+    public static func nearestFixedRate(forSiderealMultiple multiple: Double) -> UInt8 {
+        let target = max(multiple, 0)
+        var best: UInt8 = 1
+        var bestError = Double.greatestFiniteMagnitude
         for rate: UInt8 in 1...4 {
-            if siderealMultiple(rate) + 1e-9 >= neededMultiple { return rate }
+            let error = abs(siderealMultiple(rate) - target)
+            if error < bestError {
+                bestError = error
+                best = rate
+            }
         }
-        return 4
-    }
-
-    public static func nudge(
-        movingStarBy delta: SIMD2<Double>,
-        calibration: GuideCalibration,
-        minAxisPixels: Double,
-        distancePixels: Double
-    ) -> PadNudge? {
-        let axes = calibration.slewAxes(toMoveStarBy: delta, minAxisPixels: minAxisPixels)
-        if axes.ra == nil && axes.dec == nil { return nil }
-        return PadNudge(ra: axes.ra, dec: axes.dec, rate: rate(forDistancePixels: distancePixels))
+        return best
     }
 
     /// Official SynScan D-pad command: hold a direction at rate 1–9, or 0 to release.

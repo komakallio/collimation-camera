@@ -83,7 +83,7 @@ final class FramePipeline: @unchecked Sendable {
             origin = window.origin(inParent: frame)
             found = detector.detect(in: window) ?? located.offsetBy(-origin)
         }
-        // Full-frame centering/constellation slews: a 1 s pad move can jump the
+        // Full-frame centering/constellation slews: a 1 s move can jump the
         // star out of the 512 analysis crop. Search the whole sensor, then crop.
         if found == nil, !CaptureLayout.isTrackingCapture(frame),
            window.width != frame.width || window.height != frame.height,

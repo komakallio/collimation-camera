@@ -17,7 +17,7 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
     private let port = SerialPort()
     private var proto: EQ6Protocol?
     private var siderealPeriod = 0
-    private var activeNudge: PadNudge?
+    private var activeNudge: SlewNudge?
 
     public var isConnected: Bool {
         lock.lock()
@@ -84,7 +84,7 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
         try? stopAllNudgesLocked()
     }
 
-    public func applyNudge(_ nudge: PadNudge?) async throws {
+    public func applyNudge(_ nudge: SlewNudge?) async throws {
         try await serial { try self.applyNudgeLocked(nudge) }
     }
 
@@ -123,36 +123,51 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
         }
     }
 
-    private func applyNudgeLocked(_ nudge: PadNudge?) throws {
+    private func applyNudgeLocked(_ nudge: SlewNudge?) throws {
         guard proto != nil else { throw MountError.notConnected }
         let next = (nudge == nil || nudge?.isIdle == true) ? nil : nudge
-        try applyAxisNudgeLocked(current: activeNudge?.ra, currentRate: activeNudge?.rate, next: next?.ra, nextRate: next?.rate)
-        try applyAxisNudgeLocked(current: activeNudge?.dec, currentRate: activeNudge?.rate, next: next?.dec, nextRate: next?.rate)
+        try applyAxisNudgeLocked(
+            current: activeNudge?.ra,
+            currentMultiple: activeNudge?.siderealMultiple,
+            next: next?.ra,
+            nextMultiple: next?.siderealMultiple
+        )
+        try applyAxisNudgeLocked(
+            current: activeNudge?.dec,
+            currentMultiple: activeNudge?.siderealMultiple,
+            next: next?.dec,
+            nextMultiple: next?.siderealMultiple
+        )
         activeNudge = next
     }
 
     private func applyAxisNudgeLocked(
         current: GuideDirection?,
-        currentRate: UInt8?,
+        currentMultiple: Double?,
         next: GuideDirection?,
-        nextRate: UInt8?
+        nextMultiple: Double?
     ) throws {
-        if current == next, currentRate == nextRate { return }
+        if current == next, Self.sameMultiple(currentMultiple, nextMultiple) { return }
         if let current {
             try stopAxisNudgeLocked(current)
         }
-        if let next, let nextRate, nextRate > 0 {
-            try startAxisNudgeLocked(next, rate: nextRate)
+        if let next, let nextMultiple, nextMultiple > 0 {
+            try startAxisNudgeLocked(next, siderealMultiple: nextMultiple)
         }
     }
 
-    private func startAxisNudgeLocked(_ direction: GuideDirection, rate: UInt8) throws {
+    private static func sameMultiple(_ a: Double?, _ b: Double?) -> Bool {
+        abs((a ?? 0) - (b ?? 0)) < 1e-6
+    }
+
+    private func startAxisNudgeLocked(_ direction: GuideDirection, siderealMultiple: Double) throws {
         switch proto {
         case .synScan, .lx200:
+            let rate = SynScanGuide.nearestFixedRate(forSiderealMultiple: siderealMultiple)
             try port.write(SynScanGuide.fixedRateCommand(direction: direction, rate: rate))
             _ = try readHashLocked(timeout: 2)
         case .skyWatcher:
-            try startSkyWatcherNudgeLocked(direction, rate: rate)
+            try startSkyWatcherNudgeLocked(direction, siderealMultiple: siderealMultiple)
         case nil:
             throw MountError.notConnected
         }
@@ -192,10 +207,10 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
         activeNudge = nil
     }
 
-    private func startSkyWatcherNudgeLocked(_ direction: GuideDirection, rate: UInt8) throws {
+    private func startSkyWatcherNudgeLocked(_ direction: GuideDirection, siderealMultiple: Double) throws {
         let axis = (direction == .east || direction == .west) ? 1 : 2
         let forward = direction == .east || direction == .north
-        let period = SkyWatcherEncoding.slowSlewPeriod(sidereal: siderealPeriod, rate: rate)
+        let period = SkyWatcherEncoding.slowSlewPeriod(sidereal: siderealPeriod, siderealMultiple: siderealMultiple)
         try? skyCommandLocked("K", axis: axis, data: "")
         usleep(80_000)
         try skyCommandLocked("G", axis: axis, data: forward ? "10" : "11")
