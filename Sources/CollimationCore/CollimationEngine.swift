@@ -1185,32 +1185,40 @@ public final class CollimationEngine: ObservableObject {
         if MountGuide.isCentered(errorPixels: centroid - target) { return }
 
         let deadline = Date().addingTimeInterval(90)
+        var lastRASign: Double?
+        var lastDecSign: Double?
         do {
-            guard let first = AxisCentering.primaryAxis(
-                calibration: calibration,
-                movingStarBy: target - centroid
-            ) else { return }
-            try await centerAxis(
-                first,
-                calibration: calibration,
-                target: target,
-                centroid: &centroid,
-                deadline: deadline
-            )
-            try await centerAxis(
-                first.other,
-                calibration: calibration,
-                target: target,
-                centroid: &centroid,
-                deadline: deadline
-            )
-            try await centerAxis(
-                first,
-                calibration: calibration,
-                target: target,
-                centroid: &centroid,
-                deadline: deadline
-            )
+            while Date() < deadline {
+                try Task.checkCancellation()
+                if MountGuide.isCentered(errorPixels: centroid - target) { break }
+
+                guard let plan = AxisCentering.plan(
+                    calibration: calibration,
+                    movingStarBy: target - centroid,
+                    lastDirections: axisDirections,
+                    lastRASign: lastRASign,
+                    lastDecSign: lastDecSign
+                ) else { break }
+
+                if let pixels = calibration.signedAxisPixels(toMoveStarBy: target - centroid) {
+                    lastRASign = pixels.ra
+                    lastDecSign = pixels.dec
+                }
+                mountStatus = Self.centeringStatus(plan)
+                try await mount.applyNudge(plan.nudge)
+                if let direction = plan.nudge.ra { axisDirections.record(direction) }
+                if let direction = plan.nudge.dec { axisDirections.record(direction) }
+
+                let schedule = plan.stopSchedule
+                try await sleepMilliseconds(schedule.firstMs)
+                if let remaining = schedule.remaining {
+                    try await mount.applyNudge(remaining)
+                    try await sleepMilliseconds(schedule.restMs)
+                }
+                try await mount.applyNudge(nil)
+
+                centroid = try await waitForSettledCentroid()
+            }
             try await mount.applyNudge(nil)
         } catch {
             mount.haltMotions()
@@ -1218,61 +1226,19 @@ public final class CollimationEngine: ObservableObject {
         }
     }
 
-    private func centerAxis(
-        _ axis: MountAxis,
-        calibration: GuideCalibration,
-        target: SIMD2<Double>,
-        centroid: inout SIMD2<Double>,
-        deadline: Date
-    ) async throws {
-        var lastSign: Double?
-
-        while Date() < deadline {
-            try Task.checkCancellation()
-            if MountGuide.isCentered(errorPixels: centroid - target) { return }
-
-            guard let axisPixels = calibration.signedAxisPixels(toMoveStarBy: target - centroid) else {
-                return
-            }
-            let remaining = axis == .ra ? axisPixels.ra : axisPixels.dec
-            let pxPerMs = calibration.pixelsPerMillisecond(on: axis)
-            let travel = calibration.travelPixels(
-                on: axis,
-                remaining: remaining,
-                lastDirection: axisDirections.last(on: axis)
-            )
-            guard let plan = AxisCentering.plan(
-                axis: axis,
-                remainingPixels: remaining,
-                pixelsPerMsAt1x: pxPerMs,
-                lastSign: lastSign,
-                travelPixels: travel
-            ) else { return }
-
-            lastSign = remaining
-            let takeup = travel - abs(remaining)
-            if takeup > 0.5 {
-                mountStatus = String(
-                    format: "Centering %@ %.1f× — %.0f px + %.0f px backlash",
-                    axis.displayName,
-                    plan.siderealMultiple,
-                    abs(remaining),
-                    takeup
-                )
-            } else {
-                mountStatus = String(
-                    format: "Centering %@ %.1f× — %.0f px on axis",
-                    axis.displayName,
-                    plan.siderealMultiple,
-                    abs(remaining)
-                )
-            }
-            try await mount.applyNudge(plan.nudge)
-            axisDirections.record(plan.direction)
-            try await sleepMilliseconds(plan.durationMs)
-            try await mount.applyNudge(nil)
-
-            centroid = try await waitForSettledCentroid()
+    private static func centeringStatus(_ plan: AxisCentering.DualPlan) -> String {
+        func axisText(_ plan: AxisCentering.Plan) -> String {
+            String(format: "%@ %.1f×", plan.axis.displayName, plan.siderealMultiple)
+        }
+        switch (plan.ra, plan.dec) {
+        case let (ra?, dec?):
+            return "Centering \(axisText(ra)) · \(axisText(dec))"
+        case let (ra?, nil):
+            return "Centering \(axisText(ra))"
+        case let (nil, dec?):
+            return "Centering \(axisText(dec))"
+        case (nil, nil):
+            return "Centering"
         }
     }
 

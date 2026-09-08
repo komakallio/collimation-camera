@@ -217,10 +217,13 @@ public struct AxisDirectionMemory: Equatable, Sendable {
     }
 }
 
-/// Sequential one-axis centering: finish RA or Dec, then the other.
-/// Each slew uses the sidereal multiple that covers the remaining distance
-/// in about one second.
+/// Simultaneous RA/Dec centering. Each iteration covers 90% of the remaining
+/// error on every axis that is still out, in about one second.
 public enum AxisCentering {
+    /// Fraction of remaining on-axis error to command in one slew. Leaves a
+    /// margin so a slightly fast mount does not overshoot the target.
+    public static let iterationFraction = 0.9
+
     public struct Plan: Equatable, Sendable {
         public var axis: MountAxis
         public var direction: GuideDirection
@@ -231,10 +234,52 @@ public enum AxisCentering {
         public var nudge: SlewNudge {
             switch axis {
             case .ra:
-                return SlewNudge(ra: direction, dec: nil, siderealMultiple: siderealMultiple)
+                return SlewNudge(ra: direction, dec: nil, raSiderealMultiple: siderealMultiple, decSiderealMultiple: 0)
             case .dec:
-                return SlewNudge(ra: nil, dec: direction, siderealMultiple: siderealMultiple)
+                return SlewNudge(ra: nil, dec: direction, raSiderealMultiple: 0, decSiderealMultiple: siderealMultiple)
             }
+        }
+    }
+
+    public struct DualPlan: Equatable, Sendable {
+        public var ra: Plan?
+        public var dec: Plan?
+
+        public init(ra: Plan? = nil, dec: Plan? = nil) {
+            self.ra = ra
+            self.dec = dec
+        }
+
+        public var durationMs: Int {
+            max(ra?.durationMs ?? 0, dec?.durationMs ?? 0)
+        }
+
+        public var nudge: SlewNudge {
+            SlewNudge(
+                ra: ra?.direction,
+                dec: dec?.direction,
+                raSiderealMultiple: ra?.siderealMultiple ?? 0,
+                decSiderealMultiple: dec?.siderealMultiple ?? 0
+            )
+        }
+
+        /// Both motors start together. If one axis finishes first, stop it and
+        /// keep the other running for the remaining time.
+        public var stopSchedule: (firstMs: Int, remaining: SlewNudge?, restMs: Int) {
+            let raMs = ra?.durationMs ?? 0
+            let decMs = dec?.durationMs ?? 0
+            guard raMs > 0, decMs > 0, raMs != decMs else {
+                return (max(raMs, decMs), nil, 0)
+            }
+            var rest = nudge
+            if raMs < decMs {
+                rest.ra = nil
+                rest.raSiderealMultiple = 0
+                return (raMs, rest, decMs - raMs)
+            }
+            rest.dec = nil
+            rest.decSiderealMultiple = 0
+            return (decMs, rest, raMs - decMs)
         }
     }
 
@@ -283,8 +328,9 @@ public enum AxisCentering {
         guard !isAxisCentered(remainingPixels),
               let direction = Self.direction(axis: axis, remainingPixels: remainingPixels)
         else { return nil }
+        let commanded = commandedPixels(remaining: remainingPixels, travel: travelPixels ?? abs(remainingPixels))
         let speed = MountGuide.slewSpeed(
-            remainingPixels: travelPixels ?? abs(remainingPixels),
+            remainingPixels: commanded,
             pixelsPerMsAt1x: pixelsPerMsAt1x
         )
         return Plan(
@@ -294,6 +340,47 @@ public enum AxisCentering {
             durationMs: speed.durationMs,
             overshot: Self.overshot(remaining: remainingPixels, previousSign: lastSign)
         )
+    }
+
+    /// Command both axes that still have remaining error, each at the speed that
+    /// covers 90% of its own leftover (plus backlash take-up) in about 1 s.
+    public static func plan(
+        calibration: GuideCalibration,
+        movingStarBy delta: SIMD2<Double>,
+        lastDirections: AxisDirectionMemory = AxisDirectionMemory(),
+        lastRASign: Double? = nil,
+        lastDecSign: Double? = nil
+    ) -> DualPlan? {
+        guard let pixels = calibration.signedAxisPixels(toMoveStarBy: delta) else { return nil }
+        let ra = plan(
+            axis: .ra,
+            remainingPixels: pixels.ra,
+            pixelsPerMsAt1x: calibration.pixelsPerMillisecond(on: .ra),
+            lastSign: lastRASign,
+            travelPixels: calibration.travelPixels(
+                on: .ra,
+                remaining: pixels.ra,
+                lastDirection: lastDirections.last(on: .ra)
+            )
+        )
+        let dec = plan(
+            axis: .dec,
+            remainingPixels: pixels.dec,
+            pixelsPerMsAt1x: calibration.pixelsPerMillisecond(on: .dec),
+            lastSign: lastDecSign,
+            travelPixels: calibration.travelPixels(
+                on: .dec,
+                remaining: pixels.dec,
+                lastDirection: lastDirections.last(on: .dec)
+            )
+        )
+        guard ra != nil || dec != nil else { return nil }
+        return DualPlan(ra: ra, dec: dec)
+    }
+
+    public static func commandedPixels(remaining: Double, travel: Double) -> Double {
+        let takeup = max(0, travel - abs(remaining))
+        return iterationFraction * abs(remaining) + takeup
     }
 }
 
@@ -518,13 +605,34 @@ public enum SkyWatcherEncoding {
 public struct SlewNudge: Equatable, Sendable {
     public var ra: GuideDirection?
     public var dec: GuideDirection?
-    /// Motor speed in units of sidereal (1×).
-    public var siderealMultiple: Double
+    /// RA motor speed in units of sidereal (1×).
+    public var raSiderealMultiple: Double
+    /// Dec motor speed in units of sidereal (1×).
+    public var decSiderealMultiple: Double
 
     public init(ra: GuideDirection?, dec: GuideDirection?, siderealMultiple: Double) {
+        self.init(
+            ra: ra,
+            dec: dec,
+            raSiderealMultiple: siderealMultiple,
+            decSiderealMultiple: siderealMultiple
+        )
+    }
+
+    public init(
+        ra: GuideDirection?,
+        dec: GuideDirection?,
+        raSiderealMultiple: Double,
+        decSiderealMultiple: Double
+    ) {
         self.ra = ra
         self.dec = dec
-        self.siderealMultiple = (ra == nil && dec == nil) ? 0 : max(siderealMultiple, 0)
+        self.raSiderealMultiple = ra == nil ? 0 : max(raSiderealMultiple, 0)
+        self.decSiderealMultiple = dec == nil ? 0 : max(decSiderealMultiple, 0)
+    }
+
+    public var siderealMultiple: Double {
+        max(raSiderealMultiple, decSiderealMultiple)
     }
 
     public var isIdle: Bool { ra == nil && dec == nil }

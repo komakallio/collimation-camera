@@ -1503,7 +1503,7 @@ private func testMountBacklash() throws {
         pixelsPerMsAt1x: 0.01,
         travelPixels: 99
     )
-    try expect(abs((withTakeup?.siderealMultiple ?? 0) - 9.9) < 1e-9, "1 s covers remaining plus backlash")
+    try expect(abs((withTakeup?.siderealMultiple ?? 0) - 9.03) < 1e-9, "1 s covers 90% remaining plus backlash")
     try expect(withTakeup?.durationMs == 1_000, "still about 1 s")
 }
 
@@ -1601,17 +1601,35 @@ private func testAxisCentering() throws {
 
     let first = AxisCentering.plan(axis: .ra, remainingPixels: 87, pixelsPerMsAt1x: 0.01)
     try expect(first?.direction == .east && first?.overshot == false, "first ra plan")
-    try expect(abs((first?.siderealMultiple ?? 0) - 8.7) < 1e-9, "exact 8.7x \(String(describing: first?.siderealMultiple))")
+    try expect(abs((first?.siderealMultiple ?? 0) - 7.83) < 1e-9, "90% of 87 px \(String(describing: first?.siderealMultiple))")
     try expect(first?.durationMs == 1_000, "1 s move")
     try expect(first?.nudge.ra == .east && first?.nudge.dec == nil, "single-axis ra nudge")
     let reverse = AxisCentering.plan(axis: .ra, remainingPixels: -90, pixelsPerMsAt1x: 0.01, lastSign: 800)
     try expect(reverse?.direction == .west && reverse?.overshot == true, "overshoot reverse")
-    try expect(abs((reverse?.siderealMultiple ?? 0) - 9) < 1e-9, "9x for 90 px")
+    try expect(abs((reverse?.siderealMultiple ?? 0) - 8.1) < 1e-9, "90% of 90 px")
     try expect(reverse?.nudge.dec == nil, "still only ra")
     let decPlan = AxisCentering.plan(axis: .dec, remainingPixels: 200, pixelsPerMsAt1x: 0.01)
     try expect(decPlan?.direction == .north && decPlan?.nudge.ra == nil, "single-axis dec")
-    try expect(abs((decPlan?.siderealMultiple ?? 0) - 20) < 1e-9, "20x for 200 px")
+    try expect(abs((decPlan?.siderealMultiple ?? 0) - 18) < 1e-9, "90% of 200 px")
     try expect(AxisCentering.plan(axis: .ra, remainingPixels: 10, pixelsPerMsAt1x: 0.01) == nil, "axis done")
+
+    try expect(abs(AxisCentering.commandedPixels(remaining: 87, travel: 87) - 78.3) < 1e-9, "90% of remaining")
+    try expect(abs(AxisCentering.commandedPixels(remaining: 87, travel: 99) - 90.3) < 1e-9, "90% plus takeup")
+
+    let both = AxisCentering.plan(calibration: calibration, movingStarBy: SIMD2(87, 50))
+    try expect(both?.nudge.ra == .east && both?.nudge.dec == .north, "both axes")
+    try expect(abs((both?.nudge.raSiderealMultiple ?? 0) - 7.83) < 1e-9, "ra 90%")
+    try expect(abs((both?.nudge.decSiderealMultiple ?? 0) - 4.5) < 1e-9, "dec 90%")
+    try expect(both?.durationMs == 1_000, "shared ~1 s")
+    try expect(both?.stopSchedule.remaining == nil, "equal duration runs together")
+
+    let staggered = AxisCentering.DualPlan(
+        ra: AxisCentering.plan(axis: .ra, remainingPixels: 87, pixelsPerMsAt1x: 0.01),
+        dec: AxisCentering.plan(axis: .dec, remainingPixels: 20_000, pixelsPerMsAt1x: 0.01)
+    )
+    try expect(staggered.stopSchedule.firstMs == 1_000, "stop the short axis first")
+    try expect(staggered.stopSchedule.remaining?.ra == nil && staggered.stopSchedule.remaining?.dec == .north, "keep the long axis")
+    try expect(staggered.stopSchedule.restMs > 0, "long axis continues")
 }
 
 private func testFilterSlotDisplayName() throws {

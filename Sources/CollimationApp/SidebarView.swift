@@ -244,7 +244,7 @@ struct SidebarView: View {
                         .help("Pulse-guide east and north, measure how the star moves, and measure backlash from where it returns.")
                     Button("Center") { engine.centerStar() }
                         .disabled(!canCenterStar)
-                        .help("Centers one axis at a time on the full sensor. Each move lasts about 1 s at the speed needed to cover the remaining distance.")
+                        .help("Centers RA and Dec together on the full sensor. Each move covers about 90% of the remaining error and lasts about 1 s.")
                 }
 
                 Text(engine.mountStatus)

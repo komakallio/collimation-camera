@@ -128,15 +128,15 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
         let next = (nudge == nil || nudge?.isIdle == true) ? nil : nudge
         try applyAxisNudgeLocked(
             current: activeNudge?.ra,
-            currentMultiple: activeNudge?.siderealMultiple,
+            currentMultiple: activeNudge?.raSiderealMultiple,
             next: next?.ra,
-            nextMultiple: next?.siderealMultiple
+            nextMultiple: next?.raSiderealMultiple
         )
         try applyAxisNudgeLocked(
             current: activeNudge?.dec,
-            currentMultiple: activeNudge?.siderealMultiple,
+            currentMultiple: activeNudge?.decSiderealMultiple,
             next: next?.dec,
-            nextMultiple: next?.siderealMultiple
+            nextMultiple: next?.decSiderealMultiple
         )
         activeNudge = next
     }
