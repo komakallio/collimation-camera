@@ -1,5 +1,5 @@
-import Combine
 import Foundation
+import Observation
 
 public struct OverlayModel: Equatable, Sendable {
     public var imageWidth: Int
@@ -74,65 +74,131 @@ public enum StackWork: Equatable, Sendable {
     case constellationCombining
 }
 
+@Observable
 @MainActor
-public final class CollimationEngine: ObservableObject {
+public final class CollimationEngine {
     nonisolated public let frameSlot = FrameSlot()
     nonisolated public let renderStateSlot = RenderStateSlot()
-    public var viewWidth = 800.0
-    public var viewHeight = 700.0
+    /// Live-view size in points. Fed by the app's resize hook, not by a view
+    /// body, so it is not observed.
+    @ObservationIgnored public var viewWidth = 800.0
+    @ObservationIgnored public var viewHeight = 700.0
 
-    @Published public private(set) var devices: [CameraDescriptor] = []
-    @Published public var selectedDeviceID: String = CameraDescriptor.simulator.id
-    @Published public private(set) var isConnected = false
-    @Published public var statusText = "Disconnected"
-    @Published public var errorMessage: String?
+    public private(set) var devices: [CameraDescriptor] = []
+    public var selectedDeviceID: String = CameraDescriptor.simulator.id
+    public private(set) var isConnected = false
+    public var statusText = "Disconnected"
+    public var errorMessage: String?
 
-    @Published public var exposureMicroseconds: Double = 50_000
-    @Published public var gain: Double = 0
-    @Published public var exposureRange: ClosedRange<Double> = Double(ExposureControl.minMicroseconds)...Double(ExposureControl.maxMicroseconds)
-    @Published public var gainRange: ClosedRange<Double> = 0...400
+    public var exposureMicroseconds: Double = 50_000
+    public var gain: Double = 0
+    public var exposureRange: ClosedRange<Double> = Double(ExposureControl.minMicroseconds)...Double(ExposureControl.maxMicroseconds)
+    public var gainRange: ClosedRange<Double> = 0...400
 
-    @Published public var autoCenter = true
-    @Published public var autoSearch = false
-    @Published public var stabilize = false
-    @Published public var showOverlay = true
-    @Published public var zoom: Double = 1
-    @Published public var stretch = StretchParams.default
-    @Published public var histogram = Histogram()
-    @Published public var tracking = TrackingStatus()
-    @Published public var coma: ComaResult?
-    @Published public var fwhm: FWHMResult?
-    @Published public var starProfile: StarIntensityProfile?
-    @Published public var overlay = OverlayModel()
-    @Published public var frameSequence: UInt64 = 0
-    @Published public var fps: Double = 0
+    public var autoCenter = true {
+        didSet { applyPipelineConfig() }
+    }
+    public var autoSearch = false {
+        didSet {
+            applyPipelineConfig()
+            handleAutoSearchChange(autoSearch)
+        }
+    }
+    public var stabilize = false {
+        didSet { updateStabilization() }
+    }
+    public var showOverlay = true
+    public var zoom: Double = 1 {
+        didSet { updateStabilization() }
+    }
+    public var stretch = StretchParams.default {
+        didSet { updateStabilization() }
+    }
+    public var histogram = Histogram()
+    public var tracking = TrackingStatus()
+    public var coma: ComaResult?
+    public var fwhm: FWHMResult?
+    public var starProfile: StarIntensityProfile?
+    public var overlay = OverlayModel()
+    public var frameSequence: UInt64 = 0
+    public var fps: Double = 0
 
-    @Published public var serialPorts: [String] = []
-    @Published public var selectedSerialPort = ""
-    @Published public private(set) var isMountConnected = false
-    @Published public private(set) var isMountBusy = false
-    @Published public private(set) var showingFullFramePreview = false
-    @Published public private(set) var mountWork: MountWork?
-    @Published public private(set) var isStacking = false
-    @Published public var stackFrameCount = FrameStacker.defaultSubframeCount
-    @Published public private(set) var stackWork: StackWork?
-    @Published public private(set) var isAutoExposing = false
-    @Published public var mountStatus = "No mount"
-    @Published public private(set) var guideCalibration: GuideCalibration?
+    public var serialPorts: [String] = []
+    public var selectedSerialPort = "" {
+        didSet { defaults.set(selectedSerialPort, forKey: Self.serialPortDefaultsKey) }
+    }
+    public private(set) var isMountConnected = false
+    public private(set) var isMountBusy = false
+    public private(set) var showingFullFramePreview = false
+    public private(set) var mountWork: MountWork?
+    public private(set) var isStacking = false
+    public var stackFrameCount = FrameStacker.defaultSubframeCount
+    public private(set) var stackWork: StackWork?
+    public private(set) var isAutoExposing = false
+    public var mountStatus = "No mount"
+    public private(set) var guideCalibration: GuideCalibration?
 
-    @Published public private(set) var filterWheels: [FilterWheelDescriptor] = []
-    @Published public var selectedFilterWheelID = ""
-    @Published public private(set) var isFilterWheelConnected = false
-    @Published public private(set) var isFilterWheelMoving = false
-    @Published public var filterWheelStatus = "No filter wheel"
-    @Published public private(set) var filterSlots: [FilterSlot] = []
-    @Published public var selectedFilterPosition = 0
+    public private(set) var filterWheels: [FilterWheelDescriptor] = []
+    public var selectedFilterWheelID = "" {
+        didSet {
+            if !selectedFilterWheelID.isEmpty {
+                defaults.set(selectedFilterWheelID, forKey: Self.filterWheelDefaultsKey)
+            }
+        }
+    }
+    public private(set) var isFilterWheelConnected = false
+    public private(set) var isFilterWheelMoving = false
+    public var filterWheelStatus = "No filter wheel"
+    public private(set) var filterSlots: [FilterSlot] = []
+    public var selectedFilterPosition = 0
+
+    /// Folder the last snapshot was written to. Both apps remember it here so
+    /// the save panel and the portable app's dialog agree.
+    public var snapshotDirectory: URL? {
+        didSet {
+            if let path = snapshotDirectory?.path {
+                defaults.set(path, forKey: Self.snapshotDirectoryDefaultsKey)
+            }
+        }
+    }
 
     public static let minZoom = 0.25
     /// Below `minZoom` so an unbinned full sensor can fit in a typical window.
     public static let minFullFrameZoom = 0.05
     public static let maxZoom = 8.0
     public var isMountCalibrated: Bool { guideCalibration?.isValid == true }
+
+    // MARK: - Enablement
+    //
+    // Every control that either surface disables reads its predicate here, so
+    // the menu, the sidebar, and the portable app cannot drift. Controls with
+    // no predicate are always enabled: camera Connect and Disconnect, Auto
+    // Stretch, Stabilize View, Collimation Overlay, Fit to window.
+
+    public var canRefreshDevices: Bool { !isConnected }
+    public var canSelectDevice: Bool { !isConnected }
+    public var canAutoExpose: Bool { isConnected && !isAutoExposing && !isStacking && !isMountBusy }
+    public var canSaveSnapshot: Bool { isConnected && !isStacking }
+    public var canSaveStacked: Bool {
+        isConnected && !isStacking && !isMountBusy && tracking.state == .tracking
+    }
+    public var canSelectStackCount: Bool { !isStacking }
+    public var canCalibrateMount: Bool {
+        isMountConnected && isConnected && !isMountBusy && !isStacking && tracking.state == .tracking
+    }
+    public var canCenterStar: Bool { canCalibrateMount && isMountCalibrated }
+    public var canSaveConstellation: Bool { canCenterStar }
+    public var canToggleAutoCenter: Bool { !isMountBusy && !isStacking }
+    public var canSearchFullFrame: Bool { isConnected && !isMountBusy && !isStacking }
+    public var canConnectMount: Bool { (isMountConnected || !serialPorts.isEmpty) && !isMountBusy }
+    public var canSelectSerialPort: Bool { !isMountConnected && !isMountBusy }
+    public var canRefreshSerialPorts: Bool { canSelectSerialPort }
+    public var canConnectFilterWheel: Bool {
+        (isFilterWheelConnected || !filterWheels.isEmpty) && !isFilterWheelMoving
+    }
+    public var canSelectFilterWheel: Bool { !isFilterWheelConnected && !isFilterWheelMoving }
+    public var canRefreshFilterWheels: Bool { canSelectFilterWheel }
+    public var canSelectFilter: Bool { isFilterWheelConnected && !isFilterWheelMoving }
 
     /// Lower zoom bound. Full-frame centering/constellation slews must go
     /// below `minZoom` or the live view still clips stars near the edges.
@@ -146,37 +212,54 @@ public final class CollimationEngine: ObservableObject {
     nonisolated private let fpsMeter = FPSMeter()
     nonisolated private let mount = EQ6Mount()
     nonisolated private let filterWheel = PhoenixWheel()
-    private var device: CameraDevice?
-    private var applyingControls = false
-    private var lastSentExposure: Int?
-    private var lastSentGain: Int?
-    private var sensorWidth = CameraDescriptor.simulator.sensorWidth
-    private var sensorHeight = CameraDescriptor.simulator.sensorHeight
-    private var optics = TelescopeOptics.poseidon
+    @ObservationIgnored private var device: CameraDevice?
+    @ObservationIgnored private var applyingControls = false
+    @ObservationIgnored private var lastSentExposure: Int?
+    @ObservationIgnored private var lastSentGain: Int?
+    @ObservationIgnored private var sensorWidth = CameraDescriptor.simulator.sensorWidth
+    @ObservationIgnored private var sensorHeight = CameraDescriptor.simulator.sensorHeight
+    @ObservationIgnored private var optics = TelescopeOptics.poseidon
+    @ObservationIgnored private var roiAlignment = ROIAlignment.playerOne
+    /// Binning for the full-frame search. Player One cameras take 4; most ZWO
+    /// cameras, the ASI120 family included, report only 1 and 2, and asking for
+    /// 4 fails the ROI and drops the connection.
+    @ObservationIgnored private var searchBinning = CollimationEngine.defaultSearchBinning
     nonisolated public let stabilization = StabilizationController()
     nonisolated private let softwareCrop = SoftwareCropController()
     nonisolated private let stackCapture = StackCaptureBuffer()
-    private var cancellables = Set<AnyCancellable>()
-    private var mountTask: Task<Void, Never>?
-    private var stackTask: Task<Void, Never>?
-    private var autoExposeTask: Task<Void, Never>?
-    private var filterWheelTask: Task<Void, Never>?
-    private var mountHoldsROI = false
-    private var zoomBeforeFullFrame: Double?
-    private var axisDirections = AxisDirectionMemory()
-    private var hardwareFilterPosition: Int?
+    @ObservationIgnored private var mountTask: Task<Void, Never>?
+    @ObservationIgnored private var stackTask: Task<Void, Never>?
+    @ObservationIgnored private var autoExposeTask: Task<Void, Never>?
+    @ObservationIgnored private var filterWheelTask: Task<Void, Never>?
+    @ObservationIgnored private var mountHoldsROI = false
+    @ObservationIgnored private var zoomBeforeFullFrame: Double?
+    @ObservationIgnored private var axisDirections = AxisDirectionMemory()
+    @ObservationIgnored private var hardwareFilterPosition: Int?
+    /// Injected so tests get their own suite and a scripted port list.
+    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let serialPortPaths: () -> [String]
+    /// Search binning before a camera is connected, and the ceiling once one is.
+    public static let defaultSearchBinning = 4
     private static let serialPortDefaultsKey = "mount.serialPort"
     private static let filterWheelDefaultsKey = "filterWheel.id"
+    private static let snapshotDirectoryDefaultsKey = "snapshot.directory"
 
-    public init() {
+    public init(
+        defaults: UserDefaults = .standard,
+        serialPortPaths: @escaping () -> [String] = SerialPortScanner.availablePaths
+    ) {
+        self.defaults = defaults
+        self.serialPortPaths = serialPortPaths
         refreshDevices()
         selectedDeviceID = DeviceCatalog.preferredDeviceID(in: devices)
-        refreshSerialPorts()
-        if let saved = UserDefaults.standard.string(forKey: Self.serialPortDefaultsKey), !saved.isEmpty {
+        // The remembered port is read before refreshSerialPorts() so the
+        // property observer cannot overwrite the key with a scanned port.
+        if let saved = defaults.string(forKey: Self.serialPortDefaultsKey), !saved.isEmpty {
             selectedSerialPort = saved
-            if !serialPorts.contains(saved) {
-                serialPorts.insert(saved, at: 0)
-            }
+        }
+        refreshSerialPorts()
+        if let path = defaults.string(forKey: Self.snapshotDirectoryDefaultsKey), !path.isEmpty {
+            snapshotDirectory = URL(fileURLWithPath: path, isDirectory: true)
         }
         if let calibration = GuideCalibrationStore.load(), calibration.isValid {
             guideCalibration = calibration
@@ -193,41 +276,17 @@ public final class CollimationEngine: ObservableObject {
                 self?.handleError(error)
             }
         }
-        $stretch
-            .combineLatest($zoom, $stabilize)
-            .sink { [weak self] _, _, _ in
-                self?.updateStabilization()
-            }
-            .store(in: &cancellables)
-        $autoCenter
-            .combineLatest($autoSearch)
-            .sink { [weak self] _, _ in
-                self?.applyPipelineConfig()
-            }
-            .store(in: &cancellables)
-        $autoSearch
-            .sink { [weak self] enabled in
-                self?.handleAutoSearchChange(enabled)
-            }
-            .store(in: &cancellables)
-        $selectedSerialPort
-            .sink { path in
-                UserDefaults.standard.set(path, forKey: Self.serialPortDefaultsKey)
-            }
-            .store(in: &cancellables)
         refreshFilterWheels()
-        if let saved = UserDefaults.standard.string(forKey: Self.filterWheelDefaultsKey),
+        if let saved = defaults.string(forKey: Self.filterWheelDefaultsKey),
            filterWheels.contains(where: { $0.id == saved })
         {
             selectedFilterWheelID = saved
         }
-        $selectedFilterWheelID
-            .sink { id in
-                if !id.isEmpty {
-                    UserDefaults.standard.set(id, forKey: Self.filterWheelDefaultsKey)
-                }
-            }
-            .store(in: &cancellables)
+        // The Combine sinks these observers replace also fired once on
+        // subscription; keep that so the render state and the pipeline are
+        // configured before the first frame.
+        updateStabilization()
+        applyPipelineConfig()
     }
 
     deinit {
@@ -257,7 +316,7 @@ public final class CollimationEngine: ObservableObject {
         if devices.contains(where: { $0.id == selectedDeviceID }) == false {
             selectedDeviceID = DeviceCatalog.preferredDeviceID(in: devices)
         }
-        if let sdk = DeviceCatalog.playerOneSDKVersion, !isConnected {
+        if let sdk = DeviceCatalog.sdkVersionSummary, !isConnected {
             statusText = "SDK \(sdk) — disconnected"
         }
     }
@@ -270,7 +329,11 @@ public final class CollimationEngine: ObservableObject {
             device = newDevice
             sensorWidth = newDevice.descriptor.sensorWidth
             sensorHeight = newDevice.descriptor.sensorHeight
-            optics = TelescopeOptics.forCameraName(newDevice.descriptor.name)
+            optics = TelescopeOptics.forCamera(newDevice.descriptor)
+            roiAlignment = newDevice.roiAlignment
+            searchBinning = newDevice.supportedBins
+                .filter { $0 >= 1 && $0 <= Self.defaultSearchBinning }
+                .max() ?? 1
             exposureRange = Double(ExposureControl.minMicroseconds)...Double(ExposureControl.maxMicroseconds)
             gainRange = Double(newDevice.controls.gainRange.lowerBound)...Double(newDevice.controls.gainRange.upperBound)
             let clampedExposure = ExposureControl.clamp(newDevice.controls.exposureMicroseconds)
@@ -541,6 +604,10 @@ public final class CollimationEngine: ObservableObject {
         autoExposeTask?.cancel()
         autoExposeTask = nil
         isAutoExposing = false
+        // Without this an unplug during Center ends 4 s later with
+        // MountError.noStar, which replaces the disconnect message.
+        mountTask?.cancel()
+        mountTask = nil
         stopCapture()
         device = nil
         isConnected = false
@@ -555,6 +622,8 @@ public final class CollimationEngine: ObservableObject {
         showingFullFramePreview = false
         zoomBeforeFullFrame = nil
         optics = .poseidon
+        roiAlignment = .playerOne
+        searchBinning = Self.defaultSearchBinning
         updateStabilization()
         statusText = "Disconnected"
     }
@@ -669,7 +738,9 @@ public final class CollimationEngine: ObservableObject {
                 around: center,
                 size: CaptureLayout.trackingHardwareSize,
                 sensorWidth: sensorWidth,
-                sensorHeight: sensorHeight
+                sensorHeight: sensorHeight,
+                binning: 1,
+                alignment: roiAlignment
             )
         )
     }
@@ -679,7 +750,12 @@ public final class CollimationEngine: ObservableObject {
         pipeline.markSearching()
         coalescer.cancel()
         softwareCrop.reset()
-        let roi = Alignment.fullFrameROI(sensorWidth: sensorWidth, sensorHeight: sensorHeight, binning: 4)
+        let roi = Alignment.fullFrameROI(
+            sensorWidth: sensorWidth,
+            sensorHeight: sensorHeight,
+            binning: searchBinning,
+            alignment: roiAlignment
+        )
         session.requestROI(roi)
         tracking.state = .searching
         statusText = "Searching full frame…"
@@ -808,14 +884,14 @@ public final class CollimationEngine: ObservableObject {
     }
 
     public func refreshSerialPorts() {
-        var ports = SerialPortScanner.availablePaths()
-        let saved = UserDefaults.standard.string(forKey: Self.serialPortDefaultsKey) ?? selectedSerialPort
+        var ports = serialPortPaths()
+        let saved = defaults.string(forKey: Self.serialPortDefaultsKey) ?? selectedSerialPort
         if !saved.isEmpty, !ports.contains(saved) {
             ports.insert(saved, at: 0)
         }
         serialPorts = ports
         if selectedSerialPort.isEmpty {
-            selectedSerialPort = ports.first ?? saved
+            selectedSerialPort = saved.isEmpty ? (ports.first ?? "") : saved
         } else if !ports.contains(selectedSerialPort), !saved.isEmpty {
             selectedSerialPort = saved
         }
@@ -874,7 +950,7 @@ public final class CollimationEngine: ObservableObject {
 
     public func refreshFilterWheels() {
         filterWheels = filterWheel.enumerate()
-        let saved = UserDefaults.standard.string(forKey: Self.filterWheelDefaultsKey) ?? selectedFilterWheelID
+        let saved = defaults.string(forKey: Self.filterWheelDefaultsKey) ?? selectedFilterWheelID
         if let match = filterWheels.first(where: { $0.id == selectedFilterWheelID || $0.id == saved }) {
             selectedFilterWheelID = match.id
         } else if let first = filterWheels.first {
@@ -882,7 +958,7 @@ public final class CollimationEngine: ObservableObject {
         }
         if !isFilterWheelConnected {
             if PhoenixWheel.sdkVersion == nil {
-                filterWheelStatus = "SDK not found — place libPlayerOnePW.dylib in Vendor/PlayerOne"
+                filterWheelStatus = "SDK not found — place \(VendorLibrary.playerOneFilterWheel) in Vendor/\(VendorLibrary.playerOneFolder)"
             } else if filterWheels.isEmpty {
                 filterWheelStatus = "No Phoenix filter wheel"
             } else {
@@ -1138,7 +1214,9 @@ public final class CollimationEngine: ObservableObject {
                 around: sensor,
                 size: CaptureLayout.trackingHardwareSize,
                 sensorWidth: sensorWidth,
-                sensorHeight: sensorHeight
+                sensorHeight: sensorHeight,
+                binning: 1,
+                alignment: roiAlignment
             )
         )
     }
@@ -1152,7 +1230,12 @@ public final class CollimationEngine: ObservableObject {
             zoomBeforeFullFrame = zoom
         }
         session.requestROI(
-            Alignment.fullFrameROI(sensorWidth: sensorWidth, sensorHeight: sensorHeight, binning: 1)
+            Alignment.fullFrameROI(
+                sensorWidth: sensorWidth,
+                sensorHeight: sensorHeight,
+                binning: 1,
+                alignment: roiAlignment
+            )
         )
         zoom = clampedZoom(ImageLayout.fitZoom(
             imageWidth: sensorWidth,
@@ -1303,7 +1386,9 @@ public final class CollimationEngine: ObservableObject {
             sensorWidth: sensorWidth,
             sensorHeight: sensorHeight,
             holdROI: holdsROI,
-            optics: optics
+            optics: optics,
+            roiAlignment: roiAlignment,
+            searchBinning: searchBinning
         )
         session.setHoldROI(holdsROI)
     }
@@ -1313,10 +1398,12 @@ public final class CollimationEngine: ObservableObject {
     private func presentError(_ error: Error) {
         if error is CancellationError { return }
         errorMessage = error.localizedDescription
+        Log.info("Error: \(error.localizedDescription)")
     }
 
     private func handleError(_ error: Error) {
         errorMessage = error.localizedDescription
+        Log.info("Error: \(error.localizedDescription)")
         disconnect()
         statusText = "Error"
     }

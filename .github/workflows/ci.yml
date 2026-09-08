@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check for platform imports in the shared core
+        shell: bash
+        run: bash scripts/check-core-imports.sh
+
+      - name: Show the toolchain
+        run: swift --version
+
+      # No fetch-sdk step: the vendor libraries load at run time and
+      # core-tests covers their absence.
+      - name: Build core-tests
+        run: swift build --product core-tests
+
+      - name: Run core-tests
+        run: swift run core-tests
+
+      - name: Build capture-cli
+        run: swift build --product capture-cli
+
+      - name: Build the macOS app
+        run: swift build --product CollimationApp
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check for platform imports in the shared core
+        shell: bash
+        run: bash scripts/check-core-imports.sh
+
+      # SwiftPM's librarian lookup wants MSVC's link.exe on PATH. Hosted
+      # runners pass today only because Git's coreutils link.exe satisfies it,
+      # so put the real one there.
+      - uses: compnerd/gha-setup-vsdevenv@main
+
+      - uses: compnerd/gha-setup-swift@v0.4.1
+        with:
+          swift-version: swift-6.3.3-release
+          swift-build: 6.3.3-RELEASE
+
+      - name: Show the toolchain
+        run: swift --version
+
+      # One swift command per step: PowerShell does not propagate a failing
+      # subcommand's exit code inside a compound line.
+      - name: Build core-tests
+        run: swift build --product core-tests
+
+      - name: Run core-tests
+        run: swift run core-tests
+
+      - name: Build capture-cli
+        run: swift build --product capture-cli

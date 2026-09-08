@@ -63,7 +63,7 @@ struct CompassDial: View {
 }
 
 struct SidebarView: View {
-    @ObservedObject var engine: CollimationEngine
+    @Bindable var engine: CollimationEngine
 
     var body: some View {
         ScrollView {
@@ -271,21 +271,10 @@ struct SidebarView: View {
         .onAppear { engine.refreshSerialPorts() }
     }
 
-    private var canCalibrateMount: Bool {
-        engine.isMountConnected
-            && engine.isConnected
-            && !engine.isMountBusy
-            && !engine.isStacking
-            && engine.tracking.state == .tracking
-    }
-
-    private var canCenterStar: Bool {
-        canCalibrateMount && engine.isMountCalibrated
-    }
-
-    private var canSaveConstellation: Bool {
-        canCenterStar
-    }
+    // Enablement lives on the engine so every surface agrees (see PARITY.md).
+    private var canCalibrateMount: Bool { engine.canCalibrateMount }
+    private var canCenterStar: Bool { engine.canCenterStar }
+    private var canSaveConstellation: Bool { engine.canSaveConstellation }
 
     private var roiSection: some View {
         GroupBox("ROI & zoom") {

@@ -4,6 +4,17 @@ Status: approved direction, detailed plan, 2026-09-08, reviewed. Written so
 that an engineer or agent with no prior context can execute it. The original
 macOS design is in `PLAN.md`; this document adds the multiplatform work on top.
 
+## Progress
+
+| Milestone | State |
+|---|---|
+| 0 — spike | Not run. Milestone 1 landed first, so the toolchain and SDK questions it answers are still open. The rendering questions (§6.1 tasks 3, 4, 6) still gate milestone 3. |
+| 1 — core portability, Observation, ZWO, CI | Code complete on branch `multiplatform-m1`. **Not compiled on either platform**: the machine it was written on has no Swift toolchain. CI (§7.7) is the first build. The acceptance list in §7.8 is untouched — nothing has been run on hardware. |
+| 2 — `CollimationUI` | Not started. |
+| 3 — portable app | Not started. |
+| 4 — mount and wheel on Windows | §10.1 pulled forward into milestone 1: the serial port is already split into `SerialPortDriver`, `SerialPortPOSIX`, and `SerialPortWindows`, because `core-tests` cannot build on Windows without it. §10.2 and §10.3 are not started. |
+| 5 — packaging and documentation | Partly done: `fetch-sdk.sh` handles ZWO and libusb, `fetch-sdk.ps1` fetches the Windows camera DLLs, `package-app.sh` bundles the ZWO libraries and targets macOS 14. `LICENSES/` and the Windows package are not started. |
+
 ## 1. Decisions on record
 
 | Decision | Choice | Why |

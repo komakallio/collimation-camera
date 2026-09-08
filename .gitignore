@@ -8,8 +8,16 @@ Vendor/PlayerOne/*.so
 Vendor/PlayerOne/*.dll
 Vendor/PlayerOne/*.zip
 Vendor/PlayerOne/SDK/
+Vendor/ZWO/*.dylib
+Vendor/ZWO/*.so
+Vendor/ZWO/*.dll
+Vendor/ZWO/*.zip
+Vendor/ZWO/SDK/
+Vendor/SDL3/
+Resources/CollimationCamera.res
 frame.png
 frame.pgm
+frame.tif
 *.app/
 dist/
 Resources/AppIcon.iconset/

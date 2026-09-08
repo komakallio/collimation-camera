@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import POACameraC
 
@@ -145,7 +144,7 @@ final class POACameraDevice: CameraDevice {
         }
         try grabBuffer.withUnsafeMutableBytes { raw in
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress else {
-                throw CameraError.poa(code: -1, message: "Failed to allocate frame buffer")
+                throw CameraError.sdk(vendor: .playerOne, code: -1, message: "Failed to allocate frame buffer")
             }
             try native.grab(cameraID, buffer: base, size: size, timeoutMs: timeoutMs) { [weak self] in
                 guard let self else { return true }
@@ -161,7 +160,7 @@ final class POACameraDevice: CameraDevice {
             grabBuffer.withUnsafeBytes { src in
                 guard let d = dest.baseAddress, let s = src.baseAddress else { return }
                 if format == POA_RAW16 {
-                    memcpy(d, s, pixelCount * MemoryLayout<UInt16>.size)
+                    d.copyMemory(from: s, byteCount: pixelCount * MemoryLayout<UInt16>.size)
                 } else {
                     let bytes = src.bindMemory(to: UInt8.self)
                     let out = dest.bindMemory(to: UInt16.self)

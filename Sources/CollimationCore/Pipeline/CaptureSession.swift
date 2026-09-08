@@ -2,6 +2,8 @@ import Foundation
 
 public final class CaptureSession: @unchecked Sendable {
     public var onFrame: ((Frame) -> Void)?
+    /// Called on the capture thread, not the main actor. The engine hops to
+    /// the main actor in its handler.
     public var onError: ((Error) -> Void)?
 
     private let queue = DispatchQueue(label: "collimation.capture", qos: .userInitiated)
@@ -112,7 +114,7 @@ public final class CaptureSession: @unchecked Sendable {
         do {
             try device.startVideo()
         } catch {
-            DispatchQueue.main.async { self.onError?(error) }
+            onError?(error)
             return
         }
 
@@ -150,7 +152,12 @@ public final class CaptureSession: @unchecked Sendable {
                 if !device.descriptor.isSimulator, capFPS > 0 {
                     let now = Date()
                     if now < nextFrameDeadline {
-                        Thread.sleep(forTimeInterval: nextFrameDeadline.timeIntervalSince(now))
+                        // Not Thread.sleep: on Windows that is quantized to the
+                        // process timer resolution, which turns a 33 ms pace
+                        // into about 47 ms.
+                        preciseSleep(
+                            microseconds: Int(nextFrameDeadline.timeIntervalSince(now) * 1_000_000)
+                        )
                     }
                     stateLock.lock()
                     let stillRunning = running
@@ -166,7 +173,7 @@ public final class CaptureSession: @unchecked Sendable {
             } catch CameraError.timeout {
                 continue
             } catch {
-                DispatchQueue.main.async { self.onError?(error) }
+                onError?(error)
                 break
             }
         }

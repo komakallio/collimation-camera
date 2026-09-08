@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import POACameraC
 
@@ -11,7 +10,7 @@ final class POAPWNative: @unchecked Sendable {
         }
     }()
 
-    private let handle: UnsafeMutableRawPointer
+    private let library: DynamicLibrary
 
     private let getPWCount: @convention(c) () -> Int32
     private let getPWProperties: @convention(c) (Int32, UnsafeMutablePointer<PWProperties>) -> PWErrors
@@ -32,14 +31,22 @@ final class POAPWNative: @unchecked Sendable {
     }
 
     private init() throws {
-        guard let handle = Self.openLibrary() else { throw FilterWheelError.sdkNotFound }
-        self.handle = handle
+        guard let library = DynamicLibrary(
+            candidates: DynamicLibrary.candidatePaths(
+                fileName: VendorLibrary.playerOneFilterWheel,
+                vendorFolder: VendorLibrary.playerOneFolder
+            ),
+            bareName: VendorLibrary.playerOneFilterWheel
+        ) else {
+            throw FilterWheelError.sdkNotFound
+        }
+        self.library = library
 
         func symbol<T>(_ name: String) throws -> T {
-            guard let raw = dlsym(handle, name) else {
+            guard let resolved: T = library.symbol(name) else {
                 throw FilterWheelError.sdkSymbolMissing(name)
             }
-            return unsafeBitCast(raw, to: T.self)
+            return resolved
         }
 
         getPWCount = try symbol("POAGetPWCount")
@@ -150,36 +157,5 @@ final class POAPWNative: @unchecked Sendable {
             guard let base = raw.baseAddress?.assumingMemoryBound(to: CChar.self) else { return "" }
             return String(cString: base)
         }
-    }
-
-    private static func openLibrary() -> UnsafeMutableRawPointer? {
-        for path in candidatePaths() {
-            if let handle = dlopen(path, RTLD_NOW | RTLD_LOCAL) {
-                return handle
-            }
-        }
-        return dlopen("libPlayerOnePW.dylib", RTLD_NOW | RTLD_LOCAL)
-    }
-
-    private static func candidatePaths() -> [String] {
-        var paths: [String] = []
-        if let frameworks = Bundle.main.privateFrameworksPath {
-            paths.append(frameworks + "/libPlayerOnePW.dylib")
-        }
-        if let exe = Bundle.main.executablePath {
-            let url = URL(fileURLWithPath: exe)
-            paths.append(url.deletingLastPathComponent().appendingPathComponent("libPlayerOnePW.dylib").path)
-            paths.append(
-                url.deletingLastPathComponent()
-                    .deletingLastPathComponent()
-                    .appendingPathComponent("Frameworks/libPlayerOnePW.dylib").path
-            )
-        }
-        let cwd = FileManager.default.currentDirectoryPath
-        paths.append(cwd + "/Vendor/PlayerOne/libPlayerOnePW.dylib")
-        paths.append(cwd + "/libPlayerOnePW.dylib")
-        paths.append("/usr/local/lib/libPlayerOnePW.dylib")
-        paths.append((NSHomeDirectory() as NSString).appendingPathComponent("Library/PlayerOne/libPlayerOnePW.dylib"))
-        return paths
     }
 }

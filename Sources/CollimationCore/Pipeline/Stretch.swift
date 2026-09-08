@@ -62,9 +62,9 @@ public struct StretchParams: Equatable, Sendable {
         let a = min(max(a, arcsinhRange.lowerBound), arcsinhRange.upperBound)
         if x == 0 { return 0 }
         if x == 1 { return 1 }
-        let denom = Darwin.asinh(a)
+        let denom = asinh(a)
         if denom < 1e-12 { return x }
-        return min(max(Darwin.asinh(a * x) / denom, 0), 1)
+        return min(max(asinh(a * x) / denom, 0), 1)
     }
 
     /// Factor that maps `linear` to `target` under the arcsinh curve.

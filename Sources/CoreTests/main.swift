@@ -3,6 +3,9 @@ import Foundation
 
 @main
 struct CoreTests {
+    // MainActor so tests can build a CollimationEngine, which is main-actor
+    // isolated. Nonisolated test bodies still convert to the closure type.
+    @MainActor
     static func main() {
         var failures = 0
         failures += run("histogram percentiles", testHistogramPercentiles)
@@ -64,6 +67,11 @@ struct CoreTests {
         failures += run("axis centering", testAxisCentering)
         failures += run("filter slot display name", testFilterSlotDisplayName)
         failures += run("filter wheel error text", testFilterWheelErrorText)
+        failures += run("bessel j1", testBesselJ1)
+        failures += run("roi alignment zwo", testROIAlignmentZWO)
+        failures += run("device vendor from id", testDeviceVendorFromID)
+        failures += run("camera error text", testCameraErrorText)
+        failures += run("remembered serial port", testRememberedSerialPort)
         failures += run("mono tiff 16-bit", testMonoTIFF)
         failures += run("mono tiff 32-bit float", testMonoTIFFFloat32)
         failures += run("frame stacker", testFrameStacker)
@@ -77,7 +85,8 @@ struct CoreTests {
         }
     }
 
-    private static func run(_ name: String, _ body: () throws -> Void) -> Int {
+    @MainActor
+    private static func run(_ name: String, _ body: @MainActor () throws -> Void) -> Int {
         do {
             try body()
             print("ok  \(name)")
@@ -313,12 +322,33 @@ private func testStarFWHM() throws {
 }
 
 private func testTelescopeOpticsFromCameraName() throws {
-    try expect(TelescopeOptics.forCameraName("Xena-M") == .xena585M, "Xena-M")
-    try expect(TelescopeOptics.forCameraName("Player One Xena") == .xena585M, "Xena substring")
-    try expect(TelescopeOptics.forCameraName("xena 585m") == .xena585M, "case")
-    try expect(TelescopeOptics.forCameraName("Poseidon-M") == .poseidon, "Poseidon-M")
-    try expect(TelescopeOptics.forCameraName("POSEIDON") == .poseidon, "POSEIDON")
-    try expect(TelescopeOptics.forCameraName("Simulator (Airy)") == .poseidon, "simulator default")
+    func optics(_ name: String, pixelSizeMicrons: Double) -> TelescopeOptics {
+        TelescopeOptics.forCamera(
+            CameraDescriptor(
+                id: "test",
+                name: name,
+                sensorWidth: 1024,
+                sensorHeight: 1024,
+                pixelSizeMicrons: pixelSizeMicrons,
+                isSimulator: false
+            )
+        )
+    }
+
+    try expect(TelescopeOptics.barlow(forCameraName: "Xena-M") == 4, "Xena-M")
+    try expect(TelescopeOptics.barlow(forCameraName: "Player One Xena") == 4, "Xena substring")
+    try expect(TelescopeOptics.barlow(forCameraName: "xena 585m") == 4, "case")
+    try expect(TelescopeOptics.barlow(forCameraName: "Poseidon-M") == 1, "Poseidon-M")
+    try expect(TelescopeOptics.barlow(forCameraName: "POSEIDON") == 1, "POSEIDON")
+    try expect(TelescopeOptics.barlow(forCameraName: "ASI585MM") == 1, "ZWO default")
+
+    // The pixel size now comes from the SDK descriptor, not a model table.
+    try expect(optics("Xena-M", pixelSizeMicrons: 2.9) == .xena585M, "Xena from descriptor")
+    try expect(optics("Poseidon-M", pixelSizeMicrons: 3.76) == .poseidon, "Poseidon from descriptor")
+    try expect(optics("ASI585MM Pro", pixelSizeMicrons: 2.9).pixelSizeMicrons == 2.9, "ZWO pixel size")
+    try expect(optics("ASI585MM Pro", pixelSizeMicrons: 2.9).barlow == 1, "ZWO no Barlow")
+    // A descriptor with no pixel size falls back to the Poseidon scale.
+    try expect(optics("Simulator (Airy)", pixelSizeMicrons: 0) == .poseidon, "simulator default")
     try expect(TelescopeOptics.xena585M.pixelSizeMicrons == 2.9, "2.9 µm")
     try expect(TelescopeOptics.xena585M.barlow == 4, "4× Barlow")
     try expect(TelescopeOptics.poseidon.pixelSizeMicrons == 3.76, "3.76 µm")
@@ -1638,11 +1668,217 @@ private func testFilterSlotDisplayName() throws {
     try expect(FilterSlot(position: 4, alias: "IR-cut").displayName == "5 · IR-cut", "instance")
 }
 
+private func testBesselJ1() throws {
+    try expect(abs(besselJ1(0.1) - 0.049937526036242) < 1e-7, "j1(0.1) = \(besselJ1(0.1))")
+    try expect(abs(besselJ1(1.0) - 0.440050585744934) < 1e-7, "j1(1) = \(besselJ1(1.0))")
+    try expect(abs(besselJ1(AiryScene.j1FirstZero)) < 1e-7, "first zero \(besselJ1(AiryScene.j1FirstZero))")
+    try expect(besselJ1(0) == 0, "odd function at zero")
+    try expect(abs(besselJ1(-1.0) + besselJ1(1.0)) < 1e-15, "odd function")
+    // Across the 8.0 branch cut the two approximations must still agree.
+    try expect(abs(besselJ1(7.999) - besselJ1(8.001)) < 1e-3, "branch continuity")
+    try expect(abs(besselJ1(10.0) - 0.043472746168844) < 1e-7, "j1(10) = \(besselJ1(10.0))")
+}
+
+private func testROIAlignmentZWO() throws {
+    let tracking = Alignment.centeredROI(
+        around: SIMD2(1000.5, 700.5),
+        size: 2048,
+        sensorWidth: 3856,
+        sensorHeight: 2180,
+        binning: 1,
+        alignment: .zwo
+    )
+    try expect(tracking.width % 8 == 0, "width \(tracking.width) is a multiple of 8")
+    try expect(tracking.height % 2 == 0, "height \(tracking.height) is a multiple of 2")
+    try expect(tracking.x >= 0 && tracking.y >= 0, "origin \(tracking.x),\(tracking.y)")
+    try expect(tracking.x + tracking.width <= 3856, "fits the sensor width")
+    try expect(tracking.y + tracking.height <= 2180, "fits the sensor height")
+
+    let search = Alignment.fullFrameROI(
+        sensorWidth: 3856,
+        sensorHeight: 2180,
+        binning: 4,
+        alignment: .zwo
+    )
+    try expect(search.width % 8 == 0, "binned search width \(search.width)")
+
+    // ASI120: width * height must be a multiple of 1024. The height step is
+    // derived from the chosen width, so the rule costs no sensor rows.
+    let asi120 = Alignment.centeredROI(
+        around: SIMD2(600, 400),
+        size: 512,
+        sensorWidth: 1280,
+        sensorHeight: 960,
+        binning: 1,
+        alignment: .zwoASI120
+    )
+    try expect(asi120.width % 8 == 0, "asi120 width \(asi120.width)")
+    try expect(asi120.height % 2 == 0, "asi120 height \(asi120.height)")
+    try expect((asi120.width * asi120.height) % 1024 == 0, "asi120 1024-pixel block")
+
+    let asi120Search = Alignment.fullFrameROI(
+        sensorWidth: 1280,
+        sensorHeight: 960,
+        binning: 4,
+        alignment: .zwoASI120
+    )
+    try expect(
+        asi120Search.width == 320 && asi120Search.height == 240,
+        "asi120 binned search covers the sensor, got \(asi120Search.width)x\(asi120Search.height)"
+    )
+    try expect((asi120Search.width * asi120Search.height) % 1024 == 0, "asi120 search block")
+
+    let asi120Full = Alignment.fullFrameROI(
+        sensorWidth: 1280,
+        sensorHeight: 960,
+        binning: 1,
+        alignment: .zwoASI120
+    )
+    try expect(
+        asi120Full.width == 1280 && asi120Full.height == 960,
+        "asi120 full frame is the whole sensor, got \(asi120Full.width)x\(asi120Full.height)"
+    )
+    try expect((asi120Full.width * asi120Full.height) % 1024 == 0, "asi120 full block")
+
+    try expect(ROIAlignment.forZWOCamera(named: "ZWO ASI120MM Mini") == .zwoASI120, "asi120 by name")
+    try expect(ROIAlignment.forZWOCamera(named: "ZWO ASI585MM") == .zwo, "other zwo by name")
+
+    // Player One keeps its own rules.
+    let poa = Alignment.centeredROI(
+        around: SIMD2(1000.5, 700.5),
+        size: 2048,
+        sensorWidth: 6252,
+        sensorHeight: 4176
+    )
+    try expect(poa.width % 4 == 0 && poa.x % 4 == 0, "player one width and x")
+    try expect(poa.height % 2 == 0 && poa.y % 2 == 0, "player one height and y")
+    try expect(poa.width == 2048 && poa.height == 2048, "player one tracking window \(poa.width)x\(poa.height)")
+
+    // Pre-port values on the Poseidon sensor. The alignment parameter must not
+    // have changed the Player One path.
+    let poaSearch = Alignment.fullFrameROI(sensorWidth: 6252, sensorHeight: 4176, binning: 4)
+    try expect(
+        poaSearch.width == 1560 && poaSearch.height == 1044,
+        "player one binned search \(poaSearch.width)x\(poaSearch.height)"
+    )
+    let poaFull = Alignment.fullFrameROI(sensorWidth: 6252, sensorHeight: 4176, binning: 1)
+    try expect(
+        poaFull.width == 6252 && poaFull.height == 4176,
+        "player one full frame \(poaFull.width)x\(poaFull.height)"
+    )
+    let poaCentered = Alignment.centeredROI(
+        around: SIMD2(3126, 2088),
+        size: 512,
+        sensorWidth: 6252,
+        sensorHeight: 4176
+    )
+    try expect(
+        poaCentered.x == 2868 && poaCentered.y == 1832
+            && poaCentered.width == 512 && poaCentered.height == 512,
+        "player one centered 512 at \(poaCentered.x),\(poaCentered.y)"
+    )
+}
+
+private func testDeviceVendorFromID() throws {
+    try expect(DeviceCatalog.vendor(forID: "poa-0") == .playerOne, "poa-0")
+    try expect(DeviceCatalog.vendor(forID: "asi-0") == .zwo, "asi-0")
+    try expect(DeviceCatalog.vendor(forID: "asi-12") == .zwo, "asi-12")
+    try expect(DeviceCatalog.vendor(forID: CameraDescriptor.simulator.id) == nil, "simulator")
+    try expect(DeviceCatalog.vendor(forID: CameraDescriptor.airySimulator.id) == nil, "airy simulator")
+    try expect(DeviceCatalog.vendor(forID: "asi-") == nil, "empty hardware id")
+    try expect(DeviceCatalog.vendor(forID: "asi-x") == nil, "non-numeric hardware id")
+    try expect(DeviceCatalog.vendor(forID: "nonsense") == nil, "junk")
+
+    // The simulators never need an SDK.
+    _ = try DeviceCatalog.makeDevice(id: CameraDescriptor.simulator.id)
+    _ = try DeviceCatalog.makeDevice(id: CameraDescriptor.airySimulator.id)
+
+    do {
+        _ = try DeviceCatalog.makeDevice(id: "nonsense")
+        throw Expectation(description: "an unknown id should throw")
+    } catch CameraError.unsupported {
+    }
+
+    // On a machine with the SDK present these ids reach the vendor library
+    // instead, so the assertion only applies when it is missing.
+    if DeviceCatalog.zwoSDKVersion == nil {
+        do {
+            _ = try DeviceCatalog.makeDevice(id: "asi-0")
+            throw Expectation(description: "asi-0 should throw without the ZWO SDK")
+        } catch CameraError.sdkNotFound(let vendor) {
+            try expect(vendor == .zwo, "zwo vendor")
+        }
+    }
+    if DeviceCatalog.playerOneSDKVersion == nil {
+        do {
+            _ = try DeviceCatalog.makeDevice(id: "poa-0")
+            throw Expectation(description: "poa-0 should throw without the Player One SDK")
+        } catch CameraError.sdkNotFound(let vendor) {
+            try expect(vendor == .playerOne, "player one vendor")
+        }
+    }
+}
+
+private func testCameraErrorText() throws {
+    let zwo = CameraError.sdkNotFound(vendor: .zwo).localizedDescription
+    try expect(zwo.contains(VendorLibrary.zwoCamera), "zwo library name in \(zwo)")
+    try expect(zwo.contains("ZWO"), "zwo display name")
+    let poa = CameraError.sdkNotFound(vendor: .playerOne).localizedDescription
+    try expect(poa.contains(VendorLibrary.playerOneCamera), "player one library name in \(poa)")
+    try expect(poa.contains("Player One"), "player one display name")
+    try expect(
+        CameraError.sdk(vendor: .zwo, code: 5, message: "removed").localizedDescription == "removed",
+        "sdk message passes through"
+    )
+#if os(Windows)
+    try expect(VendorLibrary.zwoCamera == "ASICamera2.dll", "windows zwo library")
+    try expect(VendorLibrary.playerOneCamera == "PlayerOneCamera.dll", "windows player one library")
+#elseif os(macOS)
+    try expect(VendorLibrary.zwoCamera == "libASICamera2.dylib", "macos zwo library")
+    try expect(VendorLibrary.playerOneCamera == "libPlayerOneCamera.dylib", "macos player one library")
+#endif
+}
+
+@MainActor
+private func testRememberedSerialPort() throws {
+    let suiteName = "collimation-camera.tests.serial"
+    guard let defaults = UserDefaults(suiteName: suiteName) else {
+        throw Expectation(description: "could not open the test defaults suite")
+    }
+    defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+    let key = "mount.serialPort"
+    let ports: () -> [String] = { ["/dev/cu.a", "/dev/cu.b"] }
+
+    defaults.set("/dev/cu.b", forKey: key)
+    let remembered = CollimationEngine(defaults: defaults, serialPortPaths: ports)
+    try expect(remembered.selectedSerialPort == "/dev/cu.b", "remembered \(remembered.selectedSerialPort)")
+    try expect(defaults.string(forKey: key) == "/dev/cu.b", "key kept \(defaults.string(forKey: key) ?? "nil")")
+    remembered.shutdown()
+
+    defaults.removeObject(forKey: key)
+    let fresh = CollimationEngine(defaults: defaults, serialPortPaths: ports)
+    try expect(fresh.selectedSerialPort == "/dev/cu.a", "first port \(fresh.selectedSerialPort)")
+    fresh.shutdown()
+
+    // A remembered port that is not plugged in stays selected and listed.
+    defaults.set("/dev/cu.z", forKey: key)
+    let unplugged = CollimationEngine(defaults: defaults, serialPortPaths: ports)
+    try expect(unplugged.selectedSerialPort == "/dev/cu.z", "kept \(unplugged.selectedSerialPort)")
+    try expect(unplugged.serialPorts.first == "/dev/cu.z", "listed first")
+    try expect(unplugged.serialPorts.count == 3, "scanned ports kept \(unplugged.serialPorts)")
+    unplugged.shutdown()
+}
+
 private func testFilterWheelErrorText() throws {
     try expect(
-        FilterWheelError.sdkNotFound.localizedDescription.contains("libPlayerOnePW.dylib"),
+        FilterWheelError.sdkNotFound.localizedDescription.contains(VendorLibrary.playerOneFilterWheel),
         "sdk path"
     )
+#if os(Windows)
+    try expect(VendorLibrary.playerOneFilterWheel == "PlayerOnePW.dll", "windows wheel library")
+#elseif os(macOS)
+    try expect(VendorLibrary.playerOneFilterWheel == "libPlayerOnePW.dylib", "macos wheel library")
+#endif
     try expect(
         FilterWheelError.noWheelSelected.localizedDescription.contains("Phoenix"),
         "select wheel"

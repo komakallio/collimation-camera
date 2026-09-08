@@ -6,12 +6,12 @@ import UniformTypeIdentifiers
 @main
 struct CollimationApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var engine = CollimationEngine()
+    @State private var engine = CollimationEngine()
 
     var body: some Scene {
         WindowGroup("Collimation Camera") {
             ContentView()
-                .environmentObject(engine)
+                .environment(engine)
                 .onAppear {
                     appDelegate.stopCapture = { engine.shutdown() }
                 }
@@ -150,7 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 struct ContentView: View {
-    @EnvironmentObject private var engine: CollimationEngine
+    @Environment(CollimationEngine.self) private var engine
 
     var body: some View {
         NavigationSplitView {
@@ -281,9 +281,9 @@ struct ContentView: View {
     }
 }
 
+/// Save panels for the three TIFF exports. The remembered folder lives on the
+/// engine, so the portable app's dialog starts in the same place.
 enum SnapshotExport {
-    private static let directoryDefaultsKey = "snapshot.directory"
-
     @MainActor
     static func present(engine: CollimationEngine) {
         let panel = NSSavePanel()
@@ -293,11 +293,9 @@ enum SnapshotExport {
         panel.nameFieldStringValue = engine.suggestedSnapshotName()
         panel.title = "Save ROI snapshot"
         panel.message = "Uncompressed 16-bit mono TIFF of the current camera ROI."
-        if let saved = UserDefaults.standard.string(forKey: directoryDefaultsKey) {
-            panel.directoryURL = URL(fileURLWithPath: saved, isDirectory: true)
-        }
+        panel.directoryURL = engine.snapshotDirectory
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        UserDefaults.standard.set(url.deletingLastPathComponent().path, forKey: directoryDefaultsKey)
+        engine.snapshotDirectory = url.deletingLastPathComponent()
         engine.saveSnapshot(to: url)
     }
 
@@ -310,11 +308,9 @@ enum SnapshotExport {
         panel.nameFieldStringValue = engine.suggestedStackedName()
         panel.title = "Save stacked TIFF"
         panel.message = "Captures \(engine.stackFrameCount) 256×256 crops at full camera readout, registers them on the star centroid, averages, and writes a 32-bit float mono TIFF."
-        if let saved = UserDefaults.standard.string(forKey: directoryDefaultsKey) {
-            panel.directoryURL = URL(fileURLWithPath: saved, isDirectory: true)
-        }
+        panel.directoryURL = engine.snapshotDirectory
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        UserDefaults.standard.set(url.deletingLastPathComponent().path, forKey: directoryDefaultsKey)
+        engine.snapshotDirectory = url.deletingLastPathComponent()
         engine.saveStackedSnapshot(to: url)
     }
 
@@ -327,11 +323,9 @@ enum SnapshotExport {
         panel.nameFieldStringValue = engine.suggestedConstellationName()
         panel.title = "Save constellation TIFF"
         panel.message = "Moves the star to the sensor center and eight points on a circle 80% of the frame height, stacks \(engine.stackFrameCount) frames at each 256 crop, and writes a 3×3 mosaic."
-        if let saved = UserDefaults.standard.string(forKey: directoryDefaultsKey) {
-            panel.directoryURL = URL(fileURLWithPath: saved, isDirectory: true)
-        }
+        panel.directoryURL = engine.snapshotDirectory
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        UserDefaults.standard.set(url.deletingLastPathComponent().path, forKey: directoryDefaultsKey)
+        engine.snapshotDirectory = url.deletingLastPathComponent()
         engine.saveConstellation(to: url)
     }
 }

@@ -240,22 +240,51 @@ public struct ImageLayout: Equatable, Sendable {
     }
 }
 
+/// Camera makers the app talks to. Both SDKs load at run time.
+public enum CameraVendor: String, Equatable, Sendable, CaseIterable {
+    case playerOne
+    case zwo
+
+    public var displayName: String {
+        switch self {
+        case .playerOne: return "Player One"
+        case .zwo: return "ZWO"
+        }
+    }
+
+    /// File name of the SDK library on this platform.
+    public var libraryFileName: String {
+        switch self {
+        case .playerOne: return VendorLibrary.playerOneCamera
+        case .zwo: return VendorLibrary.zwoCamera
+        }
+    }
+
+    /// Folder under `Vendor/` the SDK library is expected in.
+    public var vendorFolder: String {
+        switch self {
+        case .playerOne: return VendorLibrary.playerOneFolder
+        case .zwo: return VendorLibrary.zwoFolder
+        }
+    }
+}
+
 public enum CameraError: Error, LocalizedError, Sendable {
-    case sdkNotFound
+    case sdkNotFound(vendor: CameraVendor)
     case sdkSymbolMissing(String)
     case notConnected
     case timeout
     case disconnected
     case invalidROI
-    case poa(code: Int32, message: String)
+    case sdk(vendor: CameraVendor, code: Int32, message: String)
     case unsupported(String)
 
     public var errorDescription: String? {
         switch self {
-        case .sdkNotFound:
-            return "Player One Camera SDK library was not found. Place libPlayerOneCamera.dylib in Vendor/PlayerOne or the app Frameworks folder."
+        case .sdkNotFound(let vendor):
+            return "\(vendor.displayName) camera SDK library was not found. Place \(vendor.libraryFileName) in Vendor/\(vendor.vendorFolder) or next to the executable."
         case .sdkSymbolMissing(let name):
-            return "Player One SDK is missing symbol \(name)."
+            return "The camera SDK is missing symbol \(name)."
         case .notConnected:
             return "No camera is connected."
         case .timeout:
@@ -264,11 +293,94 @@ public enum CameraError: Error, LocalizedError, Sendable {
             return "The camera was disconnected."
         case .invalidROI:
             return "The requested ROI is not valid for this sensor."
-        case .poa(_, let message):
+        case .sdk(_, _, let message):
             return message
         case .unsupported(let detail):
             return detail
         }
+    }
+}
+
+/// ROI granularity a camera accepts. Player One wants width and x on 4 and
+/// height and y on 2; ZWO wants width on 8 and height on 2 and places no
+/// constraint on the origin. Sizes are post-binning on both.
+public struct ROIAlignment: Equatable, Sendable {
+    public var widthMultiple: Int
+    public var heightMultiple: Int
+    public var originXMultiple: Int
+    public var originYMultiple: Int
+    /// Extra rule for the ASI120 family: `width * height` must be a multiple of
+    /// this. 1 means no such rule.
+    public var blockPixels: Int
+
+    public init(
+        widthMultiple: Int,
+        heightMultiple: Int,
+        originXMultiple: Int,
+        originYMultiple: Int,
+        blockPixels: Int = 1
+    ) {
+        self.widthMultiple = max(1, widthMultiple)
+        self.heightMultiple = max(1, heightMultiple)
+        self.originXMultiple = max(1, originXMultiple)
+        self.originYMultiple = max(1, originYMultiple)
+        self.blockPixels = max(1, blockPixels)
+    }
+
+    public static let playerOne = ROIAlignment(
+        widthMultiple: 4,
+        heightMultiple: 2,
+        originXMultiple: 4,
+        originYMultiple: 2
+    )
+
+    public static let zwo = ROIAlignment(
+        widthMultiple: 8,
+        heightMultiple: 2,
+        originXMultiple: 1,
+        originYMultiple: 1
+    )
+
+    /// `width * height % 1024 == 0` for the ASI120 family.
+    public static let zwoASI120 = ROIAlignment(
+        widthMultiple: 8,
+        heightMultiple: 2,
+        originXMultiple: 1,
+        originYMultiple: 1,
+        blockPixels: 1024
+    )
+
+    /// ZWO alignment for a camera model. Only the ASI120 family carries the
+    /// extra 1024-pixel block rule.
+    public static func forZWOCamera(named name: String) -> ROIAlignment {
+        name.contains("120") ? .zwoASI120 : .zwo
+    }
+
+    /// Height granularity once the block rule is folded in, given the width
+    /// that was already chosen.
+    ///
+    /// Forcing the height onto a fixed multiple would satisfy the block rule
+    /// but throw away sensor rows: on a 1280×960 ASI120 a fixed 128 would cut
+    /// the binned search window to 320×128, half the sensor. Deriving the step
+    /// from the width keeps the full 320×240.
+    public func heightMultiple(forWidth width: Int) -> Int {
+        guard blockPixels > 1, width > 0 else { return heightMultiple }
+        let needed = blockPixels / Self.greatestCommonDivisor(width, blockPixels)
+        return Self.leastCommonMultiple(heightMultiple, needed)
+    }
+
+    static func greatestCommonDivisor(_ a: Int, _ b: Int) -> Int {
+        var x = abs(a)
+        var y = abs(b)
+        while y != 0 {
+            (x, y) = (y, x % y)
+        }
+        return x == 0 ? 1 : x
+    }
+
+    static func leastCommonMultiple(_ a: Int, _ b: Int) -> Int {
+        let divisor = greatestCommonDivisor(a, b)
+        return divisor == 0 ? max(a, b) : (a / divisor) * b
     }
 }
 
@@ -289,32 +401,45 @@ public enum Alignment {
         size: Int,
         sensorWidth: Int,
         sensorHeight: Int,
-        binning: Int = 1
+        binning: Int = 1,
+        alignment: ROIAlignment = .playerOne
     ) -> ROI {
         let bin = max(1, binning)
+        let widthStep = alignment.widthMultiple
         let requested = max(8, size)
-        var width = down(requested / bin, to: 4)
-        var height = down(requested / bin, to: 2)
-        width = max(width, 8)
-        height = max(height, 8)
-        width = min(width, down(sensorWidth / bin, to: 4))
-        height = min(height, down(sensorHeight / bin, to: 2))
+        // Smallest legal ROI: 8 pixels, rounded up to the camera's granularity.
+        var width = down(requested / bin, to: widthStep)
+        width = max(width, up(8, to: widthStep))
+        width = min(width, down(sensorWidth / bin, to: widthStep))
+
+        // The height step can depend on the width (the ASI120 block rule).
+        let heightStep = alignment.heightMultiple(forWidth: width)
+        var height = down(requested / bin, to: heightStep)
+        height = max(height, up(8, to: heightStep))
+        height = min(height, down(sensorHeight / bin, to: heightStep))
 
         var x = Int(sensorPoint.x.rounded()) - (width * bin) / 2
         var y = Int(sensorPoint.y.rounded()) - (height * bin) / 2
-        x = down(max(0, x), to: 4)
-        y = down(max(0, y), to: 2)
+        x = down(max(0, x), to: alignment.originXMultiple)
+        y = down(max(0, y), to: alignment.originYMultiple)
         x = min(x, max(0, sensorWidth - width * bin))
         y = min(y, max(0, sensorHeight - height * bin))
-        x = down(x, to: 4)
-        y = down(y, to: 2)
+        x = down(x, to: alignment.originXMultiple)
+        y = down(y, to: alignment.originYMultiple)
         return ROI(x: x, y: y, width: width, height: height, binning: bin)
     }
 
-    public static func fullFrameROI(sensorWidth: Int, sensorHeight: Int, binning: Int) -> ROI {
+    public static func fullFrameROI(
+        sensorWidth: Int,
+        sensorHeight: Int,
+        binning: Int,
+        alignment: ROIAlignment = .playerOne
+    ) -> ROI {
         let bin = max(1, binning)
-        let width = down(sensorWidth / bin, to: 4)
-        let height = down(sensorHeight / bin, to: 2)
-        return ROI(x: 0, y: 0, width: max(width, 8), height: max(height, 8), binning: bin)
+        let widthStep = alignment.widthMultiple
+        let width = max(down(sensorWidth / bin, to: widthStep), up(8, to: widthStep))
+        let heightStep = alignment.heightMultiple(forWidth: width)
+        let height = max(down(sensorHeight / bin, to: heightStep), up(8, to: heightStep))
+        return ROI(x: 0, y: 0, width: width, height: height, binning: bin)
     }
 }

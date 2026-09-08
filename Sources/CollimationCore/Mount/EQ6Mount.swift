@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 
 public protocol PulseGuider: AnyObject, Sendable {
@@ -14,10 +13,14 @@ public enum EQ6Protocol: String, Equatable, Sendable {
 /// EQ6 pulse-guide client. Auto-detects SynScan handset, LX200 `:Mg`, or SkyWatcher motor (EQDIR).
 public final class EQ6Mount: PulseGuider, @unchecked Sendable {
     private let lock = NSLock()
-    private let port = SerialPort()
+    private let port: SerialPortDriver
     private var proto: EQ6Protocol?
     private var siderealPeriod = 0
     private var activeNudge: SlewNudge?
+
+    public init(port: SerialPortDriver = PlatformSerialPort()) {
+        self.port = port
+    }
 
     public var isConnected: Bool {
         lock.lock()
@@ -37,13 +40,12 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
         proto = nil
         siderealPeriod = 0
         activeNudge = nil
-        let speed: speed_t = baud == 115200 ? speed_t(B115200) : speed_t(B9600)
         do {
-            try port.open(path: path, baud: speed)
+            try port.open(path: path, baud: baud)
         } catch {
             throw MountError.openFailed(path)
         }
-        usleep(80_000)
+        preciseSleep(microseconds: 80_000)
         port.flush()
 
         if probeSkyWatcherLocked() {
@@ -212,7 +214,7 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
         let forward = direction == .east || direction == .north
         let period = SkyWatcherEncoding.slowSlewPeriod(sidereal: siderealPeriod, siderealMultiple: siderealMultiple)
         try? skyCommandLocked("K", axis: axis, data: "")
-        usleep(80_000)
+        preciseSleep(microseconds: 80_000)
         try skyCommandLocked("G", axis: axis, data: forward ? "10" : "11")
         try skyCommandLocked("I", axis: axis, data: SkyWatcherEncoding.hex24(period))
         try skyCommandLocked("J", axis: axis, data: "")
@@ -221,16 +223,16 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
     private func pulseLX200Locked(_ direction: GuideDirection, milliseconds: Int) throws {
         try port.writeASCII(LX200PulseGuide.command(direction, milliseconds: milliseconds))
         _ = try readHashLocked(timeout: 2)
-        usleep(UInt32(milliseconds + 40) * 1000)
+        preciseSleep(milliseconds: milliseconds + 40)
     }
 
     private func pulseSynScanLocked(_ direction: GuideDirection, milliseconds: Int) throws {
         try port.write(SynScanGuide.fixedRateCommand(direction: direction, rate: 1))
         _ = try readHashLocked(timeout: 2)
-        usleep(UInt32(milliseconds) * 1000)
+        preciseSleep(milliseconds: milliseconds)
         try port.write(SynScanGuide.fixedRateCommand(direction: direction, rate: 0))
         _ = try readHashLocked(timeout: 2)
-        usleep(40_000)
+        preciseSleep(microseconds: 40_000)
     }
 
     private func pulseSkyWatcherLocked(_ direction: GuideDirection, milliseconds: Int) throws {
@@ -255,9 +257,9 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
         let period = SkyWatcherEncoding.trackingPeriod(sidereal: siderealPeriod)
         try skyCommandLocked("I", axis: axis, data: SkyWatcherEncoding.hex24(period))
         try skyCommandLocked("J", axis: axis, data: "")
-        usleep(UInt32(milliseconds) * 1000)
+        preciseSleep(milliseconds: milliseconds)
         try skyCommandLocked("K", axis: axis, data: "")
-        usleep(40_000)
+        preciseSleep(microseconds: 40_000)
     }
 
     private func probeSkyWatcherLocked() -> Bool {
@@ -312,8 +314,7 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
         } else {
             siderealPeriod = SkyWatcherEncoding.defaultSiderealPeriod
         }
-        print("EQ6 sidereal period \(siderealPeriod)")
-        fflush(stdout)
+        Log.info("EQ6 sidereal period \(siderealPeriod)")
     }
 
     private func stopTrackingLocked() throws {
@@ -321,7 +322,7 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
         case .skyWatcher:
             try skyCommandLocked("K", axis: 1, data: "")
             try skyCommandLocked("K", axis: 2, data: "")
-            usleep(200_000)
+            preciseSleep(microseconds: 200_000)
         case .synScan:
             try port.write(Data([UInt8(ascii: "T"), 0]))
             _ = try readHashLocked(timeout: 2)

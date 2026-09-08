@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import POACameraC
 
@@ -11,7 +10,7 @@ final class POANative: @unchecked Sendable {
         }
     }()
 
-    private let handle: UnsafeMutableRawPointer
+    private let library: DynamicLibrary
 
     private let getCameraCount: @convention(c) () -> Int32
     private let getCameraProperties: @convention(c) (Int32, UnsafeMutablePointer<POACameraProperties>) -> POAErrors
@@ -32,7 +31,8 @@ final class POANative: @unchecked Sendable {
     private let startExposure: @convention(c) (Int32, POABool) -> POAErrors
     private let stopExposure: @convention(c) (Int32) -> POAErrors
     private let imageReady: @convention(c) (Int32, UnsafeMutablePointer<POABool>) -> POAErrors
-    private let getImageData: @convention(c) (Int32, UnsafeMutablePointer<UInt8>, Int, Int32) -> POAErrors
+    // `long nBufSize`: 32-bit with MSVC, 64-bit with clang. CLong is both.
+    private let getImageData: @convention(c) (Int32, UnsafeMutablePointer<UInt8>, CLong, Int32) -> POAErrors
     private let getErrorString: @convention(c) (POAErrors) -> UnsafePointer<CChar>?
     private let getSDKVersion: @convention(c) () -> UnsafePointer<CChar>?
 
@@ -42,14 +42,22 @@ final class POANative: @unchecked Sendable {
     }
 
     private init() throws {
-        guard let handle = Self.openLibrary() else { throw CameraError.sdkNotFound }
-        self.handle = handle
+        guard let library = DynamicLibrary(
+            candidates: DynamicLibrary.candidatePaths(
+                fileName: VendorLibrary.playerOneCamera,
+                vendorFolder: VendorLibrary.playerOneFolder
+            ),
+            bareName: VendorLibrary.playerOneCamera
+        ) else {
+            throw CameraError.sdkNotFound(vendor: .playerOne)
+        }
+        self.library = library
 
         func symbol<T>(_ name: String) throws -> T {
-            guard let raw = dlsym(handle, name) else {
+            guard let resolved: T = library.symbol(name) else {
                 throw CameraError.sdkSymbolMissing(name)
             }
-            return unsafeBitCast(raw, to: T.self)
+            return resolved
         }
 
         getCameraCount = try symbol("POAGetCameraCount")
@@ -120,7 +128,7 @@ final class POANative: @unchecked Sendable {
         if error == POA_ERROR_TIMEOUT {
             throw CameraError.timeout
         }
-        throw CameraError.poa(code: Int32(error.rawValue), message: message)
+        throw CameraError.sdk(vendor: .playerOne, code: Int32(error.rawValue), message: message)
     }
 
     func open(_ id: Int32) throws { try check(openCamera(id)) }
@@ -129,7 +137,7 @@ final class POANative: @unchecked Sendable {
 
     func setInt(_ id: Int32, _ config: POAConfig, _ value: Int, auto: Bool = false) throws {
         var v = POAConfigValue()
-        v.intValue = value
+        v.intValue = CLong(value)
         try check(setConfig(id, config, v, auto ? POA_TRUE : POA_FALSE))
     }
 
@@ -218,7 +226,7 @@ final class POANative: @unchecked Sendable {
             var ready = POA_FALSE
             try check(imageReady(id, &ready))
             if ready == POA_TRUE { return }
-            usleep(200)
+            preciseSleep(microseconds: 200)
         }
         throw CameraError.timeout
     }
@@ -232,7 +240,7 @@ final class POANative: @unchecked Sendable {
     ) throws {
         try waitUntilFrameReady(id, timeoutMs: timeoutMs, isCancelled: isCancelled)
         if isCancelled() { throw CameraError.timeout }
-        try check(getImageData(id, buffer, size, 200))
+        try check(getImageData(id, buffer, CLong(size), 200))
     }
 
     func currentFormat(_ id: Int32) throws -> POAImgFormat {
@@ -257,36 +265,5 @@ final class POANative: @unchecked Sendable {
             guard let base = raw.baseAddress?.assumingMemoryBound(to: CChar.self) else { return "" }
             return String(cString: base)
         }
-    }
-
-    private static func openLibrary() -> UnsafeMutableRawPointer? {
-        for path in candidatePaths() {
-            if let handle = dlopen(path, RTLD_NOW | RTLD_LOCAL) {
-                return handle
-            }
-        }
-        return dlopen("libPlayerOneCamera.dylib", RTLD_NOW | RTLD_LOCAL)
-    }
-
-    private static func candidatePaths() -> [String] {
-        var paths: [String] = []
-        if let frameworks = Bundle.main.privateFrameworksPath {
-            paths.append(frameworks + "/libPlayerOneCamera.dylib")
-        }
-        if let exe = Bundle.main.executablePath {
-            let url = URL(fileURLWithPath: exe)
-            paths.append(url.deletingLastPathComponent().appendingPathComponent("libPlayerOneCamera.dylib").path)
-            paths.append(
-                url.deletingLastPathComponent()
-                    .deletingLastPathComponent()
-                    .appendingPathComponent("Frameworks/libPlayerOneCamera.dylib").path
-            )
-        }
-        let cwd = FileManager.default.currentDirectoryPath
-        paths.append(cwd + "/Vendor/PlayerOne/libPlayerOneCamera.dylib")
-        paths.append(cwd + "/libPlayerOneCamera.dylib")
-        paths.append("/usr/local/lib/libPlayerOneCamera.dylib")
-        paths.append((NSHomeDirectory() as NSString).appendingPathComponent("Library/PlayerOne/libPlayerOneCamera.dylib"))
-        return paths
     }
 }

@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import POACameraC
 
@@ -29,7 +28,7 @@ public final class PhoenixWheel: @unchecked Sendable {
         guard let descriptor = wheels.first(where: { $0.handle == requested }) else {
             throw FilterWheelError.noWheelSelected
         }
-        print("Phoenix FW open handle=\(descriptor.handle) \(descriptor.name)")
+        Log.info("Phoenix FW open handle=\(descriptor.handle) \(descriptor.name)")
         try native.open(descriptor.handle)
         lock.lock()
         cancelled = false
@@ -56,7 +55,7 @@ public final class PhoenixWheel: @unchecked Sendable {
         lock.unlock()
         if let existing, let native = POAPWNative.shared {
             native.close(existing)
-            print("Phoenix FW close handle=\(existing)")
+            Log.info("Phoenix FW close handle=\(existing)")
         }
     }
 
@@ -67,7 +66,7 @@ public final class PhoenixWheel: @unchecked Sendable {
         if let current = try? native.position(handle), current == position {
             return
         }
-        print("Phoenix FW goto \(position)")
+        Log.info("Phoenix FW goto \(position)")
         try native.goto(handle, position: position)
         let settled = try waitUntilSettled(native: native, handle: handle, timeout: 30)
         if settled != position {
@@ -126,20 +125,20 @@ public final class PhoenixWheel: @unchecked Sendable {
                 throw FilterWheelError.disconnected
             }
             if state == PW_STATE_MOVING {
-                usleep(80_000)
+                preciseSleep(microseconds: 80_000)
                 continue
             }
             do {
                 let position = try native.position(handle)
-                print("Phoenix FW position \(position)")
+                Log.info("Phoenix FW position \(position)")
                 return position
             } catch FilterWheelError.moving {
-                usleep(80_000)
+                preciseSleep(microseconds: 80_000)
             } catch FilterWheelError.firmware where !resetAttempted {
-                print("Phoenix FW firmware error — resetting")
+                Log.info("Phoenix FW firmware error — resetting")
                 native.reset(handle)
                 resetAttempted = true
-                usleep(200_000)
+                preciseSleep(microseconds: 200_000)
             }
         }
         throw FilterWheelError.timeout

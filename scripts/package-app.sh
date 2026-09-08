@@ -24,7 +24,7 @@ cat > "$DIST/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key><string>CollimationApp</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>
@@ -37,12 +37,21 @@ if [[ -f "$ROOT/Resources/AppIcon.icns" ]]; then
   cp "$ROOT/Resources/AppIcon.icns" "$DIST/Contents/Resources/AppIcon.icns"
 fi
 
-if [[ -f "$ROOT/Vendor/PlayerOne/libPlayerOneCamera.dylib" ]]; then
-  cp "$ROOT/Vendor/PlayerOne/libPlayerOneCamera.dylib" "$DIST/Contents/Frameworks/"
-  install_name_tool -add_rpath "@executable_path/../Frameworks" "$DIST/Contents/MacOS/CollimationApp" 2>/dev/null || true
-fi
-if [[ -f "$ROOT/Vendor/PlayerOne/libPlayerOnePW.dylib" ]]; then
-  cp "$ROOT/Vendor/PlayerOne/libPlayerOnePW.dylib" "$DIST/Contents/Frameworks/"
+# Vendor libraries are loaded at run time from Contents/Frameworks. One copy of
+# libusb serves both vendors.
+copied_vendor_library=0
+for lib in \
+  "$ROOT/Vendor/PlayerOne/libPlayerOneCamera.dylib" \
+  "$ROOT/Vendor/PlayerOne/libPlayerOnePW.dylib" \
+  "$ROOT/Vendor/ZWO/libASICamera2.dylib" \
+  "$ROOT/Vendor/ZWO/libusb-1.0.0.dylib"
+do
+  if [[ -f "$lib" ]]; then
+    cp "$lib" "$DIST/Contents/Frameworks/"
+    copied_vendor_library=1
+  fi
+done
+if [[ $copied_vendor_library -eq 1 ]]; then
   install_name_tool -add_rpath "@executable_path/../Frameworks" "$DIST/Contents/MacOS/CollimationApp" 2>/dev/null || true
 fi
 

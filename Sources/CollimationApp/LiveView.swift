@@ -4,7 +4,7 @@ import MetalKit
 import SwiftUI
 
 struct LiveView: NSViewRepresentable {
-    @ObservedObject var engine: CollimationEngine
+    let engine: CollimationEngine
 
     func makeCoordinator() -> Coordinator {
         Coordinator(engine: engine)
@@ -31,18 +31,17 @@ struct LiveView: NSViewRepresentable {
                 engine.zoom = engine.clampedZoom(engine.zoom * Double(magnification))
             }
         }
+        view.onResize = { size in
+            Task { @MainActor in
+                engine.viewWidth = size.width
+                engine.viewHeight = size.height
+                engine.updateStabilization()
+            }
+        }
         return view
     }
 
-    func updateNSView(_ nsView: LiveMTKView, context: Context) {
-        let width = nsView.bounds.width
-        let height = nsView.bounds.height
-        Task { @MainActor in
-            engine.viewWidth = width
-            engine.viewHeight = height
-            engine.updateStabilization()
-        }
-    }
+    func updateNSView(_ nsView: LiveMTKView, context: Context) {}
 
     final class Coordinator {
         let metalDevice: MTLDevice
@@ -68,8 +67,17 @@ struct LiveView: NSViewRepresentable {
 final class LiveMTKView: MTKView {
     var onScroll: ((CGFloat) -> Void)?
     var onMagnify: ((CGFloat) -> Void)?
+    /// Live-view size in points. `updateNSView` used to feed this, but it only
+    /// ran because `@ObservedObject` re-invoked it on every published change;
+    /// under Observation this view reads no tracked property.
+    var onResize: ((CGSize) -> Void)?
 
     override var acceptsFirstResponder: Bool { true }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        onResize?(bounds.size)
+    }
 
     override func scrollWheel(with event: NSEvent) {
         onScroll?(event.scrollingDeltaY)

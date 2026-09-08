@@ -23,6 +23,7 @@ final class FramePipeline: @unchecked Sendable {
     private var sensorWidth = CameraDescriptor.simulator.sensorWidth
     private var sensorHeight = CameraDescriptor.simulator.sensorHeight
     private var optics = TelescopeOptics.poseidon
+    private var roiAlignment = ROIAlignment.playerOne
     private var lastSensorCentroid: SIMD2<Double>?
     private var generation = 0
 
@@ -32,7 +33,9 @@ final class FramePipeline: @unchecked Sendable {
         sensorWidth: Int,
         sensorHeight: Int,
         holdROI: Bool = false,
-        optics: TelescopeOptics = .poseidon
+        optics: TelescopeOptics = .poseidon,
+        roiAlignment: ROIAlignment = .playerOne,
+        searchBinning: Int = 4
     ) {
         lock.lock()
         self.autoCenter = autoCenter
@@ -41,6 +44,10 @@ final class FramePipeline: @unchecked Sendable {
         self.sensorHeight = sensorHeight
         self.holdROI = holdROI
         self.optics = optics
+        self.roiAlignment = roiAlignment
+        // The tracker's own auto-search path builds a full-frame ROI too, so it
+        // needs the same device-legal binning as searchNow().
+        tracker.config.searchBinning = max(1, searchBinning)
         lock.unlock()
     }
 
@@ -72,6 +79,7 @@ final class FramePipeline: @unchecked Sendable {
         let sensorWidth = self.sensorWidth
         let sensorHeight = self.sensorHeight
         let optics = self.optics
+        let roiAlignment = self.roiAlignment
         let seed = lastSensorCentroid.map { frame.roi.framePixel(fromSensorPoint: $0) }
         lock.unlock()
 
@@ -109,7 +117,8 @@ final class FramePipeline: @unchecked Sendable {
             autoSearch: self.autoSearch && !self.holdROI,
             trackingROISize: CaptureLayout.trackingHardwareSize,
             sensorWidth: sensorWidth,
-            sensorHeight: sensorHeight
+            sensorHeight: sensorHeight,
+            alignment: roiAlignment
         )
         // Re-read after detection: Center can raise holdROI while this frame
         // was still being searched, and a stale 2048 request would win.

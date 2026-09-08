@@ -79,7 +79,8 @@ public struct Tracker: Sendable {
         autoSearch: Bool,
         trackingROISize: Int,
         sensorWidth: Int,
-        sensorHeight: Int
+        sensorHeight: Int,
+        alignment: ROIAlignment = .playerOne
     ) -> TrackingStatus {
         let now = Date()
         if let detection, detection.snr >= config.minSNR {
@@ -95,7 +96,8 @@ public struct Tracker: Sendable {
                         size: trackingROISize,
                         sensorWidth: sensorWidth,
                         sensorHeight: sensorHeight,
-                        binning: 1
+                        binning: 1,
+                        alignment: alignment
                     )
                 } else {
                     roi = nil
@@ -121,6 +123,7 @@ public struct Tracker: Sendable {
                     trackingROISize: trackingROISize,
                     sensorWidth: sensorWidth,
                     sensorHeight: sensorHeight,
+                    alignment: alignment,
                     now: now
                 )
             }
@@ -150,7 +153,8 @@ public struct Tracker: Sendable {
             let search = Alignment.fullFrameROI(
                 sensorWidth: sensorWidth,
                 sensorHeight: sensorHeight,
-                binning: config.searchBinning
+                binning: config.searchBinning,
+                alignment: alignment
             )
             lastMove = now
             return TrackingStatus(state: .searching, lostFrames: lostFrames, requestedROI: search)
@@ -175,6 +179,7 @@ public struct Tracker: Sendable {
         trackingROISize: Int,
         sensorWidth: Int,
         sensorHeight: Int,
+        alignment: ROIAlignment,
         now: Date
     ) -> ROI? {
         let cx = Double(frame.width - 1) / 2
@@ -191,7 +196,8 @@ public struct Tracker: Sendable {
             size: trackingROISize,
             sensorWidth: sensorWidth,
             sensorHeight: sensorHeight,
-            binning: 1
+            binning: 1,
+            alignment: alignment
         )
     }
 }

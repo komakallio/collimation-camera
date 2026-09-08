@@ -1,0 +1,4 @@
+module ASICameraC {
+    header "ASICamera2.h"
+    export *
+}
