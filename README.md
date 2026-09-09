@@ -1,12 +1,19 @@
 # Collimation Camera
 
-macOS app for collimating a telescope against an artificial star with a Player One or ZWO camera. It shows a GPU-stretched live view, keeps a star-centered ROI, and measures coma from a defocused donut.
+Collimate a telescope against an artificial star with a Player One or ZWO camera. The app shows a GPU-stretched live view, keeps a star-centered ROI, and measures coma from a defocused donut.
 
-The shared core, the frame grabber, and the tests also build and run on Windows. The Windows UI is not here yet; see `PLAN-MULTIPLATFORM.md` for the milestones.
+Two apps ship from this repository, on one shared core:
+
+| | macOS | Windows |
+|---|---|---|
+| **CollimationApp** | SwiftUI and Metal. The macOS release. | — |
+| **CollimationCamera** | SDL3 and Dear ImGui. A development and parity build. | SDL3 and Dear ImGui. The Windows release. |
+
+They drive the same engine and take every label, shortcut, and HUD from the same modules, so they behave the same. `PARITY.md` has the feature table and the deliberate differences; `PLAN-MULTIPLATFORM.md` has the milestones.
 
 ## Features
 
-- Live view with Metal stretch (16-bit texture, black/white/midtones MTF on the GPU)
+- Live view with a GPU stretch (16-bit texture, black/white/midtones MTF on the GPU; Metal on macOS, SDL3 GPU on Windows)
 - ROI sizes 256 / 512 / 1024 / 2048 / full, plus display zoom (25%–800%, pinch/scroll)
 - Auto-center the ROI on the star; full-frame binned search if it leaves the ROI
 - Manual and auto stretch (histogram percentiles)
@@ -28,18 +35,21 @@ The shared core, the frame grabber, and the tests also build and run on Windows.
 ### Windows
 
 - Windows 10 22H2 or Windows 11, x64, on an NTFS volume
-- Swift 6.3.3 (`winget install --id Swift.Toolchain -e --source winget`) and Visual Studio 2022 Build Tools with the MSVC v143 workload and a Windows 11 SDK
-- The Player One and ZWO camera drivers, which are separate downloads from each vendor's software page
-- `swift build --product core-tests` and `swift build --product capture-cli` are what build today
+- A GPU with Direct3D 12 feature level 11_0 (Intel Iris Xe and newer integrated graphics are enough)
+- **To run a release build**: nothing else. The zip carries the Swift runtime, the Microsoft C++ runtime, SDL3, and the vendor SDKs.
+- **To build**: Swift 6.3.3 (`winget install --id Swift.Toolchain -e --source winget`) and Visual Studio 2022 Build Tools with the MSVC v143 workload and a Windows 11 SDK, then `scripts\fetch-sdk.ps1` for SDL3 and the vendor SDKs
+- The Player One and ZWO camera **drivers** are separate downloads from each vendor's software page. Install the driver first, then plug the camera in. The SDK DLLs this repository fetches are not drivers.
 
-If `swift build` reports `could not find CLI tool 'link'`, SwiftPM did not find MSVC's `link.exe`. Run from the x64 Native Tools prompt, or pass `-Xswiftc -use-ld=lld`.
-
-Settings on Windows go to `%LOCALAPPDATA%\<executable name>.plist` and the guide calibration to `%LOCALAPPDATA%\Collimation Camera\guide-calibration.json`.
+`scripts\build-win.ps1 <swift arguments>` runs a build with both MSVC and the Swift toolchain on `PATH`; `scripts\run-win.ps1 CollimationCamera` starts a development build with the Swift runtime staged beside it. Running `swift build` from an ordinary shell reports `could not find CLI tool 'link'` because SwiftPM cannot find MSVC's `link.exe`.
 
 ## Build and run
 
+### macOS
+
 ```bash
-swift run CollimationApp
+swift run CollimationApp          # the SwiftUI app
+brew install sdl3
+swift run CollimationCamera       # the portable app, for parity checks
 ```
 
 `swift run` starts an unbundled binary. The app still takes over the menu bar and Dock as **Collimation Camera**. For a normal Dock icon and Info.plist, package it:
@@ -48,6 +58,23 @@ swift run CollimationApp
 scripts/package-app.sh
 open "dist/Collimation Camera.app"
 ```
+
+```bash
+scripts/package-portable-mac.sh
+open "dist/Collimation Camera (portable).app"
+```
+
+### Windows
+
+```powershell
+scripts\fetch-sdk.ps1
+scripts\build-win.ps1 build --product CollimationCamera
+scripts\run-win.ps1 CollimationCamera
+```
+
+A debug build keeps a console; a release build does not, and writes everything to its log file instead.
+
+### Both
 
 ```bash
 # Unit tests (synthetic donuts with known coma)
@@ -59,7 +86,30 @@ swift run capture-cli --simulator --output frame.tif
 swift run capture-cli --device asi-0 --output zwo.tif
 ```
 
-`make lint` checks that no shared module imports a UI or platform framework. CI runs the same check plus the tests on both platforms.
+`make lint` checks that no shared module imports a UI or platform framework. CI runs the same check, the tests, and both apps' builds on both platforms.
+
+## Packaging
+
+```bash
+scripts/package-app.sh              # dist/Collimation Camera.app
+scripts/package-portable-mac.sh     # dist/Collimation Camera (portable).app
+```
+
+```powershell
+scripts\package-win.ps1             # dist\CollimationCamera-win-x64\ and .zip
+```
+
+The Windows zip runs on a machine with no Swift toolchain: unzip it anywhere and start `CollimationCamera.exe`. The only prerequisite is the camera driver. Neither package is code-signed; see Troubleshooting.
+
+## Where files go
+
+| | macOS | Windows |
+|---|---|---|
+| Settings | `~/Library/Preferences/<bundle id>.plist` | `%LOCALAPPDATA%\<executable name>.plist` |
+| Guide calibration | `~/Library/Application Support/Collimation Camera/guide-calibration.json` | `%LOCALAPPDATA%\Collimation Camera\guide-calibration.json` |
+| Log file | standard output (SwiftUI app); `~/Library/Logs/Collimation Camera/collimation.log` (portable app) | `%LOCALAPPDATA%\Collimation Camera\collimation.log` |
+
+The portable app keeps one generation of history beside the log, as `collimation.log.1`. The two macOS apps have separate settings domains on purpose, so a remembered port or folder is per app.
 
 ## Camera SDKs
 
@@ -93,12 +143,39 @@ Without the filter-wheel library, the sidebar Filter wheel section stays disconn
 
 If the star leaves the ROI, the app switches to a binned full-frame search and recenters automatically.
 
+## Troubleshooting
+
+**macOS refuses to open the app.** The bundles are ad-hoc signed, not notarized. Open **System Settings → Privacy & Security** and choose **Open Anyway**, or clear the quarantine attribute:
+
+```bash
+xattr -d com.apple.quarantine "dist/Collimation Camera.app"
+```
+
+**Windows SmartScreen blocks the download.** The zip is unsigned. Choose **More info**, then **Run anyway**.
+
+**A camera is not in the list.** In order:
+
+1. The vendor driver is installed, and the camera was plugged in after the driver.
+2. No other application is holding the camera.
+3. The SDK library is where the app looks (see Camera SDKs above). On Windows the release zip already contains it.
+4. The log file names every path it tried and why each load failed. On Windows that is `%LOCALAPPDATA%\Collimation Camera\collimation.log`.
+
+**The portable app closes immediately, or reports a failed step.** Every startup failure — SDL, the GPU device, the shader pipeline — shows a message box naming the step and the log path. Windows error 126 next to a DLL means the file is there but a dependency is not; installing the vendor driver usually supplies it.
+
+## Third-party licenses
+
+`LICENSES/README.md` lists every component that ships inside a package — SDL3, Dear ImGui, cimgui, the DejaVu fonts, the Player One and ZWO SDKs, libusb on macOS, and the Swift and Microsoft C++ runtimes on Windows — with the license text or a link to it. The packaging scripts copy the directory into each package.
+
 ## Layout
 
 ```
 Sources/CollimationCore   capture, stretch, tracking, coma analysis (no UI)
 Sources/CollimationCore/Platform   the only #if os() code in the core
+Sources/CollimationUI     commands, formatters, HUD scenes; no UI framework
 Sources/CollimationApp    SwiftUI window + Metal live view (macOS)
+Sources/CollimationPortableApp   SDL3 + Dear ImGui window, live view, and HUD
+Sources/CSDL3             SDL3 module map and the flag shim
+Sources/CImGui            cimgui, the imgui subset, and the SDLGPU3 bridge
 Sources/CaptureCLI        one-shot frame grab
 Sources/POACameraC        Player One C types (functions resolved at run time)
 Sources/ASICameraC        ZWO C types (functions resolved at run time)
