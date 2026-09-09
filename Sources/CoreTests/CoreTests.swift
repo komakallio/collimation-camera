@@ -33,6 +33,7 @@ struct CoreTests {
         failures += run("tracker hold when lost", testTrackerHoldWhenLost)
         failures += run("tracker auto search", testTrackerAutoSearch)
         failures += run("search recovery", testSearchRecovery)
+        failures += run("search ignores jumping noise", testSearchIgnoresJumpingNoise)
         failures += run("software crop", testSoftwareCrop)
         failures += run("readout fps cap", testReadoutFPSCap)
         failures += run("stack capture buffer", testStackCaptureBuffer)
@@ -761,15 +762,20 @@ private func testSearchRecovery() throws {
         background: 900,
         sigma: 15
     )
-    let status = tracker.process(
-        frame: frame,
-        detection: detection,
-        autoCenter: true,
-        autoSearch: true,
-        trackingROISize: CaptureLayout.trackingHardwareSize,
-        sensorWidth: 800,
-        sensorHeight: 600
-    )
+    // Acquisition is debounced, so the same star has to show up
+    // `foundFrameLimit` times before the camera is moved onto it.
+    var status = TrackingStatus()
+    for _ in 0..<TrackingConfig().foundFrameLimit {
+        status = tracker.process(
+            frame: frame,
+            detection: detection,
+            autoCenter: true,
+            autoSearch: true,
+            trackingROISize: CaptureLayout.trackingHardwareSize,
+            sensorWidth: 800,
+            sensorHeight: 600
+        )
+    }
     try expect(status.state == TrackingState.tracking, "state")
     try expect(status.requestedROI?.binning == 1, "bin")
     try expect(
@@ -779,17 +785,77 @@ private func testSearchRecovery() throws {
 
     var held = Tracker()
     held.markSearching()
-    let heldStatus = held.process(
-        frame: frame,
-        detection: detection,
-        autoCenter: false,
-        autoSearch: false,
-        trackingROISize: CaptureLayout.trackingHardwareSize,
-        sensorWidth: 800,
-        sensorHeight: 600
-    )
+    var heldStatus = TrackingStatus()
+    for _ in 0..<TrackingConfig().foundFrameLimit {
+        heldStatus = held.process(
+            frame: frame,
+            detection: detection,
+            autoCenter: false,
+            autoSearch: false,
+            trackingROISize: CaptureLayout.trackingHardwareSize,
+            sensorWidth: 800,
+            sensorHeight: 600
+        )
+    }
     try expect(heldStatus.state == TrackingState.tracking, "still tracking")
     try expect(heldStatus.requestedROI == nil, "mount hold must not snap back to 2048")
+}
+
+/// A camera with no optics on it sees noise, and a full-frame search finds a
+/// different bright pixel every frame. Undebounced, each one promoted the
+/// tracker to `.tracking` and moved the camera to a 2048 window, which then
+/// held nothing, so eight frames later it went back to searching: at 30 fps
+/// the view flickered between the crop and the full frame about three times a
+/// second. A detection that moves must never leave the search.
+private func testSearchIgnoresJumpingNoise() throws {
+    var tracker = Tracker()
+    tracker.markSearching()
+    let roi = Alignment.fullFrameROI(sensorWidth: 800, sensorHeight: 600, binning: 4)
+    let frame = Frame(
+        width: roi.width,
+        height: roi.height,
+        pixels: [UInt16](repeating: 900, count: roi.width * roi.height),
+        roi: roi
+    )
+    func peak(at x: Double, _ y: Double) -> StarDetection {
+        StarDetection(centroid: SIMD2(x, y), peak: 40_000, flux: 40_000, area: 50, background: 900, sigma: 15)
+    }
+
+    // Twenty frames of noise, never twice in the same place.
+    var status = TrackingStatus()
+    for index in 0..<20 {
+        status = tracker.process(
+            frame: frame,
+            detection: peak(at: Double(10 + index * 5), Double(60 - index * 2)),
+            autoCenter: true,
+            autoSearch: true,
+            trackingROISize: CaptureLayout.trackingHardwareSize,
+            sensorWidth: 800,
+            sensorHeight: 600
+        )
+        try expect(status.state == TrackingState.searching, "frame \(index) left the search")
+        try expect(status.requestedROI == nil, "frame \(index) moved the camera")
+    }
+
+    // A star that stays put is acquired, and on the frame after the limit,
+    // not later.
+    for index in 0..<TrackingConfig().foundFrameLimit {
+        status = tracker.process(
+            frame: frame,
+            detection: peak(at: 40, 40),
+            autoCenter: true,
+            autoSearch: true,
+            trackingROISize: CaptureLayout.trackingHardwareSize,
+            sensorWidth: 800,
+            sensorHeight: 600
+        )
+        let last = index == TrackingConfig().foundFrameLimit - 1
+        try expect(
+            status.state == (last ? TrackingState.tracking : TrackingState.searching),
+            "frame \(index) state \(status.state)"
+        )
+    }
+    try expect(status.requestedROI != nil, "acquired without moving the camera")
 }
 
 private func testSoftwareCrop() throws {

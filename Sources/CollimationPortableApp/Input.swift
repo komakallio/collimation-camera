@@ -60,6 +60,12 @@ enum Input {
         let anyPopup = Int32(ImGuiPopupFlags_AnyPopupId.rawValue | ImGuiPopupFlags_AnyPopupLevel.rawValue)
         guard !igIsPopupOpen_Str(nil, anyPopup) else { return }
 
+        if let quit = chord(for: MenuBar.quitShortcut),
+           igShortcut_Nil(quit, Int32(ImGuiInputFlags_RouteGlobal.rawValue))
+        {
+            MenuBar.quitRequested = true
+        }
+
         for command in CommandCatalog.all + CommandCatalog.filterCommands(engine) {
             guard command.isEnabled(engine) else { continue }
             for shortcut in command.shortcuts {

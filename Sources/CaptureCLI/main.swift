@@ -3,7 +3,22 @@ import Foundation
 
 @main
 struct CaptureCLI {
-    static func main() throws {
+    static func main() {
+        // An uncaught error out of main traps with a Swift stack trace, which
+        // is no use to somebody at a telescope trying to find out why the
+        // camera did not open. Report it and exit non-zero.
+        do {
+            try run()
+        } catch let error as CameraError {
+            FileHandle.standardError.write(Data("\(error.errorDescription ?? "\(error)")\n".utf8))
+            exit(1)
+        } catch {
+            FileHandle.standardError.write(Data("\(error)\n".utf8))
+            exit(1)
+        }
+    }
+
+    private static func run() throws {
         // Every wait in this process rounds up to the process timer resolution
         // on Windows, which is 15.6 ms until something asks for better. The apps
         // get this from SDL_Init; a command-line tool has to ask (§6.2).

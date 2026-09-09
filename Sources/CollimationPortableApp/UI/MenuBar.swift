@@ -12,9 +12,30 @@ enum MenuBar {
     /// Height in window coordinates, so the live region can start below it.
     nonisolated(unsafe) static var height: Double = 0
 
+    /// Set by File ▸ Quit or its shortcut. The loop reads it.
+    nonisolated(unsafe) static var quitRequested = false
+
+    /// ⌘Q on macOS, Ctrl+Q on Windows, the same way `Shortcut` renders every
+    /// other one.
+    static let quitShortcut = Shortcut.primary("q")
+
     static func draw(engine: CollimationEngine, host: any UIHost) {
         guard igBeginMainMenuBar() else { return }
         height = Double(igGetWindowHeight())
+
+        // Quit is not a `CommandCatalog` entry: it acts on the process, not on
+        // the engine, and on macOS the SwiftUI app gets it from the system app
+        // menu instead. This window is the only place it can live, and without
+        // it the app can only be closed from the title bar.
+        if "File".withCString({ igBeginMenu($0, true) }) {
+            let clicked = "Quit".withCString { label in
+                MenuBar.quitShortcut.displayString.withCString { shortcut in
+                    igMenuItem_Bool(label, shortcut, false, true)
+                }
+            }
+            if clicked { quitRequested = true }
+            igEndMenu()
+        }
 
         for menu in CommandMenu.allCases {
             let commands = CommandCatalog.commands(in: menu, engine: engine)

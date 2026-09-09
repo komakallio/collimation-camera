@@ -293,15 +293,21 @@ enum Sidebar {
         igBeginDisabled(!enabled)
         defer { igEndDisabled() }
 
+        // ImGui derives a widget's identity from its label, so the camera,
+        // filter wheel and mount Connect buttons were all the same widget and
+        // ImGui put up a "3 visible items with conflicting ID" dialog over the
+        // live view. Everything after "##" is identity only and is not drawn,
+        // so the command id — which is unique and does not change when the
+        // title flips between Connect and Disconnect — keys them apart.
+        let label = command.sidebarTitle(engine) + "##" + command.id
+
         switch command.kind {
         case .action:
-            let label = command.sidebarTitle(engine)
             if label.withCString({ igButton($0, ImVec2(x: 0, y: 0)) }) {
                 command.perform(engine, host)
             }
         case .toggle(let get, let set):
             var value = get(engine)
-            let label = command.sidebarTitle(engine)
             let changed = label.withCString { igCheckbox($0, &value) }
             if changed { set(engine, value) }
         }

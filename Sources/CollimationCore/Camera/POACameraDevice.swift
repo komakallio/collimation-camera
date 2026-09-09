@@ -30,27 +30,34 @@ final class POACameraDevice: CameraDevice {
     }
 
     func open() throws {
+        // The properties lookup has to come first. It calls POAGetCameraCount,
+        // which is what scans the bus and makes a camera id valid; without it
+        // POAOpenCamera answers POA_ERROR_INVALID_ID. Enumerating and opening
+        // are the same process in the app, so this was invisible there — but
+        // `capture-cli --device poa-0` opens without ever listing, and failed
+        // against a real Xena 585M until this was reordered.
+        guard let props = native.properties(cameraID) else {
+            throw CameraError.notConnected
+        }
         try native.open(cameraID)
         try native.initialize(cameraID)
         opened = true
-        if let props = native.properties(cameraID) {
-            descriptor = CameraDescriptor(
-                id: "poa-\(cameraID)",
-                name: cString(props.cameraModelName),
-                sensorWidth: Int(props.maxWidth),
-                sensorHeight: Int(props.maxHeight),
-                pixelSizeMicrons: props.pixelSize,
-                isSimulator: false,
-                hardwareID: cameraID
-            )
-            var bins: [Int] = []
-            withUnsafeBytes(of: props.bins) { raw in
-                for v in raw.bindMemory(to: Int32.self) where v > 0 {
-                    bins.append(Int(v))
-                }
+        descriptor = CameraDescriptor(
+            id: "poa-\(cameraID)",
+            name: cString(props.cameraModelName),
+            sensorWidth: Int(props.maxWidth),
+            sensorHeight: Int(props.maxHeight),
+            pixelSizeMicrons: props.pixelSize,
+            isSimulator: false,
+            hardwareID: cameraID
+        )
+        var bins: [Int] = []
+        withUnsafeBytes(of: props.bins) { raw in
+            for v in raw.bindMemory(to: Int32.self) where v > 0 {
+                bins.append(Int(v))
             }
-            if !bins.isEmpty { supportedBins = bins }
         }
+        if !bins.isEmpty { supportedBins = bins }
         if let range = native.intRange(cameraID, POA_EXPOSURE) {
             controls.exposureRange = range
         }

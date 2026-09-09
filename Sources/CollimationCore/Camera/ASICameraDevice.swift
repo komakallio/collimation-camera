@@ -36,22 +36,29 @@ final class ASICameraDevice: CameraDevice {
     }
 
     func open() throws {
+        // Same ordering as the Player One path, and for the same reason: the
+        // property lookup calls ASIGetNumOfConnectedCameras, which is what
+        // scans the bus and makes a camera id valid. Opening first worked only
+        // because the app always enumerated in the same process beforehand.
+        // Player One was confirmed to fail this way on real hardware; ZWO
+        // documents the same requirement but has not been tested.
+        guard let info = native.property(forCameraID: cameraID) else {
+            throw CameraError.notConnected
+        }
         try native.open(cameraID)
         try native.initialize(cameraID)
         opened = true
 
-        if let info = native.property(forCameraID: cameraID) {
-            descriptor = native.descriptor(from: info)
-            var bins: [Int] = []
-            withUnsafeBytes(of: info.SupportedBins) { raw in
-                for value in raw.bindMemory(to: Int32.self) {
-                    if value <= 0 { break }
-                    bins.append(Int(value))
-                }
+        descriptor = native.descriptor(from: info)
+        var bins: [Int] = []
+        withUnsafeBytes(of: info.SupportedBins) { raw in
+            for value in raw.bindMemory(to: Int32.self) {
+                if value <= 0 { break }
+                bins.append(Int(value))
             }
-            if !bins.isEmpty { supportedBins = bins }
-            roiAlignment = ROIAlignment.forZWOCamera(named: descriptor.name)
         }
+        if !bins.isEmpty { supportedBins = bins }
+        roiAlignment = ROIAlignment.forZWOCamera(named: descriptor.name)
 
         let ranges = native.controlRanges(cameraID)
         if let range = ranges[Int32(ASI_EXPOSURE.rawValue)] {

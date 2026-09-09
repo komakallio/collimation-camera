@@ -15,11 +15,17 @@ render loop is exercised without a person closing the window.
 .EXAMPLE
 scripts\run-win.ps1 CollimationCamera
 scripts\run-win.ps1 CollimationCamera -Seconds 8
+scripts\run-win.ps1 CollimationCamera -Configuration release
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Product,
     [int]$Seconds = 0,
-    [string]$ScratchPath = '.build-win'
+    [string]$ScratchPath = '.build-win',
+    # Matches swift build's -c. A debug build runs about five times slower, so
+    # anything measuring a rate has to say release here.
+    [ValidateSet('debug', 'release')][string]$Configuration = 'debug',
+    # Passed to the program itself, for --snapshot and friends.
+    [Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -29,7 +35,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-$binDirectory = Join-Path $root "$ScratchPath\x86_64-unknown-windows-msvc\debug"
+$binDirectory = Join-Path $root "$ScratchPath\x86_64-unknown-windows-msvc\$Configuration"
 $exe = Join-Path $binDirectory "$Product.exe"
 if (-not (Test-Path $exe)) { throw "No such executable: $exe" }
 
@@ -37,11 +43,11 @@ if (-not (Test-Path $exe)) { throw "No such executable: $exe" }
 Add-WindowsRuntime -Directory $binDirectory
 
 if ($Seconds -le 0) {
-    & $exe
+    & $exe @Arguments
     exit $LASTEXITCODE
 }
 
-$process = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru
+$process = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru -ArgumentList $Arguments
 Start-Sleep -Seconds $Seconds
 if (-not $process.HasExited) {
     Stop-Process -Id $process.Id -Force
