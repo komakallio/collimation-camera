@@ -1966,6 +1966,12 @@ was not.
   Player One camera 3.10.1, ZWO 1.41, and Player One filter wheel 1.2.3.0
   through `DynamicLibrary`, and lists COM3 from the registry scanner. No
   camera or wheel was attached, so only the load path is confirmed.
+- **Minimize, restore, and resize do not stall it.** `window-stress-win.ps1`
+  minimizes the window for ten seconds, restores it, and resizes it from
+  700×500 to 2400×1500 and back, checking after each step that the window
+  still answers messages. It passes on the packaged release and on a
+  development build. The fps recovery number of §9.8 still needs the UI in
+  front of somebody.
 - **A 200-second soak of the packaged release** against the simulator holds
   steady: working set oscillates between 94 and 104 MB with no trend, private
   bytes 80 to 90 MB, handle count 336 to 344. Nothing leaks over that window.
