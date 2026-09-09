@@ -25,10 +25,15 @@ Log.info("SDL \(SDL_GetVersion())")
 // answer over a remote desktop session where a message box is in the way.
 let selfChecking = SelfCheck.isRequested(CommandLine.arguments)
 
+// `--snapshot <file.png>` renders one frame offscreen and writes it out, so it
+// needs no visible window either — which is the point: it works on a machine
+// reached over remote desktop, or one whose display has gone to sleep.
+let snapshotPath = Snapshot.requestedPath(CommandLine.arguments)
+
 let displayScale = Double(SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay()))
 let initialScale = displayScale > 0 ? displayScale : 1
 var windowFlags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY
-if selfChecking { windowFlags |= SDL_WINDOW_HIDDEN }
+if selfChecking || snapshotPath != nil { windowFlags |= SDL_WINDOW_HIDDEN }
 guard let window = SDL_CreateWindow(
     "Collimation Camera",
     Int32(1280 * initialScale),
@@ -126,7 +131,10 @@ let loop = MainLoop(
     device: device,
     engine: engine,
     host: host,
-    renderer: renderer
+    renderer: renderer,
+    swapchainFormat: swapchainFormat,
+    snapshotPath: snapshotPath,
+    snapshotAfter: Snapshot.settleSeconds(CommandLine.arguments)
 )
 loop.run()
 
@@ -143,3 +151,8 @@ SDL_DestroyWindow(window)
 SDL_Quit()
 Log.info("clean exit")
 Diagnostics.stop()
+
+// Only `--snapshot` can end with a non-zero status; a normal quit is 0.
+if loop.exitStatus != 0 {
+    exit(loop.exitStatus)
+}

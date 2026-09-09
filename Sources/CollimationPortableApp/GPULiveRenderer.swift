@@ -110,24 +110,45 @@ final class GPULiveRenderer {
             return
         }
 
+        renderScene(
+            commandBuffer: commandBuffer,
+            colorTarget: swapchain,
+            renderState: renderState.peek(),
+            liveRect: liveRect,
+            windowSize: windowSize,
+            drawImGui: drawImGui
+        )
+        _ = SDL_SubmitGPUCommandBuffer(commandBuffer)
+    }
+
+    /// One render pass into `colorTarget`: clear, the stretched image, then
+    /// the ImGui draw data on top. The swapchain and the offscreen snapshot
+    /// both go through this, so a snapshot is the same picture the window
+    /// shows rather than a second implementation of it.
+    func renderScene(
+        commandBuffer: OpaquePointer,
+        colorTarget: OpaquePointer,
+        renderState: RenderState,
+        liveRect: (origin: SIMD2<Double>, size: SIMD2<Double>),
+        windowSize: SIMD2<Double>,
+        drawImGui: (OpaquePointer, OpaquePointer) -> Void
+    ) {
         var target = SDL_GPUColorTargetInfo()
-        target.texture = swapchain
+        target.texture = colorTarget
         target.clear_color = Self.clearColor
         target.load_op = SDL_GPU_LOADOP_CLEAR
         target.store_op = SDL_GPU_STOREOP_STORE
 
-        if let pass = SDL_BeginGPURenderPass(commandBuffer, &target, 1, nil) {
-            drawImage(
-                pass: pass,
-                commandBuffer: commandBuffer,
-                renderState: renderState.peek(),
-                liveRect: liveRect,
-                windowSize: windowSize
-            )
-            drawImGui(commandBuffer, pass)
-            SDL_EndGPURenderPass(pass)
-        }
-        _ = SDL_SubmitGPUCommandBuffer(commandBuffer)
+        guard let pass = SDL_BeginGPURenderPass(commandBuffer, &target, 1, nil) else { return }
+        drawImage(
+            pass: pass,
+            commandBuffer: commandBuffer,
+            renderState: renderState,
+            liveRect: liveRect,
+            windowSize: windowSize
+        )
+        drawImGui(commandBuffer, pass)
+        SDL_EndGPURenderPass(pass)
     }
 
     private func drawImage(

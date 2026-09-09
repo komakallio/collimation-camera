@@ -14,6 +14,14 @@ final class MainLoop {
     private let renderer: GPULiveRenderer
     private var running = true
 
+    /// Set by `--snapshot`: after `settleSeconds` the next frame goes to this
+    /// file instead of the window, and the app exits.
+    private let snapshotPath: String?
+    private let snapshotAfter: Double
+    private let swapchainFormat: SDL_GPUTextureFormat
+    private let startedAt = Date()
+    private var snapshotSucceeded = false
+
     /// Window points per window coordinate. 2.0 on Windows at 200% (window
     /// coordinates are pixels there), 1.0 on a Retina Mac (they are points).
     private var pointScale: Double = 1
@@ -23,14 +31,26 @@ final class MainLoop {
         device: OpaquePointer,
         engine: CollimationEngine,
         host: PortableUIHost,
-        renderer: GPULiveRenderer
+        renderer: GPULiveRenderer,
+        swapchainFormat: SDL_GPUTextureFormat,
+        snapshotPath: String? = nil,
+        snapshotAfter: Double = 0
     ) {
         self.window = window
         self.device = device
         self.engine = engine
         self.host = host
         self.renderer = renderer
+        self.swapchainFormat = swapchainFormat
+        self.snapshotPath = snapshotPath
+        self.snapshotAfter = snapshotAfter
         updatePointScale()
+    }
+
+    /// Non-zero only when `--snapshot` failed, so the caller can exit non-zero.
+    var exitStatus: Int32 {
+        guard snapshotPath != nil else { return 0 }
+        return snapshotSucceeded ? 0 : 1
     }
 
     func updatePointScale() {
@@ -140,6 +160,37 @@ final class MainLoop {
 
         igRender()
 
+        let drawImGui: (OpaquePointer, OpaquePointer) -> Void = { commandBuffer, pass in
+            if let drawData = igGetDrawData() {
+                cimgui_sdlgpu3_render_draw_data(drawData, commandBuffer, pass)
+            }
+        }
+        let prepareImGui: (OpaquePointer) -> Void = { commandBuffer in
+            if let drawData = igGetDrawData() {
+                cimgui_sdlgpu3_prepare_draw_data(drawData, commandBuffer)
+            }
+        }
+
+        // `--snapshot`: one offscreen frame to a file, then quit. Taken here
+        // rather than after the loop because the ImGui draw data is only valid
+        // between igRender and the next igNewFrame.
+        if let snapshotPath, Date().timeIntervalSince(startedAt) >= snapshotAfter {
+            snapshotSucceeded = Snapshot.write(
+                to: snapshotPath,
+                device: device,
+                window: window,
+                format: swapchainFormat,
+                renderer: renderer,
+                engine: engine,
+                liveRect: live,
+                windowSize: windowSizeInPoints(),
+                drawImGui: drawImGui,
+                prepareImGui: prepareImGui
+            )
+            running = false
+            return
+        }
+
         renderer.draw(
             frames: engine.frameSlot,
             renderState: engine.renderStateSlot,
@@ -147,16 +198,8 @@ final class MainLoop {
             window: window,
             liveRect: live,
             windowSize: windowSizeInPoints(),
-            drawImGui: { commandBuffer, pass in
-                if let drawData = igGetDrawData() {
-                    cimgui_sdlgpu3_render_draw_data(drawData, commandBuffer, pass)
-                }
-            },
-            prepareImGui: { commandBuffer in
-                if let drawData = igGetDrawData() {
-                    cimgui_sdlgpu3_prepare_draw_data(drawData, commandBuffer)
-                }
-            }
+            drawImGui: drawImGui,
+            prepareImGui: prepareImGui
         )
     }
 }
