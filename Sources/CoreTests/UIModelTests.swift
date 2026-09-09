@@ -544,6 +544,22 @@ func testMountFailureMeansDisconnected() throws {
         ),
         "so is a protocol failure"
     )
+
+    // The EQDIR case, and the reason the first version of this check was
+    // useless on the hardware it was written for. Only `readHashLocked` turns a
+    // serial failure into a MountError, and only the SynScan and LX200 paths
+    // use it; `skyCommandLocked` reads the port directly, so a SkyWatcher
+    // cable throws SerialPortError and nothing else.
+    for error in [SerialPortError.timeout, SerialPortError.ioFailed, SerialPortError.closed] {
+        try expectUI(
+            CollimationEngine.mountFailureMeansDisconnected(error, port: "COM4", availablePorts: gone),
+            "\(error) on a vanished port is a disconnect"
+        )
+        try expectUI(
+            !CollimationEngine.mountFailureMeansDisconnected(error, port: "COM4", availablePorts: present),
+            "\(error) on a port that is still there is not"
+        )
+    }
     // The ones that say nothing about the cable. noStar in particular is what
     // a centering run throws when the star drifts off, and disconnecting the
     // mount for that would be its own bug.

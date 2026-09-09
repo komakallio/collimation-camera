@@ -568,6 +568,9 @@ public final class CollimationEngine {
         } catch is CancellationError {
             statusText = "Constellation cancelled"
         } catch {
+            // The constellation reaches the mount through `moveStar`, so it can
+            // fail on a pulled cable exactly as calibration and centering can.
+            noteMountFailure(error)
             presentError(error)
             statusText = "Constellation failed"
         }
@@ -1257,13 +1260,21 @@ public final class CollimationEngine {
     /// calibration that came out too small and a cancellation all say nothing
     /// about the cable; a timeout or a protocol failure might, and the port
     /// list is what settles it.
+    /// `SerialPortError` counts as well as `MountError`, and that is the whole
+    /// point rather than belt and braces. Only `readHashLocked` maps a serial
+    /// failure to a `MountError`, and only the SynScan and LX200 paths use it:
+    /// `skyCommandLocked` calls `port.readUntil` directly, so an EQDIR cable —
+    /// the one this project actually has — throws a raw `SerialPortError` and
+    /// the first version of this check ignored exactly the case it was written
+    /// for.
     public static func mountFailureMeansDisconnected(
         _ error: Error,
         port: String,
         availablePorts: [String]
     ) -> Bool {
         switch error {
-        case MountError.timeout, MountError.protocolFailure, MountError.notConnected:
+        case MountError.timeout, MountError.protocolFailure, MountError.notConnected,
+             SerialPortError.timeout, SerialPortError.ioFailed, SerialPortError.closed:
             return !availablePorts.contains(port)
         default:
             return false
