@@ -198,6 +198,14 @@ The log carries a rate line once a minute. `%LOCALAPPDATA%\Collimation Camera\`
 on Windows, `~/Library/Logs/Collimation Camera/` on macOS, one generation of
 history beside it.
 
+**A running app's log reads as 0 bytes in a directory listing.** Windows does
+not update the directory entry until the handle is flushed or closed, so the
+size and the timestamp both lie while the app is up. Open the file and read it;
+the content is there. This cost an afternoon of chasing a log that was never
+missing — and worse, of concluding from `Get-ChildItem` that a user's session
+had written nothing. Every automated run of the app rotates the log, too, so
+running the app to investigate destroys the evidence you were looking for.
+
 ## Things that are not there
 
 Worth knowing before you go looking:

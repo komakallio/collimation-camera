@@ -2206,18 +2206,25 @@ callback is a C function pointer — the save-dialog trap above — and it would
 have to re-enter the frame loop from inside ImGui's. Left alone deliberately
 rather than risk that crash in a path no automated check can exercise.
 
+**A log that looked missing was not.** A session appeared to write nothing:
+`collimation.log` showed 0 bytes and a stale timestamp in a directory listing
+while the app was running. Windows does not update a file's directory entry
+until the handle is flushed or closed, so the size and the modification time
+both lie for as long as the app is up — the content is there and readable the
+whole time, and the listing catches up on exit. Read the bytes, not the
+listing, and do not conclude anything from `Get-ChildItem` about a file the app
+still has open.
+
+Two real defects came out of chasing it, and both are fixed: rotation deleted
+the previous generation *before* attempting the move, so a rotation that could
+not happen threw away the run before it for nothing; and a second instance that
+could neither rotate nor re-create the file ended up with no log at all rather
+than one of its own. A second instance now takes `<basename>-2.log`.
+
 **Still open**
 
-- An unplug during Center, and the mount and wheel fixes above re-tested.
+- The mount and wheel fixes above re-tested.
 - Everything ZWO (§7.8).
-- **The app sometimes writes no log at all.** A session on 2026-09-09 ran for
-  minutes, calibrated a mount and wrote `guide-calibration.json`, and left not
-  one line in `collimation.log` — checked against the real path, not a
-  redirected view. Launches from a terminal have always logged. One real
-  mechanism was found and fixed (a second instance could neither rotate nor
-  re-create a held-open file, so it logged nowhere, having already deleted the
-  previous generation on the way in), but it has not been shown to be this
-  one.
 
 ## 14. Verified facts and sources
 

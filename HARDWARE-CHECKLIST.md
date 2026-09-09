@@ -4,11 +4,16 @@ This is the order to work through, Player One first and ZWO after, with the
 commands to run and what a pass looks like. Each step's output belongs in the
 log file, so a failure can be sent on rather than described.
 
-**Where this stands.** Steps 0 to 7 pass on Player One — a Xena 585M, a
-Poseidon-M PRO, an EQDIR cable and a Phoenix wheel. What is left: unplugging
-the camera during Center, the seven fixes those sessions produced re-tested,
-and all of ZWO. `PLAN-MULTIPLATFORM.md` §14c has the numbers and every defect
-found; §14b is what was verified without hardware.
+**Where this stands.** Steps 0 to 7 all pass on Player One — a Xena 585M, a
+Poseidon-M PRO, an EQDIR cable and a Phoenix wheel — including every unplug.
+What is left: the seven fixes those sessions produced re-tested, and all of
+ZWO. `PLAN-MULTIPLATFORM.md` §14c has the numbers and every defect found; §14b
+is what was verified without hardware.
+
+**Reading the log while the app is running.** Open it and read the bytes. A
+directory listing shows 0 and a stale timestamp for as long as the app holds
+the file, because Windows does not update the directory entry until the handle
+is flushed or closed. The log is not empty; the listing is lying.
 
 **The EQDIR is an FTDI FT232R** (VID 0403, PID 6001). Windows ships the driver;
 if the port does not appear, check Device Manager rather than looking for one.
