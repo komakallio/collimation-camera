@@ -83,7 +83,11 @@ public final class SimulatorCamera: CameraDevice {
         let now = Date()
         let wait = minInterval - now.timeIntervalSince(lastGrab)
         if wait > 0.0005 {
-            Thread.sleep(forTimeInterval: min(wait, 0.05))
+            // preciseSleep, not Thread.sleep: on Windows the plain sleep is
+            // quantized to the process timer resolution, so a 12.5 ms pacing
+            // wait becomes 15.6 ms and the simulator caps at 62 fps instead of
+            // 80 (§7.3).
+            preciseSleep(microseconds: Int(min(wait, 0.05) * 1_000_000))
         }
         let grabbedAt = Date()
         let dt = min(0.2, grabbedAt.timeIntervalSince(lastGrab))

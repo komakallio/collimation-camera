@@ -43,3 +43,26 @@ public func preciseSleep(microseconds: Int) {
 public func preciseSleep(milliseconds: Int) {
     preciseSleep(microseconds: milliseconds * 1_000)
 }
+
+/// Raises the process timer resolution for as long as the program runs.
+///
+/// `preciseSleep` does not need this — it waits on a high-resolution timer of
+/// its own — but every other wait in the process does: `Thread.sleep`,
+/// `DispatchQueue.asyncAfter`, `RunLoop`, and the SDK's own polling all round
+/// up to the process resolution, 15.625 ms by default. SDL calls
+/// `timeBeginPeriod(1)` from `SDL_Init`, so the apps get this for free; a
+/// command-line tool has to ask.
+///
+/// Windows keeps a per-process count, and a process that exits without the
+/// matching `timeEndPeriod` releases it anyway, so this is deliberately
+/// one-way: call it once at startup.
+public enum TimerResolution {
+    nonisolated(unsafe) private static var raised = false
+
+    public static func raise() {
+#if os(Windows)
+        guard !raised else { return }
+        raised = timeBeginPeriod(1) == TIMERR_NOERROR
+#endif
+    }
+}
