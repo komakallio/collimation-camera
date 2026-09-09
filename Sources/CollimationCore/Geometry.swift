@@ -207,15 +207,27 @@ public struct ImageLayout: Equatable, Sendable {
         viewWidth: Double? = nil,
         viewHeight: Double? = nil
     ) -> (x0: Double, y0: Double, x1: Double, y1: Double) {
-        let width = viewWidth ?? self.viewWidth
-        let height = viewHeight ?? self.viewHeight
+        Self.ndcRect(
+            imageRect,
+            inViewOfWidth: viewWidth ?? self.viewWidth,
+            height: viewHeight ?? self.viewHeight
+        )
+    }
+
+    /// Same conversion for a rect that has already been placed somewhere other
+    /// than the whole view — the portable app lays the image out inside its
+    /// live region and then draws into the full window.
+    public static func ndcRect(
+        _ rect: (x: Double, y: Double, width: Double, height: Double),
+        inViewOfWidth width: Double,
+        height: Double
+    ) -> (x0: Double, y0: Double, x1: Double, y1: Double) {
         guard width > 0, height > 0 else { return (-1, -1, 1, 1) }
-        let r = imageRect
         return (
-            x0: 2 * r.x / width - 1,
-            y0: 1 - 2 * (r.y + r.height) / height,
-            x1: 2 * (r.x + r.width) / width - 1,
-            y1: 1 - 2 * r.y / height
+            x0: 2 * rect.x / width - 1,
+            y0: 1 - 2 * (rect.y + rect.height) / height,
+            x1: 2 * (rect.x + rect.width) / width - 1,
+            y1: 1 - 2 * rect.y / height
         )
     }
 

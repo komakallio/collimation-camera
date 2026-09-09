@@ -92,6 +92,13 @@ var targets: [Target] = [
         swiftSettings: sdlSwiftSettings,
         linkerSettings: sdlLinkerSettings + [.linkedLibrary("SDL3")]
     ),
+    // The portable app: the Windows release build, and a parity build on macOS.
+    .executableTarget(
+        name: "CollimationPortableApp",
+        dependencies: ["CollimationCore", "CollimationUI", "CImGui", "CSDL3"],
+        swiftSettings: sdlSwiftSettings,
+        linkerSettings: sdlLinkerSettings + [.linkedLibrary("SDL3")]
+    ),
 ]
 
 var products: [Product] = [
@@ -100,6 +107,7 @@ var products: [Product] = [
     .executable(name: "capture-cli", targets: ["CaptureCLI"]),
     .executable(name: "core-tests", targets: ["CoreTests"]),
     .executable(name: "sdl-spike", targets: ["SDLSpike"]),
+    .executable(name: "CollimationCamera", targets: ["CollimationPortableApp"]),
 ]
 
 #if os(macOS)
