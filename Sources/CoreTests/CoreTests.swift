@@ -74,6 +74,7 @@ struct CoreTests {
         failures += run("remembered serial port", testRememberedSerialPort)
         failures += run("command catalog enablement", testCommandCatalogEnablement)
         failures += run("command catalog coverage", testCommandCatalogCoverage)
+        failures += run("command reachability", testCommandReachability)
         failures += run("shortcut uniqueness", testShortcutUniqueness)
         failures += run("metric text", testMetricText)
         failures += run("status chip", testStatusChip)

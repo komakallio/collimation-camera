@@ -365,3 +365,47 @@ func testLogFile() throws {
     let untouched = try String(contentsOf: first, encoding: .utf8)
     try expectUI(!untouched.contains("other app"), "the first app's file was not written to")
 }
+
+/// §9.8: every command has to be reachable in both apps. The menus are built
+/// from the catalog, so a command with a menu is reachable by construction;
+/// a sidebar-only one is reachable only if somebody put it in each sidebar.
+/// This reads both sidebars and checks they did — which is the parity rule of
+/// §12.1 item 1, enforced instead of remembered.
+@MainActor
+func testCommandReachability() throws {
+    let sidebars = [
+        "Sources/CollimationApp/SidebarView.swift",
+        "Sources/CollimationPortableApp/UI/Sidebar.swift",
+    ]
+    var sources: [(String, String)] = []
+    for path in sidebars {
+        let url = repositoryRoot().appendingPathComponent(path)
+        let text = try String(contentsOf: url, encoding: .utf8)
+        try expectUI(!text.isEmpty, "\(path) is empty")
+        sources.append((path, text))
+    }
+
+    /// `camera.saveTIFF` is written `CommandCatalog.ID.cameraSaveTIFF`.
+    func propertyName(for id: String) -> String {
+        let parts = id.split(separator: ".")
+        guard let first = parts.first else { return id }
+        return parts.dropFirst().reduce(String(first)) { name, part in
+            name + part.prefix(1).uppercased() + part.dropFirst()
+        }
+    }
+
+    for command in CommandCatalog.all {
+        let reference = "CommandCatalog.ID.\(propertyName(for: command.id))"
+        for (path, text) in sources {
+            try expectUI(
+                text.contains(reference),
+                "\(command.id) is not in \(path) as \(reference)"
+            )
+        }
+    }
+
+    // And the derivation itself has to be right, or the check above passes by
+    // never finding anything.
+    try expectUI(propertyName(for: "camera.saveTIFF") == "cameraSaveTIFF", "id to property name")
+    try expectUI(propertyName(for: "filterWheel.connect") == "filterWheelConnect", "already camel case")
+}

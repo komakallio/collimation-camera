@@ -111,8 +111,9 @@ private struct TrueTypeFont {
     }
 }
 
-/// The repository root, from this file's own path.
-private func repositoryRoot() -> URL {
+/// The repository root, from this file's own path. Shared with the tests that
+/// read the app sources.
+func repositoryRoot() -> URL {
     URL(fileURLWithPath: #filePath)      // Sources/CoreTests/GlyphCoverageTests.swift
         .deletingLastPathComponent()     // Sources/CoreTests
         .deletingLastPathComponent()     // Sources
