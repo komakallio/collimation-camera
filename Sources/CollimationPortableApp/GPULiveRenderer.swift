@@ -2,10 +2,6 @@ import CSDL3
 import CollimationCore
 import Foundation
 
-#if os(Windows)
-import WinSDK
-#endif
-
 /// The live view on SDL3 GPU, mirroring `MetalRenderer` one to one.
 ///
 /// The frame is an R16_UINT storage-read texture so the shader sees raw ADU and
@@ -44,7 +40,7 @@ final class GPULiveRenderer {
     static func supportsR16UInt(device: OpaquePointer) -> Bool {
         SDL_GPUTextureSupportsFormat(
             device,
-            SDL_GPU_TEXTUREFORMAT_R16_UINT,
+            CSDL3_TEXTUREFORMAT_R16_UINT,
             SDL_GPU_TEXTURETYPE_2D,
             SDL_GPU_TEXTUREUSAGE_GRAPHICS_STORAGE_READ
         )
@@ -238,7 +234,7 @@ final class GPULiveRenderer {
 
         var info = SDL_GPUTextureCreateInfo()
         info.type = SDL_GPU_TEXTURETYPE_2D
-        info.format = SDL_GPU_TEXTUREFORMAT_R16_UINT
+        info.format = CSDL3_TEXTUREFORMAT_R16_UINT
         info.usage = SDL_GPU_TEXTUREUSAGE_GRAPHICS_STORAGE_READ
         info.width = UInt32(width)
         info.height = UInt32(height)

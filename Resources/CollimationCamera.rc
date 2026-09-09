@@ -1,0 +1,11 @@
+// Windows resource script for the portable app.
+//
+// Resource id 1 is the application icon: Explorer, the Start menu, and pinned
+// shortcuts read the lowest-numbered icon in the PE image. The icon a running
+// window shows comes from SDL_SetWindowIcon instead (AppWindow.applyIcon).
+//
+// Compile with rc.exe, which scripts\fetch-sdk.ps1 does:
+//     rc /nologo /fo Resources\CollimationCamera.res Resources\CollimationCamera.rc
+// The .res is gitignored; the release link embeds it.
+
+1 ICON "AppIcon.ico"

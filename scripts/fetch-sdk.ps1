@@ -47,7 +47,11 @@ function Install-DllFromZip {
         [string]$ZipName,
         [string]$DllName,
         [string]$TargetDirectory,
-        [string]$ManualSource
+        [string]$ManualSource,
+        # ZWO ships one archive per platform inside the download, so the DLL is
+        # one level further in. Nested archives whose name matches this are
+        # expanded before the second look.
+        [string]$NestedFilter = '*Windows*.zip'
     )
 
     $target = Join-Path $TargetDirectory $DllName
@@ -67,11 +71,19 @@ function Install-DllFromZip {
 
     $extracted = Join-Path $temp ([System.IO.Path]::GetFileNameWithoutExtension($ZipName))
     Expand-Archive -Path $zip -DestinationPath $extracted -Force
-    $found = Get-ChildItem -Path $extracted -Recurse -Filter $DllName |
-        Where-Object { $_.FullName -match '\\x64\\' } |
-        Select-Object -First 1
-    if ($null -eq $found) {
-        $found = Get-ChildItem -Path $extracted -Recurse -Filter $DllName | Select-Object -First 1
+
+    function Find-Dll {
+        Get-ChildItem -Path $extracted -Recurse -Filter $DllName -ErrorAction SilentlyContinue |
+            Sort-Object { if ($_.FullName -match '\\x64\\') { 0 } else { 1 } } |
+            Select-Object -First 1
+    }
+
+    $found = Find-Dll
+    if ($null -eq $found -and $NestedFilter) {
+        foreach ($nested in Get-ChildItem -Path $extracted -Recurse -Filter $NestedFilter -ErrorAction SilentlyContinue) {
+            Expand-Archive -Path $nested.FullName -DestinationPath (Join-Path $extracted $nested.BaseName) -Force
+        }
+        $found = Find-Dll
     }
     if ($null -eq $found) {
         Write-Warning "$DllName was not in $ZipName. Extract it by hand from $ManualSource."
@@ -168,3 +180,32 @@ foreach ($config in @('debug', 'release')) {
 
 Write-Host ''
 Write-Host 'SDL3 is in Vendor\SDL3.'
+
+# --- Application icon resource ---------------------------------------------
+# The release link embeds Resources\CollimationCamera.res so the executable
+# carries its own icon for Explorer, Start, and pinned shortcuts. rc.exe is in
+# the Windows SDK, which the developer shell puts on PATH; without it the
+# build still works, just with the default executable icon.
+$rcSource = Join-Path $root 'Resources\CollimationCamera.rc'
+$res = Join-Path $root 'Resources\CollimationCamera.res'
+if (Test-Path $rcSource) {
+    $rc = Get-Command rc.exe -ErrorAction SilentlyContinue
+    if (-not $rc) {
+        $sdkBin = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Directory -ErrorAction SilentlyContinue |
+            Where-Object { Test-Path (Join-Path $_.FullName 'x64\rc.exe') } |
+            Sort-Object Name -Descending | Select-Object -First 1
+        if ($sdkBin) { $rc = Join-Path $sdkBin.FullName 'x64\rc.exe' }
+    } else {
+        $rc = $rc.Source
+    }
+    if ($rc) {
+        & $rc /nologo /fo $res $rcSource | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Compiled $res"
+        } else {
+            Write-Warning "rc.exe failed; the executable will use the default icon."
+        }
+    } else {
+        Write-Warning "rc.exe not found; the executable will use the default icon."
+    }
+}

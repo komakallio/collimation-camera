@@ -50,7 +50,10 @@ enum Diagnostics {
         if let handle, let data = line.data(using: .utf8) {
             try? handle.write(contentsOf: data)
         }
-        FileHandle.standardOutput.write(Data(line.utf8))
+        // The release build is a GUI application and has no standard output at
+        // all, so this must be the throwing call: `write(_:)` traps on a bad
+        // descriptor, which would abort on the very first log line.
+        try? FileHandle.standardOutput.write(contentsOf: Data(line.utf8))
     }
 
     static func stop() {

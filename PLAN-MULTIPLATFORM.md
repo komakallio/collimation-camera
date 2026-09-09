@@ -1863,6 +1863,7 @@ surface, tightened from the pre-port macOS menu.
 | SDK thread safety on Windows when closing during a blocked grab | Crash on disconnect | Already mitigated by `CaptureSession.stop()` order; keep `waitMs` slices short (200 ms) so the loop exits quickly |
 | `UserDefaults` location on Windows is odd | Settings not found | Acceptable for now; a JSON settings file in `%LOCALAPPDATA%\Collimation Camera` can replace it later on both platforms |
 | cimgui names drift from imgui | Build errors when bumping | §12.1 item 8; the shim is 40 lines |
+| `SDL_GPUTextureFormat` constants disappear in a whole-module-optimized Windows build that also imports `WinSDK.DirectX` | `cannot find SDL_GPU_TEXTUREFORMAT_* in scope`, release only; the type itself still resolves | The formats the app names are re-exported from `Sources/CSDL3/shim.h` as typed constants (`CSDL3_TEXTUREFORMAT_*`); `-no-whole-module-optimization` also works but costs the optimization |
 | Homebrew has no Intel-Mac bottle for `sdl3` | `brew install` builds from source on Intel Macs | Acceptable (non-goal); or use the SDL3 DMG's xcframework |
 | Vendor download URLs change | `fetch-sdk` fails | Env-var overrides per file and the manual steps the scripts print |
 

@@ -32,3 +32,12 @@
 #define SDL_WINDOW_HIGH_PIXEL_DENSITY 0x0000000000002000ull
 #undef SDL_WINDOW_ALWAYS_ON_TOP
 #define SDL_WINDOW_ALWAYS_ON_TOP 0x0000000000008000ull
+
+/* SDL_GPUTextureFormat's constants vanish from Swift's view of this module in
+ * a whole-module-optimized build that also imports WinSDK.DirectX: the type
+ * still resolves, every SDL_GPU_TEXTUREFORMAT_* name does not. The formats the
+ * app names are re-exported here as typed constants, which the Clang importer
+ * carries through unchanged. */
+static const SDL_GPUTextureFormat CSDL3_TEXTUREFORMAT_R16_UINT = SDL_GPU_TEXTUREFORMAT_R16_UINT;
+static const SDL_GPUTextureFormat CSDL3_TEXTUREFORMAT_R16_UNORM = SDL_GPU_TEXTUREFORMAT_R16_UNORM;
+static const SDL_GPUTextureFormat CSDL3_TEXTUREFORMAT_R32_FLOAT = SDL_GPU_TEXTUREFORMAT_R32_FLOAT;

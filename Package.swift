@@ -1,6 +1,7 @@
 // swift-tools-version: 6.0
 
 import PackageDescription
+import Foundation
 
 // SDL3 is located differently per platform: Homebrew's pkg-config on macOS, an
 // unpacked SDL3-devel-VC zip on Windows. `#if os()` in a manifest is evaluated
@@ -16,6 +17,24 @@ let sdlCSettings: [CSetting] = [.unsafeFlags(["-I", sdlInclude])]
 let sdlCxxSettings: [CXXSetting] = [.unsafeFlags(["-I", sdlInclude])]
 let sdlSwiftSettings: [SwiftSetting] = [.unsafeFlags(["-Xcc", "-I", "-Xcc", sdlInclude])]
 let sdlLinkerSettings: [LinkerSetting] = [.unsafeFlags(["-L", sdlLib])]
+
+// A release build is a GUI app: no console window behind it, and the entry
+// point moves because the subsystem changed. Debug builds keep the console,
+// which is where `swift run` prints.
+//
+// The .res carries the application icon Explorer and Start read out of the PE
+// image. scripts\fetch-sdk.ps1 compiles it and .gitignore keeps it out of the
+// repository, so it may be absent; without it the build still links, just with
+// the default executable icon.
+var portableLinkerSettings: [LinkerSetting] = [
+    .unsafeFlags(["-Xlinker", "/SUBSYSTEM:WINDOWS", "-Xlinker", "/ENTRY:mainCRTStartup"], .when(configuration: .release))
+]
+let iconResource = "\(Context.packageDirectory)/Resources/CollimationCamera.res"
+if FileManager.default.fileExists(atPath: iconResource) {
+    portableLinkerSettings.append(
+        .unsafeFlags(["-Xlinker", iconResource], .when(configuration: .release))
+    )
+}
 #else
 let csdl3: Target = .systemLibrary(
     name: "CSDL3",
@@ -27,6 +46,7 @@ let sdlCSettings: [CSetting] = []
 let sdlCxxSettings: [CXXSetting] = []
 let sdlSwiftSettings: [SwiftSetting] = []
 let sdlLinkerSettings: [LinkerSetting] = []
+let portableLinkerSettings: [LinkerSetting] = []
 #endif
 
 var targets: [Target] = [
@@ -97,7 +117,7 @@ var targets: [Target] = [
         name: "CollimationPortableApp",
         dependencies: ["CollimationCore", "CollimationUI", "CImGui", "CSDL3"],
         swiftSettings: sdlSwiftSettings,
-        linkerSettings: sdlLinkerSettings + [.linkedLibrary("SDL3")]
+        linkerSettings: sdlLinkerSettings + portableLinkerSettings + [.linkedLibrary("SDL3")]
     ),
 ]
 
