@@ -43,7 +43,7 @@ see Not yet verified at the end.
 | Menus | system menu bar | in-window menu bar | Both built from `CommandCatalog`; the portable app has no system menu bar to put them in. |
 | Tooltips | ✅ | ✅ | |
 | Error dialog | ✅ | ✅ | Both read and clear `engine.errorMessage`. The ImGui modal takes the keyboard while it is open, so Return does not reach Connect behind it. |
-| Log file | ⏳ | ✅ | The portable app writes `collimation.log` next to its settings and routes SDL's own log into the same file, because a `/SUBSYSTEM:WINDOWS` build has no console. The macOS app still logs to standard output only. |
+| Log file | ✅ | ✅ | Same file, format, and rotation from `LogFile` in the core: `~/Library/Logs/Collimation Camera/collimation.log` on macOS, `%LOCALAPPDATA%\Collimation Camera\collimation.log` on Windows, with one generation of history beside it. The portable app also routes SDL's own log into it, and writes a rate line once a minute. |
 | Startup failure box | — | ✅ | The portable app reports a failed `SDL_Init`, GPU device, or pipeline in a native message box naming the step and the log path, rather than exiting with nothing on screen. A SwiftUI app cannot fail this way. |
 | Window icon | ✅ | ✅ | Both derived from `Resources/AppIcon-1024.png` by `scripts/make-icon.sh`: `AppIcon.icns` for the bundle, `AppIcon-256.png` for `SDL_SetWindowIcon`. On Windows the icon Explorer and Start show comes from the PE resource instead (milestone 5). |
 | Fonts | ✅ | ✅ | macOS: system SF and SF Mono. Portable: bundled DejaVu. Deliberate difference. |

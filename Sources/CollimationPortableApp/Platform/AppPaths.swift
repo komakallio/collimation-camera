@@ -43,22 +43,7 @@ enum AppPaths {
         resource("Fonts/\(fileName)")
     }
 
-    /// `%LOCALAPPDATA%\Collimation Camera` on Windows,
-    /// `~/Library/Logs/Collimation Camera` on macOS. The Windows directory is
-    /// the same one `GuideCalibrationStore` uses.
-    static var logDirectory: URL {
-#if os(macOS)
-        let base = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-        return base.appendingPathComponent("Logs").appendingPathComponent("Collimation Camera")
-#else
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-        return base.appendingPathComponent("Collimation Camera")
-#endif
-    }
-
-    static var logFile: URL {
-        logDirectory.appendingPathComponent("collimation.log")
-    }
+    /// Both apps write the same file, so the path lives in the core.
+    static var logDirectory: URL { LogFile.directory }
+    static var logFile: URL { LogFile.url }
 }

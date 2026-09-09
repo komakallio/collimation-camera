@@ -288,3 +288,49 @@ func testLogSlider() throws {
     try expectUI(abs(LogSlider.position(1, in: 100...100_000) - 2) < 1e-12, "clamped low")
     try expectUI(abs(LogSlider.value(3) - 1_000) < 1e-9, "log value")
 }
+
+/// Both apps point `Log.sink` here, so the rotation and the write path are
+/// worth pinning: a lost log is only noticed when it is needed.
+func testLogFile() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("collimation-log-test-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let previousSink = Log.sink
+    defer { Log.sink = previousSink }
+
+    guard let first = LogFile.start(in: directory) else {
+        throw UIModelExpectation(description: "the log did not open in \(directory.path)")
+    }
+    try expectUI(first.lastPathComponent == LogFile.name, "named \(first.lastPathComponent)")
+    Log.info("first run")
+    LogFile.stop()
+
+    let firstText = try String(contentsOf: first, encoding: .utf8)
+    try expectUI(firstText.contains("first run"), "the line was written: \(firstText)")
+    // Each line is timestamped, so the message is not at the start.
+    try expectUI(firstText.hasSuffix("first run\n"), "one line, newline terminated")
+
+    // A second start rotates the first run aside rather than appending to it.
+    guard LogFile.start(in: directory) != nil else {
+        throw UIModelExpectation(description: "the log did not reopen")
+    }
+    Log.info("second run")
+    LogFile.stop()
+
+    let previous = directory.appendingPathComponent(LogFile.previousName)
+    try expectUI(FileManager.default.fileExists(atPath: previous.path), "the previous run is kept")
+    let previousText = try String(contentsOf: previous, encoding: .utf8)
+    try expectUI(previousText.contains("first run"), "the previous run has the first line")
+    let currentText = try String(contentsOf: first, encoding: .utf8)
+    try expectUI(currentText.contains("second run"), "the current run has the second line")
+    try expectUI(!currentText.contains("first run"), "the current run starts empty")
+
+    // A third start does not accumulate: only one generation is kept.
+    guard LogFile.start(in: directory) != nil else {
+        throw UIModelExpectation(description: "the log did not open a third time")
+    }
+    LogFile.stop()
+    let files = try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+    try expectUI(files == [LogFile.name, LogFile.previousName].sorted(), "two files, got \(files)")
+}

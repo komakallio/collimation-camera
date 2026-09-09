@@ -62,6 +62,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var stopCapture: (() -> Void)?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        // Same file, same format, same place as the portable app's, so a
+        // session that went wrong can be read back rather than remembered.
+        // A bundled app's standard output goes wherever the launcher put it.
+        let file = LogFile.start()
+        Log.info("=== Collimation Camera ===")
+        Log.info("log: \(file?.path ?? "not opened")")
+
         // `swift run` launches an unbundled binary. Without this, macOS keeps
         // Terminal as the active app and the menu bar never switches over.
         ProcessInfo.processInfo.processName = "Collimation Camera"
@@ -105,6 +112,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         stopCapture?()
         stopCapture = nil
+        Log.info("clean exit")
+        LogFile.stop()
         return .terminateNow
     }
 }
