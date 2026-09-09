@@ -9,7 +9,7 @@ macOS design is in `PLAN.md`; this document adds the multiplatform work on top.
 | Milestone | State |
 |---|---|
 | 0 — spike | Not run. Milestone 1 landed first, so the toolchain and SDK questions it answers are still open. The rendering questions (§6.1 tasks 3, 4, 6) still gate milestone 3. |
-| 1 — core portability, Observation, ZWO, CI | Code complete on branch `multiplatform-m1`. **Not compiled on either platform**: the machine it was written on has no Swift toolchain. CI (§7.7) is the first build. The acceptance list in §7.8 is untouched — nothing has been run on hardware. |
+| 1 — core portability, Observation, ZWO, CI | Code complete on branch `multiplatform-m1`, **CI green on macOS and Windows**. `core-tests` builds and all 71 tests pass on Windows (Swift 6.3.3) and macOS (Swift 6.1.2); `capture-cli` builds on both; `CollimationApp` builds on macOS. The rest of §7.8 needs hardware and is untouched: no camera, mount, or filter wheel has been plugged in, so device removal, ZWO MSB alignment, ROI-move-without-restart, and the resize and stabilize checks are all unverified. |
 | 2 — `CollimationUI` | Not started. |
 | 3 — portable app | Not started. |
 | 4 — mount and wheel on Windows | §10.1 pulled forward into milestone 1: the serial port is already split into `SerialPortDriver`, `SerialPortPOSIX`, and `SerialPortWindows`, because `core-tests` cannot build on Windows without it. §10.2 and §10.3 are not started. |
