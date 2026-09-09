@@ -3,14 +3,14 @@
 Drives the portable app's window from outside it: minimize, restore, resize.
 
 .DESCRIPTION
-Automates the parts of the §9.8 acceptance list that would otherwise need a
+Automates the parts of the section 9.8 acceptance list that would otherwise need a
 person with a mouse, and that are worth re-running after any change to the
 main loop: the minimized branch that skips drawing, the swapchain acquire that
 fails while minimized, and the layout recomputation on resize.
 
 It reports whether the window kept answering messages at each step, which is
 what "did not stall" means, and whether the process survived. It says nothing
-about what was drawn — that still needs eyes.
+about what was drawn - that still needs eyes.
 
 .EXAMPLE
 scripts\window-stress-win.ps1

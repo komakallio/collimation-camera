@@ -4,6 +4,40 @@ import CollimationCore
 import CollimationUI
 import Foundation
 
+/// What SDL calls when the save dialog closes, on its own thread on Windows.
+///
+/// A file-scope function on purpose. Written as a closure inside
+/// `PortableUIHost` it inherited that class's `@MainActor` isolation, and
+/// Swift emits an isolation check at the entry of an isolated closure reached
+/// through a C function pointer. On SDL's dialog thread that check is
+/// `dispatch_assert_queue` against the main queue, it fails, and libdispatch
+/// answers a failed assertion with `ud2`: the process died of
+/// STATUS_ILLEGAL_INSTRUCTION before the first line of the body ran, on every
+/// single Save TIFF. Nothing was written and nothing was logged, which is what
+/// made it look like a hang — the freeze is Windows Error Reporting collecting
+/// the crash.
+///
+/// The SDL log callback next door in `Diagnostics` fires from SDL's threads
+/// constantly and has never crashed, because `Diagnostics` is a plain enum and
+/// its closure is nonisolated. That is the difference, and it is the reason to
+/// keep every C callback out of an isolated type.
+private func portableDialogCallback(
+    _ userdata: UnsafeMutableRawPointer?,
+    _ files: UnsafePointer<UnsafePointer<CChar>?>?,
+    _ filter: Int32
+) {
+    _ = userdata
+    _ = filter
+    // A cancelled dialog gives a list whose first entry is null; an error
+    // gives no list at all. Both mean "no file".
+    var chosen: URL?
+    if let files, let first = files.pointee {
+        chosen = URL(fileURLWithPath: String(cString: first))
+    }
+    Log.info("save dialog: \(chosen.map { "chose \($0.path)" } ?? "cancelled")")
+    PortableUIHost.deliverDialogResult(chosen)
+}
+
 /// The portable `UIHost`: SDL's native save dialog, plus the error modal.
 ///
 /// SDL runs the callback on a worker thread on Windows and on the main thread
@@ -75,20 +109,13 @@ final class PortableUIHost: UIHost {
         dialogOpen = true
         pending = completion
         Self.active = self
-        Log.info("save dialog: \(title) — \(message)")
+        Log.info("save dialog opened: \(title) — \(message)")
 
         let start = directory?.appendingPathComponent(suggestedName).path ?? suggestedName
         start.withCString { location in
             Self.filters.withUnsafeBufferPointer { buffer in
                 SDL_ShowSaveFileDialog(
-                    { userdata, files, _ in
-                        var chosen: URL?
-                        if let files, let first = files.pointee {
-                            chosen = URL(fileURLWithPath: String(cString: first))
-                        }
-                        _ = userdata
-                        PortableUIHost.active?.deliver(chosen)
-                    },
+                    portableDialogCallback,
                     nil,
                     window,
                     buffer.baseAddress,
@@ -97,6 +124,11 @@ final class PortableUIHost: UIHost {
                 )
             }
         }
+    }
+
+    /// Entry point for the C callback, which has no `self` to work with.
+    nonisolated static func deliverDialogResult(_ url: URL?) {
+        active?.deliver(url)
     }
 
     /// Called from SDL's thread on Windows; only parks the value.

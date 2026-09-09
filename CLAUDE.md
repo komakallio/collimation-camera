@@ -71,6 +71,18 @@ how a quit that never quit survived: `--snapshot` sets the loop's flag itself
 and `run-win.ps1 -Seconds` kills the process, so the close button reached
 nothing that was ever exercised. If you touch the event loop, run it.
 
+**A Swift closure handed to C must not be actor-isolated.** A closure written
+inside a `@MainActor` type inherits that isolation, and Swift emits an
+isolation check at the entry of an isolated closure reached through a C
+function pointer. That check is `dispatch_assert_queue` against the main
+queue; on any other thread it fails, and libdispatch answers a failed
+assertion with `ud2`. The process dies of `STATUS_ILLEGAL_INSTRUCTION`
+(0xC000001D) **before the first line of the body runs**, so there is no log
+line and nothing to go on but the Windows event log. Every Save TIFF died this
+way. Keep C callbacks at file scope, outside any isolated type — the SDL log
+callback in `Diagnostics` has always been fine for exactly that reason — and
+hop to the main actor through a `nonisolated` entry point.
+
 **Whole-module optimization loses SDL's texture-format constants** when
 `WinSDK.DirectX` is imported anywhere in the same module — release only, and
 the type still resolves while every `SDL_GPU_TEXTUREFORMAT_*` vanishes. The
@@ -103,6 +115,7 @@ scripts\run-win.ps1 CollimationCamera                  # stages runtime + SDL3 +
 scripts\package-win.ps1                                # dist zip
 scripts\window-stress-win.ps1                          # minimize/restore/resize
 scripts\quit-win.ps1                                   # close the window, time the exit
+scripts\save-dialog-win.ps1                            # Save TIFF through the real dialog
 ```
 
 `win.cmd` wraps `build-win.ps1` through cmd, because PowerShell 5.1 turns a
@@ -112,9 +125,17 @@ native tool's stderr into a failure even on exit 0. All of them share the
 shelling out through cmd, the developer shell is entered anyway, and it cannot
 be redirected away from inside PowerShell.
 
-`quit-win.ps1` covers the one path the others cannot: `run-win.ps1 -Seconds`
-kills the process and `--snapshot` ends the loop by itself, so from the close
-button to a clean exit went untested for a long time and was broken.
+`quit-win.ps1` and `save-dialog-win.ps1` cover the two paths the others cannot.
+`run-win.ps1 -Seconds` kills the process and `--snapshot` ends the loop by
+itself, so from the close button to a clean exit went untested for a long time
+and was broken; the save dialog is the only Swift code that runs on a thread
+SDL owns, and it was broken too. Both scripts drive the real keyboard, so they
+need an idle desktop — `save-dialog-win.ps1` exits 2 and says SKIPPED when
+Windows will not hand it the foreground, which is not a failure.
+
+Also note that PowerShell 5.1 reads a BOM-less `.ps1` as Windows-1252, and an
+em dash decodes to a character it accepts as a string delimiter. **Keep the
+scripts ASCII**, comments included, or a stray dash becomes a parse error.
 
 A build directory holds only the executable. Without the Swift runtime, SDL3,
 and `Resources/` beside it, Windows raises a loader box that suspends the

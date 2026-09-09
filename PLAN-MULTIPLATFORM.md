@@ -2100,9 +2100,32 @@ with a camera connected. The shutdown also logs a timing per step, and a
 watchdog ends the process if one of them never returns, so a future hang in a
 vendor call names itself.
 
+**Save TIFF killed the app, and had always killed it.** Checklist step 4 ran
+clean until the save. The dialog opened, and committing a file name froze the
+window for about ten seconds and then took the process down. The Windows event
+log named `dispatch.dll` and `0xc000001d`; disassembling that offset gave a
+`ud2` immediately after libdispatch's "Assertion failed: Block was not expected
+to execute on queue" string, which is `dispatch_assert_queue` — a main-actor
+isolation check running on a thread that is not the main queue.
+
+The callback passed to `SDL_ShowSaveFileDialog` was a closure written inside
+the `@MainActor` `PortableUIHost`, so it inherited that isolation, and Swift
+checks isolation at the entry of an isolated closure reached through a C
+function pointer. SDL runs that callback on its own thread on Windows, the
+check failed, and the process died before the first statement — which is why
+nothing was written and nothing was logged, and why the freeze looked like a
+hang: it is Windows Error Reporting collecting the crash. The callback is now a
+file-scope `nonisolated` function. The SDL log callback next door in
+`Diagnostics` has fired from SDL's threads all along without trouble, because
+its enclosing type is a plain enum; that contrast is the whole lesson.
+
+`scripts\save-dialog-win.ps1` drives the dialog end to end and checks the file,
+the exit code and the window. With it, a 512 ROI saves in about 10 ms and comes
+out at 524422 bytes.
+
 **Still open**
 
-- Unplugging a camera mid-run, the error modal, and the save dialog.
+- Unplugging a camera mid-run and the error modal.
 - The mount and the filter wheel on real hardware (§10.3).
 - Everything ZWO (§7.8).
 

@@ -6,8 +6,8 @@ Runs a built executable from .build-win, with the Swift runtime beside it.
 A development build gets only the executable from SwiftPM: the Swift runtime
 DLLs live in the toolchain, SDL3.dll in Vendor\, and the fonts in Resources\.
 Without them Windows raises a loader error box that suspends the process with
-no window and no log. This stages all of it beside the executable — what the
-packaged build carries — and then starts the program.
+no window and no log. This stages all of it beside the executable - what the
+packaged build carries - and then starts the program.
 
 Use -Seconds to run it for a fixed time and stop it again, which is how the
 render loop is exercised without a person closing the window.

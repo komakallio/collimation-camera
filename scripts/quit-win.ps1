@@ -5,7 +5,7 @@ Starts the app, closes its window the way a person would, and times the exit.
 .DESCRIPTION
 The one thing no other script covers. `run-win.ps1 -Seconds` kills the process
 and `--snapshot` ends the loop by itself, so for a long time nothing exercised
-the path from the window's close button to a clean exit — and it was broken:
+the path from the window's close button to a clean exit - and it was broken:
 the close event set the loop's `running` flag to true instead of false.
 
 Pass means the process is gone within -Wait seconds and the log ends with
