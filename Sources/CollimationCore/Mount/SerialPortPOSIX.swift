@@ -169,12 +169,21 @@ public final class POSIXSerialPort: SerialPortDriver, @unchecked Sendable {
         settings.c_iflag = 0
         settings.c_oflag = 0
         settings.c_lflag = 0
+        // VMIN and VTIME. `c_cc` imports as a tuple, and the indices differ:
+        // Darwin puts them at 16 and 17, Linux at 6 and 5.
+#if canImport(Darwin)
         settings.c_cc.16 = 0
         settings.c_cc.17 = 0
+#else
+        settings.c_cc.6 = 0
+        settings.c_cc.5 = 0
+#endif
         guard tcsetattr(fd, TCSANOW, &settings) == 0 else { throw SerialPortError.configureFailed }
 
         var bits: Int32 = TIOCM_DTR | TIOCM_RTS
-        _ = ioctl(fd, TIOCMBIS, &bits)
+        // `ioctl` takes an unsigned request on both platforms, but Linux
+        // imports TIOCMBIS as Int32 where Darwin already gives UInt.
+        _ = ioctl(fd, UInt(bitPattern: Int(TIOCMBIS)), &bits)
         tcflush(fd, TCIOFLUSH)
     }
 
