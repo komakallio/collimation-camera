@@ -422,6 +422,27 @@ func testCommandReachability() throws {
         }
     }
 
+    // Section titles, control labels, and metric names live in SidebarText, and
+    // both sidebars must reference them rather than writing them out. The
+    // caption that said "Camera 2048×2048" was stated three times before this,
+    // and the coma metrics were spelled "Coma" on macOS and "COMA" here,
+    // agreeing only because the SwiftUI view happened to call `.uppercased()`.
+    for label in SidebarText.sections + SidebarText.metrics + [
+        SidebarText.exposure, SidebarText.gain, SidebarText.zoom,
+        SidebarText.black, SidebarText.white, SidebarText.midtones,
+        SidebarText.arcsinhFactor,
+    ] {
+        for (path, text) in sources {
+            try expectUI(
+                !text.contains("\"\(label)\""),
+                "\(path) writes \"\(label)\" out; use SidebarText instead"
+            )
+        }
+    }
+    for (path, text) in sources {
+        try expectUI(text.contains("SidebarText."), "\(path) does not use SidebarText at all")
+    }
+
     // A sidebar-only command cannot carry a keyboard shortcut on macOS: SwiftUI
     // takes shortcuts from menu items, so one on a command with no menu would
     // work on Windows and be dead on the Mac.
