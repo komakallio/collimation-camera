@@ -278,6 +278,26 @@ func testHUDColor() throws {
     try expectUI(HUDColor.white.packedABGR == 0xFFFF_FFFF, "white packs to ABGR")
     try expectUI(HUDColor.black.opacity(0.5).packedABGR == 0x8000_0000, "half-alpha black")
     try expectUI(HUDColor(red: 255, green: 59, blue: 48) == .systemRed, "red from 0-255 components")
+
+    // §8.7: milestone 2 replaced the named SwiftUI system colours with
+    // resolved sRGB constants, so both apps can draw the same pixels. These
+    // are Apple's published light-appearance values; a drift here is a HUD
+    // that no longer matches the pre-port screenshots.
+    for (name, color, expected) in [
+        ("systemRed", HUDColor.systemRed, (255, 59, 48)),
+        ("systemOrange", HUDColor.systemOrange, (255, 149, 0)),
+        ("systemYellow", HUDColor.systemYellow, (255, 204, 0)),
+        ("systemBlue", HUDColor.systemBlue, (0, 122, 255)),
+        ("systemGray", HUDColor.systemGray, (142, 142, 147)),
+    ] {
+        let packed = color.packedABGR
+        let components = (Int(packed & 0xFF), Int((packed >> 8) & 0xFF), Int((packed >> 16) & 0xFF))
+        try expectUI(
+            components == expected,
+            "\(name) is \(components), Apple's is \(expected)"
+        )
+        try expectUI(packed >> 24 == 0xFF, "\(name) is opaque")
+    }
 }
 
 func testLogSlider() throws {
