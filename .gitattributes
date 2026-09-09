@@ -12,3 +12,6 @@
 *.ico binary
 *.tif binary
 *.zip binary
+
+# Vendored third-party source: not this project's code for language stats.
+Sources/CImGui/vendor/** linguist-vendored

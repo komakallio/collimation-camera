@@ -8,7 +8,7 @@ macOS design is in `PLAN.md`; this document adds the multiplatform work on top.
 
 | Milestone | State |
 |---|---|
-| 0 — spike | Not run. Milestone 1 landed first, so the toolchain and SDK questions it answers are still open. The rendering questions (§6.1 tasks 3, 4, 6) still gate milestone 3. |
+| 0 — spike | **Windows half done and the gate passed** (§14a): SDL3 + cimgui + SDLGPU3 build and run from Swift, R16_UINT storage-read works on Intel Iris Xe, 2048² uploads hold 60 fps, and the timer numbers confirm §7.3. The macOS half (Metal, MSL, Retina, trackpad pinch) and the camera frame rates are not run. |
 | 1 — core portability, Observation, ZWO, CI | Code complete on branch `multiplatform-m1`, **CI green on macOS and Windows**. `core-tests` builds and all 71 tests pass on Windows (Swift 6.3.3) and macOS (Swift 6.1.2); `capture-cli` builds on both; `CollimationApp` builds on macOS. The rest of §7.8 needs hardware and is untouched: no camera, mount, or filter wheel has been plugged in, so device removal, ZWO MSB alignment, ROI-move-without-restart, and the resize and stabilize checks are all unverified. |
 | 2 — `CollimationUI` | Code complete on branch `multiplatform-m2`. `CommandCatalog`, `MetricText`, `HelpText`, `StatusChip`, `LogSlider`, and the six HUD scenes exist with 14 tests; `ImageLayout.ndcRect` replaces `MetalRenderer.toNDC`; the macOS app is rebuilt on top of all of it, and its menus now use the engine's `can*` predicates. §8.7's visual acceptance is **not** done: nobody has compared the app before and after, and the HUD colours moved from named SwiftUI system colours to resolved sRGB constants, so that needs eyes on a screenshot. |
 | 3 — portable app | Not started. |
@@ -1865,6 +1865,62 @@ surface, tightened from the pre-port macOS menu.
 | cimgui names drift from imgui | Build errors when bumping | §12.1 item 8; the shim is 40 lines |
 | Homebrew has no Intel-Mac bottle for `sdl3` | `brew install` builds from source on Intel Macs | Acceptable (non-goal); or use the SDL3 DMG's xcframework |
 | Vendor download URLs change | `fetch-sdk` fails | Env-var overrides per file and the manual steps the scripts print |
+
+## 14a. Milestone 0 spike results (Windows, 2026-09-09)
+
+Measured by `Sources/SDLSpike` on branch `spike/sdl3-gpu`. Machine: Windows 11
+Pro 26200, Intel Iris Xe integrated graphics, Swift 6.3.3, SDL 3.4.16, Dear
+ImGui 1.92.9b. **The macOS half of the spike has not been run.**
+
+**Gate: passed on this machine.** SDL3 GPU is viable; the Win32 + D3D11
+fallback of §13 is not needed.
+
+- **Toolchain (§6.1 task 3).** `CImGui` builds under SwiftPM on Windows:
+  cimgui, the imgui subset, both backends, and `backends_shim.cpp` compile as
+  one C++17 target, and `import CImGui` from Swift resolves `igBegin`,
+  `igCreateContext`, `ImGui_ImplSDL3_InitForSDLGPU`, and `cimgui_sdlgpu3_init`.
+  `SDL_GPUDevice` is the same type through `CSDL3` and `CImGui`. The umbrella
+  header and macro split of §9.3 works exactly as written.
+- **`igText` is unusable from Swift**: it is variadic, and Swift cannot import
+  a variadic C function (`error: 'igText' is unavailable`). Every label must be
+  formatted in Swift and drawn with `igTextUnformatted(text, nil)`. This
+  applies to the whole portable app, not just the spike.
+- **`SDL_CreateGPUTransferBuffer`** takes a pointer to a
+  `SDL_GPUTransferBufferCreateInfo`; the struct cannot be written as a Swift
+  array literal.
+- **Texture formats (§6.2 gate).** Driver `direct3d12`, shader formats DXBC and
+  DXIL, so Shader Model 6 is available. On Intel Iris Xe:
+
+  | Format and usage | Supported |
+  |---|---|
+  | `R16_UINT` + `GRAPHICS_STORAGE_READ` | yes |
+  | `R16_UNORM` + `SAMPLER` | yes |
+  | `R32_FLOAT` + `GRAPHICS_STORAGE_READ` | yes |
+  | `R32_FLOAT` + `SAMPLER` | yes |
+
+  The primary path works; no fallback is needed on this hardware.
+- **Upload rate (§6.1 task 3).** A 2048×2048 `R16_UINT` storage-read texture
+  re-uploaded every frame through a transfer buffer with `cycle: true`, with
+  the ImGui demo window drawing on top: **steady 60.0 fps, 16.65 ms per frame,
+  0.5 to 0.9 ms of it upload**. Vsync-bound, with headroom.
+- **Timer resolution (§6.1 task 6).** Median of five, in milliseconds:
+
+  | Call | Before `SDL_Init` | After `SDL_Init` |
+  |---|---|---|
+  | `Thread.sleep(0.0002)` | 15.867 | 0.956 |
+  | `Thread.sleep(0.0333)` | **47.655** | 33.596 |
+  | `preciseSleep(200 µs)` | 0.650 | 0.671 |
+  | `preciseSleep(33333 µs)` | 33.533 | 33.642 |
+
+  This confirms §7.3 exactly, including the predicted failure: a 33 ms pacing
+  sleep phase-locks to about 47 ms without `timeBeginPeriod`, which is a 21 fps
+  live view instead of 30. `preciseSleep` is correct with or without SDL, which
+  is what `capture-cli` needs since it never calls `SDL_Init`.
+
+Still open, and needing hardware or a Mac: the macOS side of tasks 3 and 4
+(Metal, MSL, Retina, trackpad pinch), the Windows precision-touchpad pinch, the
+compute-pass reduction, `SDL_ShowSimpleMessageBox` before `SDL_Init`, and task 5
+(camera frame rates).
 
 ## 14. Verified facts and sources
 

@@ -15,9 +15,14 @@ launch.
 Override any URL with the matching environment variable if a vendor moves a
 file: PLAYERONE_SDK_URL, PLAYERONE_PW_SDK_URL, ZWO_SDK_URL.
 
-SDL3 and the Windows icon resource arrive with milestone 3; they are not
-fetched here yet.
+SDL3 is fetched too, into Vendor\SDL3. Pass -SDL3Only to skip the vendor
+camera SDKs, which is what CI wants.
 #>
+
+param(
+    # CI only needs SDL3, not the vendor camera SDKs.
+    [switch]$SDL3Only
+)
 
 $ErrorActionPreference = 'Stop'
 
@@ -76,6 +81,8 @@ function Install-DllFromZip {
     Write-Host "Installed $target"
 }
 
+if (-not $SDL3Only) {
+
 # Windows PowerShell 5.1 has no null-coalescing operator, so the overrides are
 # spelled out.
 $cameraUrl = 'https://player-one-astronomy.com/download/softwares/PlayerOne_Camera_SDK_Windows_V3.10.1.zip'
@@ -115,3 +122,49 @@ Remove-Item -Recurse -Force $temp -ErrorAction SilentlyContinue
 Write-Host ''
 Write-Host 'Vendor DLLs are in Vendor\PlayerOne and Vendor\ZWO.'
 Write-Host 'Install the Player One and ZWO camera drivers before the first launch.'
+}
+
+# --- SDL3 ------------------------------------------------------------------
+# The portable app links SDL3. The VC package carries the headers, the import
+# library, and the DLL; SwiftPM has no post-build hook, so the DLL is copied
+# next to both SwiftPM outputs here.
+
+$sdlVersion = '3.4.16'
+$sdlUrl = "https://github.com/libsdl-org/SDL/releases/download/release-$sdlVersion/SDL3-devel-$sdlVersion-VC.zip"
+if ($env:SDL3_URL) { $sdlUrl = $env:SDL3_URL }
+
+$sdlRoot = Join-Path $vendor 'SDL3'
+if (Test-Path (Join-Path $sdlRoot 'lib\x64\SDL3.dll')) {
+    Write-Host "Already present: $sdlRoot"
+} else {
+    $temp2 = Join-Path ([System.IO.Path]::GetTempPath()) ("collimation-sdl-" + [System.Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force $temp2 | Out-Null
+    $zip = Join-Path $temp2 'SDL3-devel-VC.zip'
+    Write-Host "Downloading $sdlUrl"
+    Invoke-WebRequest -Uri $sdlUrl -OutFile $zip -UseBasicParsing
+    Expand-Archive -Path $zip -DestinationPath $temp2 -Force
+    $extracted = Get-ChildItem $temp2 -Directory | Where-Object { $_.Name -like 'SDL3-*' } | Select-Object -First 1
+    if ($null -eq $extracted) { throw "SDL3 archive layout was not what was expected." }
+
+    New-Item -ItemType Directory -Force (Join-Path $sdlRoot 'include') | Out-Null
+    New-Item -ItemType Directory -Force (Join-Path $sdlRoot 'lib\x64') | Out-Null
+    Copy-Item (Join-Path $extracted.FullName 'include\*') (Join-Path $sdlRoot 'include') -Recurse -Force
+    Copy-Item (Join-Path $extracted.FullName 'lib\x64\SDL3.lib') (Join-Path $sdlRoot 'lib\x64') -Force
+    Copy-Item (Join-Path $extracted.FullName 'lib\x64\SDL3.dll') (Join-Path $sdlRoot 'lib\x64') -Force
+    Remove-Item -Recurse -Force $temp2 -ErrorAction SilentlyContinue
+    Write-Host "Installed SDL3 $sdlVersion into $sdlRoot"
+}
+
+# SDL3.dll must sit next to the executable. SwiftPM has no post-build hook.
+foreach ($config in @('debug', 'release')) {
+    foreach ($scratch in @('.build', '.build-win')) {
+        $outDir = Join-Path $root "$scratch\x86_64-unknown-windows-msvc\$config"
+        if (Test-Path $outDir) {
+            Copy-Item (Join-Path $sdlRoot 'lib\x64\SDL3.dll') $outDir -Force
+            Write-Host "Copied SDL3.dll to $outDir"
+        }
+    }
+}
+
+Write-Host ''
+Write-Host 'SDL3 is in Vendor\SDL3.'
