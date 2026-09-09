@@ -21,19 +21,37 @@ struct CollimationApp: App {
                 }
         })
         .defaultSize(width: 1280, height: 820)
+        // Menus are built from CommandCatalog, so a shortcut or an enablement
+        // rule exists in exactly one place (§8.5). The menus are spelled out
+        // rather than looped: CommandsBuilder is not a ViewBuilder, and a
+        // trailing closure on CommandMenu is ambiguous between init(_:content:)
+        // and init(_:id:content:). CollimationUI.CommandMenu is qualified
+        // because SwiftUI has a type of the same name.
         .commands {
             CommandGroup(replacing: .newItem) {}
-            // Menus are built from CommandCatalog, so a shortcut or an
-            // enablement rule exists in exactly one place (§8.5).
-            // CollimationUI.CommandMenu is qualified throughout: SwiftUI has a
-            // type of the same name.
-            ForEach(CollimationUI.CommandMenu.allCases, id: \.self) { menu in
-                SwiftUI.CommandMenu(menu.title) {
-                    ForEach(CommandCatalog.commands(in: menu, engine: engine), id: \.id) { command in
-                        CommandButton(command: command, engine: engine, host: host)
-                    }
-                }
-            }
+            SwiftUI.CommandMenu(
+                Text(CollimationUI.CommandMenu.camera.title),
+                content: { menuItems(for: .camera) }
+            )
+            SwiftUI.CommandMenu(
+                Text(CollimationUI.CommandMenu.mount.title),
+                content: { menuItems(for: .mount) }
+            )
+            SwiftUI.CommandMenu(
+                Text(CollimationUI.CommandMenu.filterWheel.title),
+                content: { menuItems(for: .filterWheel) }
+            )
+            SwiftUI.CommandMenu(
+                Text(CollimationUI.CommandMenu.view.title),
+                content: { menuItems(for: .view) }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func menuItems(for menu: CollimationUI.CommandMenu) -> some View {
+        ForEach(CommandCatalog.commands(in: menu, engine: engine), id: \.id) { command in
+            CommandButton(command: command, engine: engine, host: host)
         }
     }
 }
