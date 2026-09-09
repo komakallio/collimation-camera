@@ -1963,6 +1963,7 @@ Still open on Windows, and needing hardware: every camera, mount, and filter
 wheel item in §7.8, §9.8, and §10.3 — nothing has been plugged in. Still open
 everywhere else: the whole macOS side, including the portable app's first run
 there and §9.8's screenshot comparison between the two apps.
+
 ## 14. Verified facts and sources
 
 Checked on 2026-09-08 against primary sources. Items marked "spike" are to
