@@ -34,6 +34,8 @@ struct CoreTests {
         failures += run("tracker auto search", testTrackerAutoSearch)
         failures += run("search recovery", testSearchRecovery)
         failures += run("search ignores jumping noise", testSearchIgnoresJumpingNoise)
+        failures += run("unplug raises disconnected", testUnplugRaisesDisconnected)
+        failures += run("slow camera is not unplugged", testSlowCameraIsNotDeclaredUnplugged)
         failures += run("software crop", testSoftwareCrop)
         failures += run("readout fps cap", testReadoutFPSCap)
         failures += run("stack capture buffer", testStackCaptureBuffer)
@@ -2199,4 +2201,84 @@ private func testConstellationLayout() throws {
     try expect(mosaic.pixels[6] == 3 && mosaic.pixels[7] == 4, "NW row1")
     try expect(mosaic.pixels[2 * 6 + 2] == 9, "center tile origin")
     try expect(mosaic.pixels[5] == 0, "empty NE")
+}
+
+/// A camera that accepts everything and never delivers a frame, the way an
+/// unplugged one behaves: the SDK keeps saying "not ready yet" rather than
+/// reporting an error.
+private final class StubUnpluggedCamera: CameraDevice, @unchecked Sendable {
+    let descriptor = CameraDescriptor(
+        id: "stub-0",
+        name: "Stub",
+        sensorWidth: 1024,
+        sensorHeight: 1024,
+        pixelSizeMicrons: 3.76,
+        isSimulator: false,
+        hardwareID: 0
+    )
+    var controls = CameraControls()
+    var currentROI = ROI(x: 0, y: 0, width: 512, height: 512)
+    var supportedBins: [Int] = [1]
+    var roiAlignment = ROIAlignment.playerOne
+    /// Whether the camera is still enumerated. False is "unplugged".
+    var present: Bool
+
+    init(present: Bool) { self.present = present }
+
+    func open() throws {}
+    func close() {}
+    func applyExposure(_ microseconds: Int) throws {}
+    func applyGain(_ gain: Int) throws {}
+    func applyROI(_ roi: ROI) throws {}
+    func startVideo() throws {}
+    func stopVideo() {}
+    func grabFrame(timeoutMs: Int) throws -> Frame { throw CameraError.timeout }
+    func isStillPresent() -> Bool { present }
+}
+
+/// Pulling the cable during live view used to do nothing at all. The camera
+/// stops saying a frame is ready and never reports an error, the capture loop
+/// swallowed every timeout and retried for ever, and so the picture froze with
+/// no message, the buttons still said Disconnect, and replugging changed
+/// nothing because the app had not noticed.
+private func testUnplugRaisesDisconnected() throws {
+    let session = CaptureSession()
+    let received = Box<Error?>(nil)
+    let done = DispatchSemaphore(value: 0)
+    session.onError = { error in
+        received.value = error
+        done.signal()
+    }
+    session.start(device: StubUnpluggedCamera(present: false))
+    let answered = done.wait(timeout: .now() + 5) == .success
+    session.stop()
+    try expect(answered, "the loop never reported the unplug")
+    guard case .some(CameraError.disconnected) = received.value as? CameraError else {
+        throw Expectation(description: "reported \(String(describing: received.value)), not disconnected")
+    }
+}
+
+/// The other half of it: a camera that is still on the bus but slow must not
+/// be declared gone on the first timeout, or an ROI change that misses a frame
+/// would disconnect the camera under the user.
+private func testSlowCameraIsNotDeclaredUnplugged() throws {
+    let session = CaptureSession()
+    let received = Box<Error?>(nil)
+    let done = DispatchSemaphore(value: 0)
+    session.onError = { error in
+        received.value = error
+        done.signal()
+    }
+    session.start(device: StubUnpluggedCamera(present: true))
+    // It gives up eventually, but only after the presence check has said the
+    // camera is there several times over.
+    let answered = done.wait(timeout: .now() + 5) == .success
+    session.stop()
+    try expect(answered, "a camera that never delivers must not hang the loop for ever either")
+}
+
+/// Minimal box so a callback on the capture thread can hand a value back.
+private final class Box<T>: @unchecked Sendable {
+    var value: T
+    init(_ value: T) { self.value = value }
 }

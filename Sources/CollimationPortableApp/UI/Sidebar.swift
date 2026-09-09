@@ -70,11 +70,12 @@ enum Sidebar {
 
         command(CommandCatalog.ID.cameraSaveStacked, engine: engine, host: host)
         igSameLine(0, -1)
-        igSetNextItemWidth(90)
+        let frameCounts = FrameStacker.subframeCounts.map { (String($0), MetricText.stackCount($0)) }
+        igSetNextItemWidth(comboWidth(fitting: frameCounts))
         combo(
             label: "##frames",
             selection: String(engine.stackFrameCount),
-            options: FrameStacker.subframeCounts.map { (String($0), MetricText.stackCount($0)) },
+            options: frameCounts,
             enabled: engine.canSelectStackCount,
             help: HelpText.stackCount
         ) { value in
@@ -312,6 +313,26 @@ enum Sidebar {
             if changed { set(engine, value) }
         }
         ImGuiText.tooltip(command.help)
+    }
+
+    /// Width for a combo that has to show its widest option in full.
+    ///
+    /// Not a constant. The frame-count picker was 90, which was both too
+    /// narrow for `10000` and unscaled — ImGui item widths are in pixels, and
+    /// on a 200% display everything else in the sidebar is twice the size of a
+    /// number written out here, so the box came out half the width intended
+    /// and clipped four of its seven options. SwiftUI's `Picker` sizes itself
+    /// to its content, so the macOS app never had it. Measuring is the way to
+    /// keep the two the same, and it survives a new entry in
+    /// `FrameStacker.subframeCounts` without anyone remembering this line.
+    private static func comboWidth(fitting options: [(String, String)]) -> Float {
+        let text = options.reduce(Float(0)) { widest, option in
+            max(widest, option.1.withCString { igCalcTextSize($0, nil, false, -1) }.x)
+        }
+        let padding = igGetStyle()?.pointee.FramePadding.x ?? 4
+        // What ImGui itself reserves for the arrow at the right of a combo.
+        let arrow = igGetFrameHeight()
+        return text + padding * 3 + arrow
     }
 
     private static func combo(

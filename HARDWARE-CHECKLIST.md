@@ -4,10 +4,11 @@ This is the order to work through, Player One first and ZWO after, with the
 commands to run and what a pass looks like. Each step's output belongs in the
 log file, so a failure can be sent on rather than described.
 
-**Where this stands.** Steps 0 to 3 pass on Player One — a Xena 585M and a
-Poseidon-M PRO — and step 4 is under way; the numbers and the five defects
-that session found are in `PLAN-MULTIPLATFORM.md` §14c. Steps 5 to 7 and all
-of ZWO are untouched. §14b is what was verified without hardware.
+**Where this stands.** Steps 0 to 4 pass on Player One — a Xena 585M and a
+Poseidon-M PRO — including Save TIFF and Save Stacked. Step 5 found that
+unplugging did nothing at all and is fixed but not re-run. Steps 6 and 7 and
+all of ZWO are untouched. `PLAN-MULTIPLATFORM.md` §14c has the numbers and
+every defect these sessions found; §14b is what was verified without hardware.
 
 Log file: `%LOCALAPPDATA%\Collimation Camera\collimation.log` on Windows,
 `~/Library/Logs/Collimation Camera/collimation.log` on macOS. The previous run
@@ -89,6 +90,12 @@ stack, then again during Center.
 Pass, each time: the error dialog opens, the app keeps drawing (the fps label
 keeps updating; no stall longer than three seconds), and reconnecting works
 after the camera is plugged back in.
+
+Reconnecting means pressing **Connect** again, not replugging alone — the app
+does not poll for a camera that has gone. What it must not do is what it used
+to: freeze the picture, say nothing, and leave the button reading Disconnect.
+The error takes a couple of grab timeouts to arrive, so at a long exposure give
+it a few seconds.
 
 ## 6. The mount (§10.3)
 

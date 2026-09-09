@@ -71,6 +71,22 @@ how a quit that never quit survived: `--snapshot` sets the loop's flag itself
 and `run-win.ps1 -Seconds` kills the process, so the close button reached
 nothing that was ever exercised. If you touch the event loop, run it.
 
+**An unplugged camera reports nothing.** Neither vendor SDK raises an error
+when the cable goes: the camera simply stops saying a frame is ready, which
+reads as a timeout and is indistinguishable from a slow one. `CaptureSession`
+therefore counts consecutive timeouts and calls `CameraDevice.isStillPresent()`
+— re-enumeration, the only thing that can tell them apart — rather than
+retrying for ever, which is what it used to do and what froze the live view
+with no message. Any new `CameraDevice` that can tell should implement it; the
+default answers true, which keeps a device that cannot tell from claiming its
+camera has gone.
+
+**ImGui item widths are pixels, not points.** `igSetNextItemWidth(90)` is 90
+device pixels, so on a 200% display it is half the size of everything laid out
+in points around it. Measure the content — `Sidebar.comboWidth(fitting:)` — or
+scale by `UIScale.pointScale`. A number written straight into one of these
+calls is a bug on some display.
+
 **A Swift closure handed to C must not be actor-isolated.** A closure written
 inside a `@MainActor` type inherits that isolation, and Swift emits an
 isolation check at the entry of an isolated closure reached through a C

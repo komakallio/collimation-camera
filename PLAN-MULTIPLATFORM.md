@@ -2123,9 +2123,31 @@ its enclosing type is a plain enum; that contrast is the whole lesson.
 the exit code and the window. With it, a 512 ROI saves in about 10 ms and comes
 out at 524422 bytes.
 
+**Unplugging did nothing at all.** Checklist step 5: pulling the cable during
+live view froze the picture, raised no error, left the buttons saying
+Disconnect, and replugging changed nothing. An unplugged Player One camera does
+not report an error — the SDK goes on answering "no frame ready yet" for ever —
+so every grab timed out, and `CaptureSession.runLoop` swallowed
+`CameraError.timeout` with a bare `continue`. It retried until the process
+ended. The loop now counts consecutive timeouts, asks the device whether it is
+still enumerated once there have been two, and raises `CameraError.disconnected`
+when it is not; a camera that still enumerates but never delivers is given ten
+before the same verdict, because a frozen view with no explanation is the worst
+outcome either way. `CameraDevice.isStillPresent()` is new, implemented for
+both vendors by re-enumerating and defaulting to true for anything that cannot
+tell. Two tests in `CoreTests` cover it, one per direction. The real cable pull
+is still the user's to repeat.
+
+**The frame-count picker clipped its own options.** `igSetNextItemWidth(90)` —
+a raw pixel count, and ImGui item widths are pixels, so on a 200% display the
+box came out half the width everything around it is, and four of the seven
+counts did not fit. It measures the widest option now. SwiftUI's `Picker` sizes
+to content, so this was portable-app-only, like the star-profile fill.
+
 **Still open**
 
-- Unplugging a camera mid-run and the error modal.
+- The error modal has still never been seen, though the two fixes above should
+  both raise it.
 - The mount and the filter wheel on real hardware (§10.3).
 - Everything ZWO (§7.8).
 

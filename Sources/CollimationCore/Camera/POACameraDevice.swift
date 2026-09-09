@@ -98,6 +98,12 @@ final class POACameraDevice: CameraDevice {
         grabLock.unlock()
     }
 
+    /// `properties` walks the enumerated cameras, so a camera that has been
+    /// unplugged is simply not among them any more.
+    func isStillPresent() -> Bool {
+        native.properties(cameraID) != nil
+    }
+
     func applyExposure(_ microseconds: Int) throws {
         let clamped = min(max(microseconds, controls.exposureRange.lowerBound), controls.exposureRange.upperBound)
         try native.setExposure(id: cameraID, microseconds: clamped)

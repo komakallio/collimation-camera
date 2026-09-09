@@ -84,12 +84,23 @@ public protocol CameraDevice: AnyObject {
     func cancelGrab()
     /// Soft frame-rate cap. `0` means unlimited where the camera supports it.
     func applyFrameLimit(_ fps: Int)
+    /// Whether the camera is still on the bus.
+    ///
+    /// An unplugged camera does not report an error: it simply stops saying a
+    /// frame is ready, which is indistinguishable from a slow one. Asking the
+    /// SDK to enumerate is what tells the two apart, so the capture loop calls
+    /// this after a run of timeouts rather than guessing. Only called when
+    /// something already looks wrong, since enumerating mid-stream is not free.
+    func isStillPresent() -> Bool
 }
 
 extension CameraDevice {
     public func cancelGrab() {}
     public func applyFrameLimit(_ fps: Int) {}
     public var roiAlignment: ROIAlignment { .playerOne }
+    /// The simulator cannot be unplugged, and a device that cannot tell should
+    /// not claim its camera has gone.
+    public func isStillPresent() -> Bool { true }
 }
 
 public enum DeviceCatalog {

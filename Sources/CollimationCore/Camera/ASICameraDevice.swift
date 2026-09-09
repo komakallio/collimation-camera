@@ -97,6 +97,12 @@ final class ASICameraDevice: CameraDevice {
         grabLock.unlock()
     }
 
+    /// The property lookup enumerates, so an unplugged camera drops out of it.
+    /// Untested against real ZWO hardware, like the rest of this file.
+    func isStillPresent() -> Bool {
+        native.property(forCameraID: cameraID) != nil
+    }
+
     func applyExposure(_ microseconds: Int) throws {
         let clamped = min(max(microseconds, controls.exposureRange.lowerBound), controls.exposureRange.upperBound)
         try native.setControl(cameraID, ASI_EXPOSURE, clamped)
