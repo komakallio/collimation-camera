@@ -25,5 +25,14 @@ if (-not $args -or $args.Count -eq 0) {
     exit $LASTEXITCODE
 }
 
-& swift @args
+# Everything on Windows shares one scratch path. Without this, a build here
+# lands in .build while run-win.ps1 and package-win.ps1 look in .build-win, so
+# the documented build-then-run sequence silently runs a stale binary — or
+# none at all.
+$forwarded = @($args)
+if ($forwarded -notcontains '--scratch-path') {
+    $forwarded += @('--scratch-path', '.build-win')
+}
+
+& swift @forwarded
 exit $LASTEXITCODE

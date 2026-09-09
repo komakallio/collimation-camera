@@ -158,8 +158,16 @@ $sdlUrl = "https://github.com/libsdl-org/SDL/releases/download/release-$sdlVersi
 if ($env:SDL3_URL) { $sdlUrl = $env:SDL3_URL }
 
 $sdlRoot = Join-Path $vendor 'SDL3'
-if (Test-Path (Join-Path $sdlRoot 'lib\x64\SDL3.dll')) {
-    Write-Host "Already present: $sdlRoot"
+# The pinned version is recorded beside the DLL, so bumping $sdlVersion above
+# actually fetches the new one. Testing only for the DLL's existence made a
+# version bump a silent no-op.
+$sdlStamp = Join-Path $sdlRoot 'VERSION.txt'
+$sdlPresent = (Test-Path (Join-Path $sdlRoot 'lib\x64\SDL3.dll')) -and
+    (Test-Path $sdlStamp) -and
+    ((Get-Content -Raw $sdlStamp).Trim() -eq $sdlVersion)
+
+if ($sdlPresent) {
+    Write-Host "Already present: $sdlRoot (SDL3 $sdlVersion)"
 } else {
     $temp2 = Join-Path ([System.IO.Path]::GetTempPath()) ("collimation-sdl-" + [System.Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Force $temp2 | Out-Null
@@ -176,6 +184,7 @@ if (Test-Path (Join-Path $sdlRoot 'lib\x64\SDL3.dll')) {
     Copy-Item (Join-Path $extracted.FullName 'lib\x64\SDL3.lib') (Join-Path $sdlRoot 'lib\x64') -Force
     Copy-Item (Join-Path $extracted.FullName 'lib\x64\SDL3.dll') (Join-Path $sdlRoot 'lib\x64') -Force
     Remove-Item -Recurse -Force $temp2 -ErrorAction SilentlyContinue
+    Set-Content -Path $sdlStamp -Value $sdlVersion -Encoding utf8
     Write-Host "Installed SDL3 $sdlVersion into $sdlRoot"
 }
 

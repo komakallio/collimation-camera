@@ -422,6 +422,16 @@ func testCommandReachability() throws {
         }
     }
 
+    // A sidebar-only command cannot carry a keyboard shortcut on macOS: SwiftUI
+    // takes shortcuts from menu items, so one on a command with no menu would
+    // work on Windows and be dead on the Mac.
+    for command in CommandCatalog.all where command.menu == nil {
+        try expectUI(
+            command.shortcuts.isEmpty,
+            "\(command.id) is sidebar-only but binds \(command.shortcuts.map(\.displayString).joined(separator: ", ")), which macOS cannot reach"
+        )
+    }
+
     // And the derivation itself has to be right, or the check above passes by
     // never finding anything.
     try expectUI(propertyName(for: "camera.saveTIFF") == "cameraSaveTIFF", "id to property name")

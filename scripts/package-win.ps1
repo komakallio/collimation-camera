@@ -47,6 +47,11 @@ if (-not (Test-Path $res)) {
 if (-not $SkipBuild) {
     & swift build -c release --product CollimationCamera --scratch-path $ScratchPath
     if ($LASTEXITCODE -ne 0) { throw "The release build failed." }
+    # capture-cli ships too: HARDWARE-CHECKLIST.md's first three steps are all
+    # capture-cli commands, and the person running them on the observatory
+    # machine has only this zip.
+    & swift build -c release --product capture-cli --scratch-path $ScratchPath
+    if ($LASTEXITCODE -ne 0) { throw "The capture-cli release build failed." }
 }
 if (-not (Test-Path $exe)) { throw "No such executable: $exe" }
 
@@ -64,6 +69,13 @@ Remove-Item -Recurse -Force $dist -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $dist | Out-Null
 
 Copy-Item $exe $dist
+
+$cli = Join-Path $binDirectory 'capture-cli.exe'
+if (Test-Path $cli) {
+    Copy-Item $cli $dist
+} else {
+    Write-Warning "capture-cli.exe is not in $binDirectory; HARDWARE-CHECKLIST.md steps 1 to 3 need it."
+}
 
 # --- Swift runtime ---------------------------------------------------------
 # Copy the whole runtime directory rather than a list of names: an unused DLL
