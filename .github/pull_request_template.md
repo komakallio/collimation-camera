@@ -11,6 +11,9 @@
 - [ ] Hardware note if capture, mount, or wheel code changed.
 - [ ] A new vendored binary or library has its license text in `LICENSES/` and
       a row in `LICENSES/README.md`.
-- [ ] A change to one copy of the stretch shader changes all three — the CPU
-      `StretchParams.apply`, the MSL shader, the HLSL shader — and the
-      `stretch shader math` test.
+- [ ] A change to one copy of the stretch shader changes **all four** — the CPU
+      `StretchParams.apply`, `MetalRenderer.shaderSource` (what the macOS
+      release renders), `ShaderSource.metal` (what the portable app renders),
+      and `ShaderSource.hlslFragment` — plus the `stretch shader math` test.
+      There are two separate MSL strings; `stretch shader copies` fails if they
+      drift, but only after you have already written the change twice.

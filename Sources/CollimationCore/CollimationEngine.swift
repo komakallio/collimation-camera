@@ -132,6 +132,16 @@ public final class CollimationEngine {
     public private(set) var showingFullFramePreview = false
     public private(set) var mountWork: MountWork?
     public private(set) var isStacking = false
+
+    /// Test hook, and only that: `command catalog enablement` has to reach the
+    /// stacking branch of `canCalibrateMount`, `canCenterStar`, and
+    /// `canSearchFullFrame`, and the only other way in is to start a real
+    /// stack and wait for frames. App code must call `saveStacked` instead —
+    /// this sets the flag without any of the work that goes with it.
+    public func setStackingForTesting(_ value: Bool) {
+        isStacking = value
+    }
+
     public var stackFrameCount = FrameStacker.defaultSubframeCount
     public private(set) var stackWork: StackWork?
     public private(set) var isAutoExposing = false

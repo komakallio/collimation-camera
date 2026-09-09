@@ -142,6 +142,15 @@ enum LiveChrome {
                 pointScale: pointScale
             )
 
+            hoverHelp(HelpText.roiMap, at: mapOrigin, size: mapSize, origin: origin, pointScale: pointScale)
+            hoverHelp(
+                HelpText.starProfile,
+                at: profileOrigin,
+                size: profileSize,
+                origin: origin,
+                pointScale: pointScale
+            )
+
             bottom = rowTop - widgetSpacing
         }
 
@@ -192,6 +201,8 @@ enum LiveChrome {
             )
             y += rowHeight + LegendScene.rowSpacing
         }
+
+        hoverHelp(HelpText.legend, at: legendOrigin, size: legendSize, origin: origin, pointScale: pointScale)
     }
 
     private static func panel(
@@ -251,5 +262,37 @@ enum LiveChrome {
             origin: origin,
             pointScale: pointScale
         )
+    }
+}
+
+extension LiveChrome {
+    /// A tooltip over a rectangle that is not an ImGui item.
+    ///
+    /// The corner widgets are drawn straight onto the background draw list, so
+    /// there is nothing for `igSetItemTooltip` to attach to. The macOS app
+    /// gives all three of them `.help(...)`, and §9.8 wants the same strings on
+    /// both, so this does the hit test by hand.
+    static func hoverHelp(
+        _ text: String,
+        at position: SIMD2<Double>,
+        size: SIMD2<Double>,
+        origin: SIMD2<Double>,
+        pointScale: Double
+    ) {
+        // Not while the pointer belongs to a window: the sidebar and the menus
+        // own their own tooltips.
+        guard let io = igGetIO_Nil(), !io.pointee.WantCaptureMouse else { return }
+        let topLeft = ImVec2(
+            x: Float(origin.x + position.x * pointScale),
+            y: Float(origin.y + position.y * pointScale)
+        )
+        let bottomRight = ImVec2(
+            x: topLeft.x + Float(size.x * pointScale),
+            y: topLeft.y + Float(size.y * pointScale)
+        )
+        guard igIsMouseHoveringRect(topLeft, bottomRight, false) else { return }
+        guard igBeginTooltip() else { return }
+        ImGuiText.plain(text)
+        igEndTooltip()
     }
 }

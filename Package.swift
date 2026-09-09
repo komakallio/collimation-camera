@@ -102,7 +102,8 @@ var targets: [Target] = [
     ),
     .executableTarget(
         name: "CoreTests",
-        dependencies: ["CollimationCore", "CollimationUI"]
+        // ASICameraC so `asi error mapping` can name the ZWO error constants.
+        dependencies: ["CollimationCore", "CollimationUI", "ASICameraC"]
     ),
     // Milestone 0 spike. Answers the rendering and timing questions that gate
     // the portable app; nothing here ships.

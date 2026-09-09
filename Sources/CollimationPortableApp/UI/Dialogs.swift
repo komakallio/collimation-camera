@@ -12,8 +12,15 @@ import Foundation
 /// outlive the call, hence the static storage.
 @MainActor
 final class PortableUIHost: UIHost {
+    /// SDL parents the dialog to this window, so it cannot appear behind the
+    /// app or steal focus from another program.
+    private let window: OpaquePointer
     private var dialogOpen = false
     private var pending: ((URL?) -> Void)?
+
+    init(window: OpaquePointer) {
+        self.window = window
+    }
 
     /// SDL runs the dialog callback on a worker thread on Windows, so the
     /// result is parked in a nonisolated box and picked up by the main loop.
@@ -83,7 +90,7 @@ final class PortableUIHost: UIHost {
                         PortableUIHost.active?.deliver(chosen)
                     },
                     nil,
-                    nil,
+                    window,
                     buffer.baseAddress,
                     Int32(buffer.count),
                     location

@@ -13,6 +13,10 @@ import WinSDK.DirectX
 /// Targets must be SM 5.1, not 5.0: without register spaces the root signature
 /// does not match what SDL builds.
 enum HLSLCompiler {
+    /// The last compiler diagnostic, so a shader that fails to build reaches
+    /// the startup message box and not only the log.
+    nonisolated(unsafe) static var lastError: String?
+
     static func compile(source: String, entryPoint: String, target: String) -> Data? {
         var codeBlob: UnsafeMutablePointer<ID3DBlob>?
         var errorBlob: UnsafeMutablePointer<ID3DBlob>?
@@ -52,6 +56,9 @@ enum HLSLCompiler {
                 }
             }
             Log.info(message)
+            // Kept so the startup failure box can show what the compiler said,
+            // not just "the pipeline could not be created" (§9.5).
+            lastError = message
             return nil
         }
 

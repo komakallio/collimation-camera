@@ -112,8 +112,15 @@ guard let io = igGetIO_Nil() else {
 io.pointee.IniFilename = nil   // no imgui.ini beside the executable
 
 // Fonts before the backend init: the first face loaded becomes the default.
+// A missing face is fatal, like every other startup step (§9.5): ImGui would
+// fall back to a Latin-1 face and §9.8 forbids a "?" anywhere in the UI, so
+// silently rendering a broken window is worse than saying why.
 if !Fonts.load(io: io) {
-    Log.info("Some fonts are missing; ImGui will fall back and non-ASCII glyphs may show as '?'.")
+    Diagnostics.fail(
+        "Loading fonts",
+        detail: "Resources/Fonts is missing or unreadable. Searched: "
+            + AppPaths.resourceRoots.map(\.path).joined(separator: ", ")
+    )
 }
 Fonts.verifyGlyphs()
 
@@ -126,11 +133,16 @@ guard cimgui_sdlgpu3_init(device, swapchainFormat) else {
 Log.info("ImGui \(String(cString: igGetVersion()))")
 
 guard let renderer = GPULiveRenderer(device: device, colorFormat: swapchainFormat) else {
-    Diagnostics.fail("GPULiveRenderer", detail: "stretch pipeline could not be created")
+    // The shader compiler's own diagnostic if there is one: it names the line
+    // and the mistake, which a bare "could not be created" does not.
+    Diagnostics.fail(
+        "Building the stretch pipeline",
+        detail: GPULiveRenderer.shaderError ?? Diagnostics.sdlError()
+    )
 }
 
 let engine = CollimationEngine()
-let host = PortableUIHost()
+let host = PortableUIHost(window: window)
 // Same as ContentView.onAppear on macOS.
 engine.connect()
 

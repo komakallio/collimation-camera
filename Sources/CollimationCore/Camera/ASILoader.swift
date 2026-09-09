@@ -4,7 +4,7 @@ import Foundation
 /// Runtime binding to the ZWO ASI camera SDK. Mirrors `POANative`: the app
 /// links nothing, so a missing SDK is a status message rather than a launch
 /// failure. All entry points are cdecl.
-final class ASINative: @unchecked Sendable {
+public final class ASINative: @unchecked Sendable {
     static let shared: ASINative? = {
         do {
             return try ASINative()
@@ -124,25 +124,11 @@ final class ASINative: @unchecked Sendable {
     }
 
     func check(_ error: ASI_ERROR_CODE) throws {
-        if error == ASI_SUCCESS { return }
-        if error == ASI_ERROR_TIMEOUT {
-            throw CameraError.timeout
-        }
-        if error == ASI_ERROR_CAMERA_REMOVED || error == ASI_ERROR_CAMERA_CLOSED {
-            throw CameraError.disconnected
-        }
-        if error == ASI_ERROR_INVALID_SIZE || error == ASI_ERROR_OUTOF_BOUNDARY {
-            throw CameraError.invalidROI
-        }
-        throw CameraError.sdk(
-            vendor: .zwo,
-            code: Int32(error.rawValue),
-            message: Self.message(for: error)
-        )
+        if let mapped = ASIErrorMapping.cameraError(for: error) { throw mapped }
     }
 
     /// The SDK has no error-string call, so the messages live here.
-    static func message(for error: ASI_ERROR_CODE) -> String {
+    public static func message(for error: ASI_ERROR_CODE) -> String {
         if error == ASI_SUCCESS { return "Success" }
         if error == ASI_ERROR_INVALID_INDEX { return "No ZWO camera at that index" }
         if error == ASI_ERROR_INVALID_ID { return "Invalid ZWO camera id" }

@@ -2,11 +2,17 @@ import CollimationCore
 import CollimationUI
 import Foundation
 
-// The stretch shader exists three times: `StretchParams.apply` on the CPU,
-// the MSL fragment shader, and the HLSL one (§12.1 item 6). Neither shader can
-// be run from here, so this re-implements both in Swift, line for line, and
-// checks them against the CPU version over a synthetic frame. A change to any
-// of the three that is not made in all of them shows up here.
+// The stretch maths exists four times: `StretchParams.apply` on the CPU, two
+// MSL fragment shaders — `MetalRenderer.shaderSource` for the macOS release
+// and `ShaderSource.metal` for the portable app — and the HLSL one
+// (§12.1 item 6). No shader can be run from here, so this re-implements the
+// maths in Swift, line for line, and checks it against the CPU version over a
+// synthetic frame.
+//
+// What this cannot see is which shader strings the app actually contains: it
+// re-implements them rather than reading them, so two shaders that disagree
+// with each other both still pass. `stretch shader copies` is the test that
+// reads the files.
 //
 // Everything runs in Float, not Double: that is what the GPU does, and it sets
 // the tolerance.

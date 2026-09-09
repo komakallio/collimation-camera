@@ -86,6 +86,24 @@ func testCommandCatalogEnablement() throws {
     // runner never drains, so these two stay off.
     try expectUI(!(try enabled(CommandCatalog.ID.cameraSaveStacked)), "save stacked needs tracking")
     try expectUI(!(try enabled(CommandCatalog.ID.mountCalibrate)), "calibrate needs a mount and tracking")
+
+    // While a stack is in flight the camera is being driven at its own rate
+    // with a different ROI, so anything that would move the mount or change
+    // the readout has to be off. These three are the ones that could.
+    try expectUI(try enabled(CommandCatalog.ID.cameraSearchFullFrame), "search is on before stacking")
+    try expectUI(engine.canToggleAutoCenter, "auto-center is on before stacking")
+    try expectUI(engine.canSelectStackCount, "the frame count is settable before stacking")
+
+    engine.setStackingForTesting(true)
+    try expectUI(!(try enabled(CommandCatalog.ID.cameraSearchFullFrame)), "search off while stacking")
+    try expectUI(!(try enabled(CommandCatalog.ID.mountCalibrate)), "calibrate off while stacking")
+    try expectUI(!(try enabled(CommandCatalog.ID.mountCenter)), "center off while stacking")
+    try expectUI(!(try enabled(CommandCatalog.ID.cameraAutoExpose)), "auto exposure off while stacking")
+    try expectUI(!(try enabled(CommandCatalog.ID.cameraSaveTIFF)), "save TIFF off while stacking")
+    try expectUI(!engine.canToggleAutoCenter, "auto-center off while stacking")
+    try expectUI(!engine.canSelectStackCount, "the frame count is locked while stacking")
+    engine.setStackingForTesting(false)
+    try expectUI(try enabled(CommandCatalog.ID.cameraSearchFullFrame), "search back on afterwards")
 }
 
 @MainActor

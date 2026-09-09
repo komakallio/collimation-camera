@@ -2,10 +2,20 @@ import Foundation
 
 /// The stretch shader, in the two languages SDL's GPU backends accept.
 ///
-/// Both are ports of `MetalRenderer.shaderSource`, and the reference for the
-/// maths is `StretchParams.apply` in CollimationCore. §12.1 item 6: a change to
-/// one of these three must change all three in the same commit, along with the
-/// `stretch shader math` equivalence test.
+/// The maths lives in FOUR places, and a change to one is a change to all four
+/// in the same commit (§12.1 item 6):
+///
+///   1. `StretchParams.apply` in CollimationCore — the reference
+///   2. `MetalRenderer.shaderSource` — MSL, what the macOS *release* renders
+///   3. `metal` below — MSL again, what the portable app renders
+///   4. `hlslFragment` below — HLSL, Windows
+///
+/// 2 and 3 are separate strings whose fragment stages are identical; only the
+/// vertex stage differs, because Metal reads a vertex buffer and SDL derives
+/// the quad from the vertex id. Editing 3 and forgetting 2 leaves the macOS
+/// release rendering the old curve. `stretch shader copies` fails when they
+/// drift; `stretch shader math` does not, because it re-implements the maths
+/// rather than reading these strings.
 ///
 /// Register assignment is fixed by SDL, not chosen here (§9.4):
 ///   vertex uniforms          b0, space1   /  [[buffer(0)]]
@@ -219,7 +229,23 @@ enum ShaderSource {
 }
 
 /// Fragment uniforms. Eight 4-byte scalars, so HLSL cbuffer packing and MSL
-/// layout agree without padding.
+/// layout agree without padding — which is also why there is no room for a
+/// ninth field without changing all four shader sources together.
+///
+/// Two of these are overloaded, and both renderers pack them with `==` rather
+/// than an exhaustive switch, so a third `StretchCurve` case would compile,
+/// arrive as `mode = 0`, and render as MTF with the wrong parameter. No test
+/// would fail: `StretchParams.apply` would be right, so `stretch shader math`
+/// stays green.
+///
+///   `mode`   0 for `.mtf`, 1 for `.arcsinh`; the shaders branch on `> 0.5`
+///   `amount` the midtones balance when `mode` is 0, the arcsinh factor α when
+///            it is 1, each clamped to its own range by the caller
+///
+/// Adding a curve therefore means: `StretchCurve`, both packing sites
+/// (`MetalRenderer.drawImage` and `GPULiveRenderer.drawImage`), all four shader
+/// bodies, `shaderCurve` in `ShaderMathTests`, `StretchParams.apply`,
+/// `StretchParams.auto`, and the sidebar pickers in both apps.
 struct StretchUniforms {
     var black: Float = 0
     var white: Float = 1

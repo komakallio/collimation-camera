@@ -35,6 +35,19 @@ final class GPULiveRenderer {
         if let pipeline { SDL_ReleaseGPUGraphicsPipeline(device, pipeline) }
     }
 
+    /// Why the pipeline could not be built, for the startup message box. On
+    /// Windows that is the `D3DCompile` diagnostic, which names the line and
+    /// the mistake — far more use than "the pipeline could not be created".
+    static var shaderError: String? {
+#if os(Windows)
+        return HLSLCompiler.lastError
+#elseif os(macOS)
+        return nil
+#else
+        return "No shader backend for this platform; build SPIR-V offline with shadercross."
+#endif
+    }
+
     /// Whether the primary texture format works on this device. Logged at
     /// startup so a fallback decision is visible in the log.
     static func supportsR16UInt(device: OpaquePointer) -> Bool {
