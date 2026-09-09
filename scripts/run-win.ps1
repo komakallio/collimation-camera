@@ -43,8 +43,13 @@ if (-not (Test-Path $exe)) { throw "No such executable: $exe" }
 Add-WindowsRuntime -Directory $binDirectory
 
 if ($Seconds -le 0) {
-    & $exe @Arguments
-    exit $LASTEXITCODE
+    # Start-Process, not the call operator: the release build is a GUI
+    # subsystem image, and PowerShell does not wait for one of those, so `&`
+    # returns at once and leaves $LASTEXITCODE empty. That matters because
+    # --snapshot's exit status is a check, not decoration. -NoNewWindow keeps a
+    # debug build's output inline.
+    $process = Start-Process -FilePath $exe -WorkingDirectory $root -ArgumentList $Arguments -NoNewWindow -Wait -PassThru
+    exit $process.ExitCode
 }
 
 $process = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru -ArgumentList $Arguments

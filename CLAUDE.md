@@ -132,6 +132,11 @@ CollimationCamera.exe --snapshot shot.png --snapshot-after 8 --window-size 1280x
 capture-cli.exe --frames 100 --device poa-0 --roi 2048 --exposure 20
 ```
 
+Check `--snapshot`'s exit status, not just the PNG: it is non-zero on a widget
+id conflict. And run it through `run-win.ps1` or `Start-Process -Wait`, because
+the release build is a GUI subsystem image and PowerShell's `&` does not wait
+for one — it returns immediately and leaves `$LASTEXITCODE` empty.
+
 `--snapshot` renders through the same code the window uses, so the PNG is what
 the window would have shown. `--window-size` is in **points**, so the same
 argument lays both apps out identically — that is what the §9.8 HUD comparison
