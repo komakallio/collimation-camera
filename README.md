@@ -84,6 +84,9 @@ swift run core-tests
 swift run capture-cli --list
 swift run capture-cli --simulator --output frame.tif
 swift run capture-cli --device asi-0 --output zwo.tif
+
+# Measure the grab rate without opening a window
+swift run capture-cli --frames 100 --device poa-0 --roi 2048 --exposure 20
 ```
 
 `make lint` checks that no shared module imports a UI or platform framework. CI runs the same check, the tests, and both apps' builds on both platforms.

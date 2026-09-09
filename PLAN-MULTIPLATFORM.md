@@ -1950,6 +1950,14 @@ was not.
   unzipped into a fresh directory outside the repository starts, finds its
   fonts and the vendor DLLs beside the executable, and logs — with no Swift
   toolchain on `PATH`.
+- **Pacing is not quantized any more.** `capture-cli --frames` measures the
+  grab rate without a window, and measuring it found the simulator pacing
+  itself with `Thread.sleep`: its 12.5 ms wait rounded up to 15.6 ms, capping
+  it at 62.5 fps. With `preciseSleep` and `timeBeginPeriod(1)` in the tool it
+  runs at 77.5 fps against an 80 fps cap, interval 12.9 ms. The apps were not
+  affected — `SDL_Init` raises the resolution — but the core no longer depends
+  on that. §7.3's risk, seen and closed on the simulator; the camera side of
+  it still needs hardware.
 - **`capture-cli` works on Windows.** `--list` reports both SDK versions and
   the two simulators; `--simulator --output frame.tif` writes a valid
   little-endian 16-bit TIFF whose donut, stretched with the same black point
