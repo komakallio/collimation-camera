@@ -1,12 +1,13 @@
 # First session with hardware
 
-Everything in this repository has been verified against the simulator. Nothing
-has been verified against a camera, a mount, or a filter wheel — see
-`PLAN-MULTIPLATFORM.md` §14b for exactly what has and has not been run.
-
 This is the order to work through, Player One first and ZWO after, with the
 commands to run and what a pass looks like. Each step's output belongs in the
 log file, so a failure can be sent on rather than described.
+
+**Where this stands.** Steps 0 to 3 pass on Player One — a Xena 585M and a
+Poseidon-M PRO — and step 4 is under way; the numbers and the five defects
+that session found are in `PLAN-MULTIPLATFORM.md` §14c. Steps 5 to 7 and all
+of ZWO are untouched. §14b is what was verified without hardware.
 
 Log file: `%LOCALAPPDATA%\Collimation Camera\collimation.log` on Windows,
 `~/Library/Logs/Collimation Camera/collimation.log` on macOS. The previous run
@@ -55,6 +56,10 @@ Pass: 30 fps or the camera's own limit, whichever is lower, with an interval
 spread of a few milliseconds rather than tens. A mean interval near 15.6 ms or
 a multiple of it means something is sleeping on the default Windows timer.
 Compare the number against the same camera on the Mac.
+
+Which limit applies depends on the sensor, so measure before reading anything
+into it. A Xena 585M holds the app's 30 fps cap at both 512 and 2048; a
+Poseidon-M PRO reads out at 30.0, 22.8 and 11.6 fps at 512, 1024 and 2048.
 
 Repeat with `--roi 512` and with a short exposure. Also check the ADU range it
 reports: `clipped` means lower the exposure or the gain.

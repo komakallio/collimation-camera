@@ -64,6 +64,17 @@ final class POACameraDevice: CameraDevice {
         if let range = native.intRange(cameraID, POA_GAIN) {
             controls.gainRange = range
         }
+        // Fastest readout the link allows, the same thing the ZWO path does
+        // with ASI_BANDWIDTHOVERLOAD. A Xena 585M and a Poseidon-M PRO both
+        // report 100 out of 35...100 already, so this changes nothing on
+        // either; it is here because the SDK does not promise that default and
+        // a throttled link would show up as a rate nobody could explain. The
+        // log line is what makes that visible.
+        if let range = native.intRange(cameraID, POA_USB_BANDWIDTH_LIMIT) {
+            let before = (try? native.getInt(cameraID, POA_USB_BANDWIDTH_LIMIT)).map(String.init) ?? "?"
+            try? native.setInt(cameraID, POA_USB_BANDWIDTH_LIMIT, range.upperBound)
+            Log.info("POA USB bandwidth limit \(before) -> \(range.upperBound) (range \(range.lowerBound)...\(range.upperBound))")
+        }
         try? native.setFormat(cameraID, POA_RAW16)
         format = (try? native.currentFormat(cameraID)) ?? POA_RAW16
         let roi = Alignment.centeredROI(

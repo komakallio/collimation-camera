@@ -2021,6 +2021,80 @@ dialog. Still open everywhere else: the whole macOS side, including the
 portable app's first run there and §9.8's screenshot comparison between the
 two apps.
 
+## 14c. First hardware session (Player One, Windows, 2026-09-09)
+
+Same machine as §14a and §14b. Two Player One cameras on USB 3: a Xena 585M
+(IMX585, 3856×2180, 12-bit) and a Poseidon-M PRO (IMX571, 6252×4176). No
+optics on the Xena for the first half, an artificial star for the second. The
+mount and the filter wheel are still untouched. ZWO is still untouched: the
+SDK loads and reports `1, 41, 0, 0`, but no ASI camera has been plugged in.
+
+**What works**
+
+- **Both cameras enumerate.** `capture-cli --list` reports Player One SDK
+  3.10.1, `poa-0 Xena 585M 3856x2180` and `poa-1 Poseidon-M PRO 6252x4176`,
+  with the sensor sizes read from the SDK rather than the placeholder in
+  `POACameraDevice.init`.
+- **RAW16 is MSB-aligned as §7.4 assumed.** A saturated Xena frame tops out at
+  exactly 65520, which is `StarQuality.clipADU`, so the clip warning fires on
+  a real 12-bit sensor at the right point and no rescaling is needed.
+- **Exposure is linear and the bias is small.** 1752 and 1760 ADU/ms over two
+  runs, intercept about 210 ADU.
+- **The Xena holds 30.0 fps at both 512 and 2048**, which is the app's own
+  live-view cap (`CaptureLayout.maxReadoutFPS`), not the camera's limit.
+- **The Poseidon is readout-bound above 512.** 30.0 fps at 512, 22.8 at 1024,
+  11.6 at 2048 — 86 ms per 2048×2048 frame, about 97 MB/s. Not a defect and
+  not something the app can fix: `POA_USB_BANDWIDTH_LIMIT` already reads 100
+  out of 35...100 on both cameras. It does mean the tracking window on a
+  26 MP camera updates at about a third of the rate it does on the Xena, which
+  is worth knowing before reading anything into an fps figure.
+- **ROI centring is right on a real sensor.** A 2048 window on the 3856×2180
+  Xena lands at 904,66; a 512 window on the 6252×4176 Poseidon lands at
+  2868,1832. Both are centred and both satisfy the vendor's alignment rule.
+- **The live view works against the camera.** The defocused donut, the
+  overlay, the star profile, the histogram, the ROI map and the dial all
+  render from real frames.
+
+**What it found**
+
+Four defects, all fixed in the same commit as this section:
+
+1. `capture-cli --device poa-0` answered `POA_ERROR_INVALID_ID`. The
+   properties lookup calls `POAGetCameraCount`, which is what scans the bus
+   and makes an id valid, and `open()` called it second. The app enumerates
+   in the same process before connecting, so only the tool could see this.
+   Both vendor devices now look properties up first.
+2. `capture-cli` reported a failure as a Swift stack trace. `main()` catches
+   and prints instead.
+3. **Searching flickered between the crop and the full frame**, about three
+   times a second with no optics on the camera. Losing a star was debounced
+   from the start and finding one was not, so one noise peak above `minSNR`
+   promoted `.searching` to `.tracking`, moved the camera to the 2048 window,
+   found nothing, and fell back `lostFrameLimit` frames later. Acquisition is
+   now debounced too: `foundFrameLimit` detections within `acquireRadius`
+   sensor pixels before the camera is moved. Noise peaks jump; a star does
+   not.
+4. **The fill under the star profile was a wedge.** The area under a curve is
+   concave and `ImDrawList_AddConvexPolyFilled` draws a triangle fan from the
+   first vertex; SwiftUI's `Canvas` fills a `Path` by winding, so this was a
+   portable-app-only defect and no shared test could have caught it.
+
+And one more, found while disconnecting the camera rather than by the camera:
+three sidebar **Connect** buttons shared one ImGui id — ImGui derives identity
+from the label — so ImGui put a "3 visible items with conflicting ID" dialog
+over the live view, and two of the three controls shared state. Each command's
+button is now keyed by its catalogue id. `--snapshot` now exits non-zero on an
+id conflict, which makes the headless screenshot the regression test for it.
+
+**Still open**
+
+- Unplugging a camera mid-run, the error modal, and the save dialog.
+- The mount and the filter wheel on real hardware (§10.3).
+- Everything ZWO (§7.8).
+- Quitting has been reported as unreliable and is not yet explained. The
+  shutdown now logs a timing for each step and a watchdog ends the process if
+  one of them never returns, so the next occurrence names its own cause.
+
 ## 14. Verified facts and sources
 
 Checked on 2026-09-08 against primary sources. Items marked "spike" are to

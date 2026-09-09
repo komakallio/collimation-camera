@@ -160,11 +160,18 @@ Worth knowing before you go looking:
 
 ## What is not verified
 
-Everything has been run on Windows against the simulator. Nothing has been run
-with a camera, a mount, or a filter wheel, and the macOS side compiles in CI
-but has never been launched. `PLAN-MULTIPLATFORM.md` §14b is the honest list of
-what was actually checked and what was not. Do not read a ✅ in `PARITY.md` as
-"someone saw this work".
+Everything has been run on Windows against the simulator, and the camera side
+has now had one session with two Player One cameras. No mount, no filter wheel,
+no ZWO camera, and the macOS side compiles in CI but has never been launched.
+`PLAN-MULTIPLATFORM.md` §14b and §14c are the honest list of what was actually
+checked and what was not. Do not read a ✅ in `PARITY.md` as "someone saw this
+work".
+
+That session found five defects in a couple of hours, four of which no
+simulator could have shown: a camera that only opens after the bus has been
+scanned, an acquisition path that believed a single noise peak, an ImGui fill
+that assumed convexity, and three buttons sharing one widget id. Expect the
+same ratio from the mount and the wheel.
 
 ## Conventions
 
