@@ -20,9 +20,15 @@ guard SDL_Init(SDL_INIT_VIDEO) else {
 }
 Log.info("SDL \(SDL_GetVersion())")
 
+// `--check` reports what this machine can do and exits, without showing a
+// window: the first thing to run on a new machine, and the only way to get an
+// answer over a remote desktop session where a message box is in the way.
+let selfChecking = SelfCheck.isRequested(CommandLine.arguments)
+
 let displayScale = Double(SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay()))
 let initialScale = displayScale > 0 ? displayScale : 1
-let windowFlags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY
+var windowFlags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY
+if selfChecking { windowFlags |= SDL_WINDOW_HIDDEN }
 guard let window = SDL_CreateWindow(
     "Collimation Camera",
     Int32(1280 * initialScale),
@@ -74,6 +80,10 @@ _ = SDL_SetGPUSwapchainParameters(
     SDL_GPU_PRESENTMODE_VSYNC
 )
 let swapchainFormat = SDL_GetGPUSwapchainTextureFormat(device, window)
+
+if selfChecking {
+    SelfCheck.run(window: window, device: device)
+}
 
 guard let imguiContext = igCreateContext(nil) else {
     Diagnostics.fail("igCreateContext", detail: "ImGui context could not be created")

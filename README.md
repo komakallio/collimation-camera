@@ -153,6 +153,14 @@ xattr -d com.apple.quarantine "dist/Collimation Camera.app"
 
 **Windows SmartScreen blocks the download.** The zip is unsigned. Choose **More info**, then **Run anyway**.
 
+**Check the machine before anything else.** The portable app answers for itself:
+
+```powershell
+CollimationCamera.exe --check
+```
+
+It opens no window. It reports the GPU driver, whether the 16-bit texture format is supported, whether the stretch pipeline builds, which fonts and vendor SDKs it found, the cameras and serial ports it can see, and where the log is — then exits, non-zero if the pipeline failed. Everything also goes to the log file, so it can be sent on. This is the useful thing to run over a remote desktop session, where a window is awkward and a message box is worse.
+
 **A camera is not in the list.** In order:
 
 1. The vendor driver is installed, and the camera was plugged in after the driver.

@@ -147,6 +147,16 @@ Visual C++ 2015-2022 Redistributable (x64):
 Windows shows a SmartScreen warning for an unsigned download: choose
 "More info", then "Run anyway".
 
+Check the machine
+-----------------
+
+  CollimationCamera.exe --check
+
+Opens no window. Reports the GPU driver, the texture format, the stretch
+pipeline, the fonts and vendor SDKs it found, the cameras and serial ports it
+can see, and the log path, then exits. Run this first on a new machine, and
+over remote desktop where a window is awkward.
+
 If a camera is not listed
 -------------------------
 
