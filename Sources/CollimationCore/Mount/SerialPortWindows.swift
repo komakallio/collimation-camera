@@ -204,19 +204,19 @@ public enum SerialPortScanner {
     }
 
     /// COM10 sorts after COM9, not between COM1 and COM2.
-    static func comesBefore(_ lhs: String, _ rhs: String) -> Bool {
+    public static func comesBefore(_ lhs: String, _ rhs: String) -> Bool {
         let left = portNumber(lhs)
         let right = portNumber(rhs)
         if let left, let right, left != right { return left < right }
         return lhs < rhs
     }
 
-    static func portNumber(_ port: String) -> Int? {
+    public static func portNumber(_ port: String) -> Int? {
         guard port.uppercased().hasPrefix("COM") else { return nil }
         return Int(port.dropFirst(3))
     }
 
-    static func decodeUTF16(_ bytes: [UInt8], byteCount: Int) -> String {
+    public static func decodeUTF16(_ bytes: [UInt8], byteCount: Int) -> String {
         let count = min(byteCount, bytes.count) / 2
         guard count > 0 else { return "" }
         var units: [UInt16] = []

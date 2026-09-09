@@ -87,6 +87,13 @@ struct CoreTests {
         failures += run("star profile scene", testStarProfileScene)
         failures += run("image layout ndc rect", testImageLayoutNDCRect)
         failures += run("stretch shader math", testStretchShaderMath)
+        failures += run("eq6 probe order", testEQ6ProbeOrder)
+        failures += run("eq6 unrecognized mount", testEQ6UnrecognizedMount)
+        failures += run("eq6 open failure", testEQ6OpenFailure)
+        failures += run("eq6 pulse commands", testEQ6PulseCommands)
+#if os(Windows)
+        failures += run("windows com scanner parsing", testWindowsCOMScannerParsing)
+#endif
         failures += run("mono tiff 16-bit", testMonoTIFF)
         failures += run("mono tiff 32-bit float", testMonoTIFFFloat32)
         failures += run("frame stacker", testFrameStacker)
