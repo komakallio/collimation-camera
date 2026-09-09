@@ -159,6 +159,22 @@ func testShortcutUniqueness() throws {
     try expectUI(seen[.primaryShift("g")] == CommandCatalog.ID.mountCalibrate, "⇧⌘G calibrate")
     try expectUI(seen[.primary("g")] == CommandCatalog.ID.mountCenter, "⌘G center")
     try expectUI(seen[.primary("o")] == CommandCatalog.ID.viewOverlay, "⌘O overlay")
+
+    // The portable app turns each shortcut into one ImGui key chord, and its
+    // key table covers Return, A-Z, and 0-9. Anything else would be listed in
+    // the menu and then silently never fire on Windows.
+    for (shortcut, owner) in seen {
+        switch shortcut.key {
+        case .return:
+            continue
+        case .character(let character):
+            let lower = Character(character.lowercased())
+            try expectUI(
+                lower.isASCII && (lower.isLetter || lower.isNumber),
+                "\(owner) binds \(character), which the portable app's key table cannot map"
+            )
+        }
+    }
 }
 
 func testMetricText() throws {
