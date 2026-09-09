@@ -41,6 +41,7 @@ see Not yet verified at the end.
 | Filter wheel connect and goto | ✅ | ✅ | `canConnectFilterWheel`, `canSelectFilter`. |
 | Keyboard shortcuts | ✅ | ✅ | Return connects on both. ImGui maps `.primary` to Cmd on macOS itself, so one chord reads Cmd-K there and Ctrl-K on Windows. |
 | Menus | system menu bar | in-window menu bar | Both built from `CommandCatalog`; the portable app has no system menu bar to put them in. |
+| Quit | app menu | File ▸ Quit | Not a `CommandCatalog` entry: it acts on the process, not the engine, and macOS supplies its own. The portable app draws its own File menu with the platform's shortcut. |
 | Tooltips | ✅ | ✅ | |
 | Error dialog | ✅ | ✅ | Both read and clear `engine.errorMessage`. The ImGui modal takes the keyboard while it is open, so Return does not reach Connect behind it. |
 | Log file | ✅ | ✅ | Same format and rotation from `LogFile` in the core, one generation of history beside each. Release builds write `collimation.log`: `~/Library/Logs/Collimation Camera/` on macOS, `%LOCALAPPDATA%\Collimation Camera\` on Windows. On macOS the portable app writes `collimation-portable.log` instead, so the two can run side by side for the HUD comparison. The portable app also routes SDL's own log into its file, and writes a rate line once a minute. |
