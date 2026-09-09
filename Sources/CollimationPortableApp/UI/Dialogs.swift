@@ -164,6 +164,25 @@ enum ErrorDialog {
             igOpenPopup_Str(title, 0)
         }
 
+        // Keyboard focus, and only while this modal is up.
+        //
+        // ImGui gives a widget keyboard focus only when NavEnableKeyboard is
+        // set, and it is off by default, so OK could never be reached from the
+        // keyboard: no focus ring, and Space did nothing. Leaving it on for the
+        // whole app is not the answer — Return is the Connect shortcut, and
+        // with navigation on it would go to whatever widget held focus instead.
+        // Scoping it to the modal costs nothing, because `handleShortcuts`
+        // already refuses to run any shortcut while a popup is open, so the two
+        // never apply at the same moment.
+        if let io = igGetIO_Nil() {
+            let nav = Int32(ImGuiConfigFlags_NavEnableKeyboard.rawValue)
+            if hasError {
+                io.pointee.ConfigFlags |= nav
+            } else {
+                io.pointee.ConfigFlags &= ~nav
+            }
+        }
+
         let viewport = igGetMainViewport()
         let center = viewport.map {
             ImVec2(
@@ -189,11 +208,20 @@ enum ErrorDialog {
         igPopTextWrapPos()
         igSpacing()
 
+        let appearing = igIsWindowAppearing()
         let dismissed = "OK".withCString { igButton($0, ImVec2(x: 120 * Float(UIScale.pointScale), y: 0)) }
+        // Focus lands on OK as the dialog opens, so it is obvious what Enter
+        // and Space will do and there is a focus ring to say so.
+        if appearing { igSetItemDefaultFocus() }
+        // Explicit keys as well as the focused button, because the button only
+        // answers the keyboard while navigation is on, and Escape has no
+        // button to be focused on. Keypad Enter is a separate key to ImGui, and
+        // somebody at a telescope is as likely to hit that one.
+        //
         // Not on the frame the popup appears: the key press that triggered the
         // failing command would otherwise dismiss the report of it.
-        let confirmed = !igIsWindowAppearing()
-            && (igIsKeyPressed_Bool(ImGuiKey_Escape, false) || igIsKeyPressed_Bool(ImGuiKey_Enter, false))
+        let keys: [ImGuiKey] = [ImGuiKey_Escape, ImGuiKey_Enter, ImGuiKey_KeypadEnter, ImGuiKey_Space]
+        let confirmed = !appearing && keys.contains { igIsKeyPressed_Bool($0, false) }
         if dismissed || confirmed {
             engine.errorMessage = nil
             igCloseCurrentPopup()

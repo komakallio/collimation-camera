@@ -2144,11 +2144,25 @@ box came out half the width everything around it is, and four of the seven
 counts did not fit. It measures the widest option now. SwiftUI's `Picker` sizes
 to content, so this was portable-app-only, like the star-profile fill.
 
+**The unplug fix passes on hardware**, during live view and during a
+1000-frame stack. Pulling the cable during Center is still untried, because the
+mount is untested.
+
+That run found the error modal's last defect: **OK could not be reached from
+the keyboard.** `ImGuiConfigFlags_NavEnableKeyboard` was never set, so no
+widget in the app could hold keyboard focus — there was no focus ring and Space
+did nothing, and a dialog that has to be dismissed with the mouse is a poor
+thing to meet at a telescope in the dark. Navigation is now enabled while the
+modal is up and only then: `Input.handleShortcuts` already refuses to run a
+shortcut while a popup is open, so the two never overlap, and Return keeps
+going to Connect the rest of the time. OK takes default focus, and Escape,
+Return, keypad Return and Space all dismiss. Verified by driving each key at
+the real dialog; all three dismissed it.
+
 **Still open**
 
-- The error modal has still never been seen, though the two fixes above should
-  both raise it.
-- The mount and the filter wheel on real hardware (§10.3).
+- The mount and the filter wheel on real hardware (§10.3), and an unplug
+  during Center.
 - Everything ZWO (§7.8).
 
 ## 14. Verified facts and sources
