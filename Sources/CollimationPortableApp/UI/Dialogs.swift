@@ -1,3 +1,4 @@
+import CImGui
 import CSDL3
 import CollimationCore
 import CollimationUI
@@ -103,5 +104,60 @@ final class PortableUIHost: UIHost {
         pending = nil
         dialogOpen = false
         completion?(value)
+    }
+}
+
+/// The error alert, the counterpart of the SwiftUI app's `.alert("Error", …)`.
+///
+/// `engine.errorMessage` is the single source: setting it opens the modal, and
+/// OK clears it. Drawn last in the frame so it sits above the sidebar and the
+/// HUD.
+@MainActor
+enum ErrorDialog {
+    private static let title = "Error"
+
+    static func draw(engine: CollimationEngine) {
+        // ImGui opens a popup by id, and the id has to be pushed in the same
+        // frame the popup is begun, so the open call happens here rather than
+        // where the error is set.
+        let hasError = engine.errorMessage != nil
+        if hasError, !igIsPopupOpen_Str(title, 0) {
+            igOpenPopup_Str(title, 0)
+        }
+
+        let viewport = igGetMainViewport()
+        let center = viewport.map {
+            ImVec2(
+                x: $0.pointee.Pos.x + $0.pointee.Size.x * 0.5,
+                y: $0.pointee.Pos.y + $0.pointee.Size.y * 0.5
+            )
+        } ?? ImVec2(x: 0, y: 0)
+        igSetNextWindowPos(center, Int32(ImGuiCond_Appearing.rawValue), ImVec2(x: 0.5, y: 0.5))
+
+        let flags = Int32(ImGuiWindowFlags_AlwaysAutoResize.rawValue)
+        guard title.withCString({ igBeginPopupModal($0, nil, flags) }) else { return }
+        defer { igEndPopup() }
+
+        // The engine clears the message itself on the next successful command,
+        // and igCloseCurrentPopup is only valid from inside the popup.
+        guard hasError else {
+            igCloseCurrentPopup()
+            return
+        }
+
+        igPushTextWrapPos(igGetFontSize() * 24)
+        ImGuiText.plain(engine.errorMessage ?? "")
+        igPopTextWrapPos()
+        igSpacing()
+
+        let dismissed = "OK".withCString { igButton($0, ImVec2(x: 120 * Float(UIScale.pointScale), y: 0)) }
+        // Not on the frame the popup appears: the key press that triggered the
+        // failing command would otherwise dismiss the report of it.
+        let confirmed = !igIsWindowAppearing()
+            && (igIsKeyPressed_Bool(ImGuiKey_Escape, false) || igIsKeyPressed_Bool(ImGuiKey_Enter, false))
+        if dismissed || confirmed {
+            engine.errorMessage = nil
+            igCloseCurrentPopup()
+        }
     }
 }

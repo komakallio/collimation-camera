@@ -46,6 +46,10 @@ if ($runtimeBin -and (Test-Path $runtimeBin)) {
     }
 }
 
+# The app looks for Resources beside the executable first, so keep a copy
+# there; that is also where a packaged build puts them.
+Copy-Item (Join-Path $root 'Resources') $binDirectory -Recurse -Force
+
 if ($Seconds -le 0) {
     & $exe
     exit $LASTEXITCODE

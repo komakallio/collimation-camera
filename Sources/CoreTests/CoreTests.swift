@@ -86,6 +86,7 @@ struct CoreTests {
         failures += run("compass dial scene", testCompassDialScene)
         failures += run("star profile scene", testStarProfileScene)
         failures += run("image layout ndc rect", testImageLayoutNDCRect)
+        failures += run("stretch shader math", testStretchShaderMath)
         failures += run("mono tiff 16-bit", testMonoTIFF)
         failures += run("mono tiff 32-bit float", testMonoTIFFFloat32)
         failures += run("frame stacker", testFrameStacker)

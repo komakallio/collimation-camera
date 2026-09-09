@@ -130,6 +130,7 @@ final class MainLoop {
             pointScale: pointScale
         )
         LiveChrome.draw(engine: engine, liveRect: live, pointScale: pointScale)
+        ErrorDialog.draw(engine: engine)
 
         // The engine lays out in view points, like the macOS app.
         engine.viewWidth = live.size.x

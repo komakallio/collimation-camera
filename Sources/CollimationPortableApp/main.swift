@@ -31,6 +31,7 @@ guard let window = SDL_CreateWindow(
 ) else {
     Diagnostics.fail("SDL_CreateWindow")
 }
+AppWindow.applyIcon(to: window)
 
 // DXBC on Windows, MSL on macOS. The fewer-resource-slots property admits
 // tier 1 Intel iGPUs; this renderer binds one storage texture, far under the

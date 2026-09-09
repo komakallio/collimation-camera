@@ -55,6 +55,11 @@ enum Input {
     /// Global shortcuts from the catalog. ImGui's routing skips these while a
     /// text field has focus, and it maps Ctrl to Cmd on macOS by itself.
     static func handleShortcuts(engine: CollimationEngine, host: any UIHost) {
+        // A modal owns the keyboard: Return must not reach the connect command
+        // while the error dialog is asking about the last one.
+        let anyPopup = Int32(ImGuiPopupFlags_AnyPopupId.rawValue | ImGuiPopupFlags_AnyPopupLevel.rawValue)
+        guard !igIsPopupOpen_Str(nil, anyPopup) else { return }
+
         for command in CommandCatalog.all + CommandCatalog.filterCommands(engine) {
             guard command.isEnabled(engine) else { continue }
             for shortcut in command.shortcuts {

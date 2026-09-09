@@ -4,7 +4,7 @@ on:
   push:
     # The multiplatform branches build on every push: they are the only way to
     # compile the Windows and macOS files until the port is done.
-    branches: [main, 'multiplatform-**']
+    branches: [main, 'multiplatform-**', 'spike/**']
   pull_request:
 
 concurrency:
@@ -39,6 +39,15 @@ jobs:
       - name: Build the macOS app
         run: swift build --product CollimationApp
 
+      # The portable app links SDL3; Homebrew is where the manifest looks for
+      # it on macOS. Milestone 3: this build is the parity build, not a
+      # release.
+      - name: Install SDL3
+        run: brew install sdl3
+
+      - name: Build the portable app
+        run: swift build --product CollimationCamera
+
   windows:
     name: Windows
     runs-on: windows-latest
@@ -72,3 +81,11 @@ jobs:
 
       - name: Build capture-cli
         run: swift build --product capture-cli
+
+      # Only SDL3: the camera and wheel SDKs load at run time and core-tests
+      # covers their absence.
+      - name: Fetch SDL3
+        run: pwsh -File scripts/fetch-sdk.ps1 -SDL3Only
+
+      - name: Build the portable app
+        run: swift build --product CollimationCamera
