@@ -302,7 +302,7 @@ func testLogFile() throws {
     guard let first = LogFile.start(in: directory) else {
         throw UIModelExpectation(description: "the log did not open in \(directory.path)")
     }
-    try expectUI(first.lastPathComponent == LogFile.name, "named \(first.lastPathComponent)")
+    try expectUI(first.lastPathComponent == LogFile.name(), "named \(first.lastPathComponent)")
     Log.info("first run")
     LogFile.stop()
 
@@ -318,7 +318,7 @@ func testLogFile() throws {
     Log.info("second run")
     LogFile.stop()
 
-    let previous = directory.appendingPathComponent(LogFile.previousName)
+    let previous = directory.appendingPathComponent(LogFile.previousName())
     try expectUI(FileManager.default.fileExists(atPath: previous.path), "the previous run is kept")
     let previousText = try String(contentsOf: previous, encoding: .utf8)
     try expectUI(previousText.contains("first run"), "the previous run has the first line")
@@ -332,5 +332,16 @@ func testLogFile() throws {
     }
     LogFile.stop()
     let files = try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
-    try expectUI(files == [LogFile.name, LogFile.previousName].sorted(), "two files, got \(files)")
+    try expectUI(files == [LogFile.name(), LogFile.previousName()].sorted(), "two files, got \(files)")
+
+    // A second app in the same directory gets its own file and its own
+    // history, which is what lets both macOS apps run side by side.
+    guard let other = LogFile.start(basename: "collimation-portable", in: directory) else {
+        throw UIModelExpectation(description: "the second basename did not open")
+    }
+    Log.info("other app")
+    LogFile.stop()
+    try expectUI(other.lastPathComponent == "collimation-portable.log", "named \(other.lastPathComponent)")
+    let untouched = try String(contentsOf: first, encoding: .utf8)
+    try expectUI(!untouched.contains("other app"), "the first app's file was not written to")
 }

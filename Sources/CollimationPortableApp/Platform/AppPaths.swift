@@ -45,5 +45,5 @@ enum AppPaths {
 
     /// Both apps write the same file, so the path lives in the core.
     static var logDirectory: URL { LogFile.directory }
-    static var logFile: URL { LogFile.url }
+    static var logFile: URL { LogFile.url(Diagnostics.logBasename) }
 }

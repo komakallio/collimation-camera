@@ -13,8 +13,17 @@ import Foundation
 enum Diagnostics {
     /// Opens the log and points `Log.sink` at it. Call before `SDL_Init`, so a
     /// failure in SDL itself is already being recorded.
+    /// On macOS the SwiftUI app is the release and owns `collimation.log`, and
+    /// the two run side by side for the HUD comparison, so this app writes its
+    /// own file there. On Windows it is the release, and keeps the plain name.
+#if os(macOS)
+    static let logBasename = "collimation-portable"
+#else
+    static let logBasename = LogFile.defaultBasename
+#endif
+
     static func start() {
-        let file = LogFile.start()
+        let file = LogFile.start(basename: logBasename)
         Log.info("=== Collimation Camera ===")
         Log.info("log: \(file?.path ?? "not opened")")
     }

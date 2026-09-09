@@ -112,7 +112,7 @@ The Windows zip runs on a machine with no Swift toolchain: unzip it anywhere and
 | Guide calibration | `~/Library/Application Support/Collimation Camera/guide-calibration.json` | `%LOCALAPPDATA%\Collimation Camera\guide-calibration.json` |
 | Log file | `~/Library/Logs/Collimation Camera/collimation.log` | `%LOCALAPPDATA%\Collimation Camera\collimation.log` |
 
-Both apps write the same log, and keep one generation of history beside it as `collimation.log.1`. The portable app adds a rate line once a minute, so a session that misbehaved can be read back afterwards. The two macOS apps have separate settings domains on purpose, so a remembered port or folder is per app.
+Both apps write the same format and keep one generation of history beside the log, as `collimation.log.1`. On macOS the portable app writes `collimation-portable.log` in the same directory, so both can run at once. The portable app adds a rate line once a minute, so a session that misbehaved can be read back afterwards. The two macOS apps have separate settings domains on purpose, so a remembered port or folder is per app.
 
 ## Camera SDKs
 

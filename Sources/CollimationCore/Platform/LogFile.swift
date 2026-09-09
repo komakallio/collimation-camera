@@ -11,9 +11,20 @@ import Foundation
 /// Writes are serialized and safe from any thread — the capture, mount, and
 /// filter-wheel threads all log.
 public enum LogFile {
-    public static let name = "collimation.log"
+    /// The file the release build on each platform writes. On macOS the two
+    /// apps can run side by side — that is what the HUD comparison needs — so
+    /// the portable app passes a name of its own there rather than fighting
+    /// over this one.
+    public static let defaultBasename = "collimation"
+
+    public static func name(_ basename: String = defaultBasename) -> String {
+        "\(basename).log"
+    }
+
     /// One generation of history, so a crash still has the run before it.
-    public static let previousName = "collimation.log.1"
+    public static func previousName(_ basename: String = defaultBasename) -> String {
+        "\(basename).log.1"
+    }
 
     nonisolated(unsafe) private static var handle: FileHandle?
     private static let lock = NSLock()
@@ -40,7 +51,9 @@ public enum LogFile {
 #endif
     }
 
-    public static var url: URL { directory.appendingPathComponent(name) }
+    public static func url(_ basename: String = defaultBasename) -> URL {
+        directory.appendingPathComponent(name(basename))
+    }
 
     /// Rotates the previous run's file aside, opens a new one, and points
     /// `Log.sink` at it. Call once, as early as possible: a failure during
@@ -49,12 +62,15 @@ public enum LogFile {
     /// Returns the file's URL, or nil when it could not be opened — the caller
     /// keeps running either way, with the default sink.
     @discardableResult
-    public static func start(in directory: URL = LogFile.directory) -> URL? {
+    public static func start(
+        basename: String = defaultBasename,
+        in directory: URL = LogFile.directory
+    ) -> URL? {
         let manager = FileManager.default
-        let file = directory.appendingPathComponent(name)
+        let file = directory.appendingPathComponent(name(basename))
         try? manager.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        let previous = directory.appendingPathComponent(previousName)
+        let previous = directory.appendingPathComponent(previousName(basename))
         if manager.fileExists(atPath: file.path) {
             try? manager.removeItem(at: previous)
             try? manager.moveItem(at: file, to: previous)
