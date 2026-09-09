@@ -1,3 +1,4 @@
+import CollimationCore
 import Foundation
 
 /// Tooltips that belong to a control rather than to a command.
@@ -15,8 +16,12 @@ public enum HelpText {
         "Stored aliases come from the wheel. Positions are 1–\(slotCount)."
     }
 
-    public static let roiSection =
-        "Keep the 2048×2048 camera window on the star. The live view is a 512×512 software crop."
+    public static let roiSection: String = {
+        let window = CaptureLayout.trackingHardwareSize
+        let crop = CaptureLayout.displayCropSize
+        return "Keep the \(window)×\(window) camera window on the star. "
+            + "The live view is a \(crop)×\(crop) software crop."
+    }()
 
     public static let arcsinh = "asinh(αx) / asinh(α). Larger α lifts the faint background more."
 

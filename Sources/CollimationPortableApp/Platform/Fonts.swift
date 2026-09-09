@@ -26,17 +26,6 @@ enum Fonts {
         "DejaVuSansMono-Bold.ttf",
     ]
 
-    /// Codepoints the UI depends on. Checked after loading so a bad font file
-    /// is a log line rather than a screen full of "?".
-    static let requiredCodepoints: [(String, UInt32)] = [
-        ("° degree", 0x00B0),
-        ("· middot", 0x00B7),
-        ("× times", 0x00D7),
-        ("— em dash", 0x2014),
-        ("… ellipsis", 0x2026),
-        ("″ double prime", 0x2033),
-    ]
-
     /// Loads the faces. Call after `igCreateContext` and before
     /// `ImGui_ImplSDL3_InitForSDLGPU`. The first font loaded becomes ImGui's
     /// default, so the proportional face goes first.
@@ -72,11 +61,20 @@ enum Fonts {
     }
 
     /// Logs any missing glyph rather than failing: a wrong glyph is cosmetic.
+    /// The list is `UIGlyphs`, the same one the `ui glyph coverage` test reads
+    /// the font files against, so a font swap that loses a character is caught
+    /// in CI as well as at startup.
     static func verifyGlyphs() {
         guard let proportional else { return }
-        for (name, codepoint) in requiredCodepoints {
-            if !ImFont_IsGlyphInFont(proportional, ImWchar(codepoint)) {
-                Log.info("glyph missing from the proportional face: \(name)")
+        for glyph in UIGlyphs.all {
+            if !ImFont_IsGlyphInFont(proportional, ImWchar(glyph.scalar.value)) {
+                Log.info("glyph missing from the proportional face: \(glyph.name)")
+            }
+        }
+        guard let mono else { return }
+        for glyph in UIGlyphs.metrics {
+            if !ImFont_IsGlyphInFont(mono, ImWchar(glyph.scalar.value)) {
+                Log.info("glyph missing from the monospaced face: \(glyph.name)")
             }
         }
     }

@@ -173,7 +173,7 @@ enum Sidebar {
 
     private static func roiSection(engine: CollimationEngine, host: any UIHost) {
         guard header("ROI & zoom") else { return }
-        secondary("Camera 2048×2048, view 512×512 around the star. Full frame while searching, centering, or saving a constellation.")
+        secondary(MetricText.roiExplanation)
 
         command(CommandCatalog.ID.cameraAutoCenter, engine: engine, host: host)
         command(CommandCatalog.ID.cameraStabilize, engine: engine, host: host)

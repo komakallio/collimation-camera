@@ -236,7 +236,7 @@ struct SidebarView: View {
     private var roiSection: some View {
         GroupBox("ROI & zoom") {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Camera 2048×2048, view 512×512 around the star. Full frame while searching, centering, or saving a constellation.")
+                Text(MetricText.roiExplanation)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

@@ -113,6 +113,17 @@ public enum MetricText {
         "\(count)"
     }
 
+    /// The caption under "ROI & zoom", built from `CaptureLayout` rather than
+    /// written out, so the two apps cannot drift from each other or from the
+    /// sizes the capture path actually uses.
+    public static let roiExplanation: String = {
+        let window = CaptureLayout.trackingHardwareSize
+        let crop = CaptureLayout.displayCropSize
+        return "Camera window \(window)×\(window), or the whole sensor if it is smaller. "
+            + "The view is a \(crop)×\(crop) crop around the star. "
+            + "Full frame while searching, centering, or saving a constellation."
+    }()
+
     // MARK: - Devices
 
     /// `/dev/cu.usbserial-1` shows as `cu.usbserial-1`; `COM3` is already short.

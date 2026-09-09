@@ -87,6 +87,7 @@ struct CoreTests {
         failures += run("star profile scene", testStarProfileScene)
         failures += run("image layout ndc rect", testImageLayoutNDCRect)
         failures += run("stretch shader math", testStretchShaderMath)
+        failures += run("ui glyph coverage", testUIGlyphCoverage)
         failures += run("eq6 probe order", testEQ6ProbeOrder)
         failures += run("eq6 unrecognized mount", testEQ6UnrecognizedMount)
         failures += run("eq6 open failure", testEQ6OpenFailure)
