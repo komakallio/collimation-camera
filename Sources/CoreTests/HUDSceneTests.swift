@@ -1,0 +1,295 @@
+import CollimationCore
+import CollimationUI
+import Foundation
+
+private func lines(_ primitives: [HUDPrimitive]) -> [(SIMD2<Double>, SIMD2<Double>, HUDColor)] {
+    primitives.compactMap { primitive in
+        if case .line(let from, let to, let color, _) = primitive { return (from, to, color) }
+        return nil
+    }
+}
+
+private func circles(_ primitives: [HUDPrimitive]) -> [(SIMD2<Double>, Double, HUDColor)] {
+    primitives.compactMap { primitive in
+        if case .circle(let center, let radius, let color, _) = primitive { return (center, radius, color) }
+        return nil
+    }
+}
+
+private func texts(_ primitives: [HUDPrimitive]) -> [(String, SIMD2<Double>)] {
+    primitives.compactMap { primitive in
+        if case .text(let value, let at, _, _, _, _, _) = primitive { return (value, at) }
+        return nil
+    }
+}
+
+private func fillRects(_ primitives: [HUDPrimitive]) -> [(SIMD2<Double>, SIMD2<Double>, HUDColor)] {
+    primitives.compactMap { primitive in
+        if case .fillRect(let origin, let size, let color, _) = primitive { return (origin, size, color) }
+        return nil
+    }
+}
+
+/// The sensor-center crosshair lands where the layout says the sensor center is.
+func testOverlaySceneSensorCenter() throws {
+    let roi = ROI(x: 1000, y: 500, width: 512, height: 512)
+    let overlay = OverlayModel(
+        imageWidth: 512,
+        imageHeight: 512,
+        sensorWidth: 2048,
+        sensorHeight: 1024,
+        roi: roi
+    )
+    guard let sensorCenter = overlay.sensorCenterInImage else {
+        throw UIModelExpectation(description: "sensor center should be inside this ROI")
+    }
+    let viewSize = SIMD2(800.0, 700.0)
+    let primitives = OverlayScene.primitives(overlay: overlay, zoom: 1, viewSize: viewSize)
+
+    let layout = ImageLayout(
+        imageWidth: 512,
+        imageHeight: 512,
+        viewWidth: viewSize.x,
+        viewHeight: viewSize.y,
+        zoom: 1
+    )
+    let expected = layout.viewPoint(image: sensorCenter)
+    let horizontal = lines(primitives).filter { $0.2 == OverlayChrome.frameCenter && $0.0.y == $0.1.y }
+    try expectUI(horizontal.count == 1, "one horizontal arm for the sensor center")
+    try expectUI(abs(horizontal[0].0.y - expected.y) < 1e-9, "crosshair y \(horizontal[0].0.y) vs \(expected.y)")
+    try expectUI(
+        abs((horizontal[0].0.x + horizontal[0].1.x) / 2 - expected.x) < 1e-9,
+        "crosshair x centred on the sensor center"
+    )
+
+    // Off-frame sensor centers are not drawn.
+    let far = OverlayModel(
+        imageWidth: 512,
+        imageHeight: 512,
+        sensorWidth: 6252,
+        sensorHeight: 4176,
+        roi: ROI(x: 0, y: 0, width: 512, height: 512)
+    )
+    let farPrimitives = OverlayScene.primitives(overlay: far, zoom: 1, viewSize: viewSize)
+    try expectUI(
+        lines(farPrimitives).filter { $0.2 == OverlayChrome.frameCenter }.isEmpty,
+        "sensor center outside the frame is not drawn"
+    )
+}
+
+/// With stabilization on, the rings follow the live centroid.
+func testOverlaySceneRingShift() throws {
+    let overlay = OverlayModel(
+        imageWidth: 512,
+        imageHeight: 512,
+        centroid: SIMD2(256, 256),
+        outer: FittedCircle(center: SIMD2(256, 256), radius: 40),
+        inner: FittedCircle(center: SIMD2(258, 254), radius: 14),
+        comaVector: SIMD2(1, 0),
+        trackingState: .tracking,
+        sensorWidth: 512,
+        sensorHeight: 512,
+        roi: ROI(x: 0, y: 0, width: 512, height: 512)
+    )
+    let viewSize = SIMD2(600.0, 600.0)
+    let still = OverlayScene.primitives(overlay: overlay, zoom: 1, viewSize: viewSize)
+    let moved = OverlayScene.primitives(
+        overlay: overlay,
+        zoom: 1,
+        liveCentroid: SIMD2(276, 246),
+        displayedWidth: 512,
+        displayedHeight: 512,
+        viewSize: viewSize
+    )
+
+    let stillOuter = circles(still).first { $0.2 == OverlayChrome.outerRing }
+    let movedOuter = circles(moved).first { $0.2 == OverlayChrome.outerRing }
+    guard let stillOuter, let movedOuter else {
+        throw UIModelExpectation(description: "both scenes draw the outer ring")
+    }
+    try expectUI(
+        abs(movedOuter.0.x - stillOuter.0.x - 20) < 1e-9,
+        "outer ring follows the live centroid in x, moved by \(movedOuter.0.x - stillOuter.0.x)"
+    )
+    try expectUI(
+        abs(movedOuter.0.y - stillOuter.0.y + 10) < 1e-9,
+        "outer ring follows the live centroid in y, moved by \(movedOuter.0.y - stillOuter.0.y)"
+    )
+    try expectUI(abs(movedOuter.1 - stillOuter.1) < 1e-9, "radius unchanged by the shift")
+
+    // A live pose from a differently sized frame must be ignored.
+    let mismatched = OverlayScene.primitives(
+        overlay: overlay,
+        zoom: 1,
+        liveCentroid: SIMD2(276, 246),
+        displayedWidth: 2048,
+        displayedHeight: 2048,
+        viewSize: viewSize
+    )
+    let mismatchedOuter = circles(mismatched).first { $0.2 == OverlayChrome.outerRing }
+    try expectUI(
+        mismatchedOuter.map { abs($0.0.x - stillOuter.0.x) < 1e-9 } ?? false,
+        "a pose from another frame size is dropped"
+    )
+
+    // The coma vector is drawn eight times its measured length.
+    let comaLine = lines(still).first { $0.2 == OverlayChrome.coma }
+    guard let comaLine else { throw UIModelExpectation(description: "coma line missing") }
+    try expectUI(
+        abs((comaLine.1.x - comaLine.0.x) - 8) < 1e-9,
+        "coma vector scaled by 8, got \(comaLine.1.x - comaLine.0.x)"
+    )
+}
+
+func testROIMapScene() throws {
+    let sensorWidth = 2048
+    let sensorHeight = 1024
+    let box = ROIMapScene.size(sensorWidth: sensorWidth, sensorHeight: sensorHeight)
+    // 140/2048 vs 94/1024 — width is the binding constraint.
+    try expectUI(abs(box.x - (140 + 8)) < 1e-9, "map box width \(box.x)")
+    try expectUI(abs(box.y - (70 + 8)) < 1e-9, "map box height \(box.y)")
+
+    let roi = ROI(x: 512, y: 256, width: 512, height: 256)
+    let primitives = ROIMapScene.primitives(
+        sensorWidth: sensorWidth,
+        sensorHeight: sensorHeight,
+        roi: roi
+    )
+    let scale = 140.0 / 2048.0
+    let roiRect = fillRects(primitives).first { $0.2 == ROIMapScene.roiFill }
+    guard let roiRect else { throw UIModelExpectation(description: "no ROI rectangle") }
+    try expectUI(abs(roiRect.0.x - (4 + 512 * scale)) < 1e-9, "roi x \(roiRect.0.x)")
+    try expectUI(abs(roiRect.0.y - (4 + 256 * scale)) < 1e-9, "roi y \(roiRect.0.y)")
+    try expectUI(abs(roiRect.1.x - 512 * scale) < 1e-9, "roi width \(roiRect.1.x)")
+
+    // A one-pixel ROI still renders at the visibility floor.
+    let tiny = ROIMapScene.primitives(
+        sensorWidth: sensorWidth,
+        sensorHeight: sensorHeight,
+        roi: ROI(x: 0, y: 0, width: 1, height: 1)
+    )
+    let tinyRect = fillRects(tiny).first { $0.2 == ROIMapScene.roiFill }
+    try expectUI(tinyRect.map { $0.1.x >= 1.5 && $0.1.y >= 1.5 } ?? false, "tiny ROI stays visible")
+}
+
+func testHistogramScene() throws {
+    var histogram = Histogram()
+    histogram.bins = [UInt32](repeating: 0, count: Histogram.binCount)
+    histogram.bins[0] = 100
+    histogram.bins[Histogram.binCount - 1] = 50
+    var stretch = StretchParams.default
+    stretch.black = 0.25
+    stretch.white = 0.75
+    let size = SIMD2(256.0, 64.0)
+    let primitives = HistogramScene.primitives(histogram: histogram, stretch: stretch, size: size)
+
+    let bars = fillRects(primitives).filter { $0.2 == HistogramScene.barColor }
+    try expectUI(bars.count == Histogram.binCount, "one bar per bin, got \(bars.count)")
+    try expectUI(abs(bars[0].1.y - 64) < 1e-9, "tallest bin fills the height")
+    try expectUI(abs(bars[0].0.y) < 1e-9, "tallest bar starts at the top")
+    try expectUI(abs(bars[Histogram.binCount - 1].1.y - 32) < 1e-9, "half-height bin")
+
+    let markers = lines(primitives)
+    let black = markers.first { $0.2 == HistogramScene.blackMarker }
+    let white = markers.first { $0.2 == HistogramScene.whiteMarker }
+    try expectUI(black.map { abs($0.0.x - 64) < 1e-9 } ?? false, "black marker at 25%")
+    try expectUI(white.map { abs($0.0.x - 192) < 1e-9 } ?? false, "white marker at 75%")
+}
+
+func testCompassDialScene() throws {
+    let size = CompassDialScene.size
+    let radius = min(size.x, size.y) / 2 - CompassDialScene.inset
+    let center = SIMD2(size.x / 2, size.y / 2)
+
+    // 90° points down: +y in image coordinates.
+    let down = CompassDialScene.primitives(degrees: 90, magnitude: 1)
+    let arrow = lines(down).first { $0.2 == CompassDialScene.arrow }
+    guard let arrow else { throw UIModelExpectation(description: "no arrow") }
+    try expectUI(abs(arrow.0.x - center.x) < 1e-9, "arrow starts at the centre")
+    try expectUI(abs(arrow.1.x - center.x) < 1e-9, "90° has no horizontal component")
+    try expectUI(arrow.1.y > center.y, "90° points down, got \(arrow.1.y) vs \(center.y)")
+    try expectUI(abs((arrow.1.y - center.y) - radius) < 1e-9, "large magnitude saturates at the rim")
+
+    // 0° points right.
+    let right = CompassDialScene.primitives(degrees: 0, magnitude: 0)
+    let rightArrow = lines(right).first { $0.2 == CompassDialScene.arrow }
+    try expectUI(rightArrow.map { $0.1.x > center.x && abs($0.1.y - center.y) < 1e-9 } ?? false, "0° points right")
+    try expectUI(
+        rightArrow.map { abs(($0.1.x - center.x) - radius * 0.25) < 1e-9 } ?? false,
+        "zero magnitude still draws a quarter-length arrow"
+    )
+
+    // No coma, no arrow — but the rim and labels stay.
+    let empty = CompassDialScene.primitives(degrees: nil, magnitude: 0)
+    try expectUI(lines(empty).filter { $0.2 == CompassDialScene.arrow }.isEmpty, "no arrow without a direction")
+    try expectUI(texts(empty).map(\.0) == ["R", "D", "L", "U"], "dial labels")
+    try expectUI(circles(empty).count == 1, "dial rim")
+}
+
+func testStarProfileScene() throws {
+    let origin = SIMD2(StarProfileScene.padding, StarProfileScene.padding)
+    let plot = SIMD2(
+        StarProfileScene.size.x - StarProfileScene.padding * 2,
+        StarProfileScene.size.y - StarProfileScene.padding * 2
+    )
+    // Full well sits at the top, the floor at the bottom.
+    try expectUI(
+        abs(StarProfileScene.yPosition(1, origin: origin, size: plot) - origin.y) < 1e-9,
+        "100% at the top"
+    )
+    try expectUI(
+        abs(StarProfileScene.yPosition(StarProfileScene.logFloor, origin: origin, size: plot) - (origin.y + plot.y)) < 1e-9,
+        "the floor is the baseline"
+    )
+    try expectUI(
+        StarProfileScene.yPosition(0.001, origin: origin, size: plot)
+            == StarProfileScene.yPosition(StarProfileScene.logFloor, origin: origin, size: plot),
+        "values under the floor clamp"
+    )
+
+    let empty = StarProfileScene.primitives(profile: nil)
+    try expectUI(texts(empty).map(\.0) == ["100%", "1%", "0.15%"], "axis labels always drawn")
+
+    let profile = StarIntensityProfile(samples: [1.0, 0.5, 0.1, 0.01], radiusPixels: 32, sectionCount: 4)
+    let drawn = StarProfileScene.primitives(profile: profile)
+    let polylines = drawn.flatMap { primitive -> [[SIMD2<Double>]] in
+        if case .clipped(_, _, let inner) = primitive {
+            return inner.compactMap { if case .polyline(let points, _, _) = $0 { return points } else { return nil } }
+        }
+        return []
+    }
+    try expectUI(polylines.count == 1, "one profile curve")
+    try expectUI(polylines[0].count == 4, "one point per sample")
+    try expectUI(abs(polylines[0][0].x - origin.x) < 1e-9, "curve starts at the left edge")
+    try expectUI(abs(polylines[0][3].x - (origin.x + plot.x)) < 1e-9, "curve ends at the right edge")
+}
+
+func testImageLayoutNDCRect() throws {
+    // A 100x100 image at zoom 1 in a 200x200 view sits in the middle.
+    let layout = ImageLayout(
+        imageWidth: 100,
+        imageHeight: 100,
+        viewWidth: 200,
+        viewHeight: 200,
+        zoom: 1
+    )
+    let ndc = layout.ndcRect()
+    try expectUI(abs(ndc.x0 + 0.5) < 1e-12, "x0 \(ndc.x0)")
+    try expectUI(abs(ndc.x1 - 0.5) < 1e-12, "x1 \(ndc.x1)")
+    try expectUI(abs(ndc.y0 + 0.5) < 1e-12, "y0 \(ndc.y0)")
+    try expectUI(abs(ndc.y1 - 0.5) < 1e-12, "y1 \(ndc.y1)")
+
+    // Filling the view maps to the full NDC cube.
+    let full = ImageLayout(imageWidth: 200, imageHeight: 200, viewWidth: 200, viewHeight: 200, zoom: 1)
+    let fullNDC = full.ndcRect()
+    try expectUI(abs(fullNDC.x0 + 1) < 1e-12 && abs(fullNDC.x1 - 1) < 1e-12, "full width")
+    try expectUI(abs(fullNDC.y0 + 1) < 1e-12 && abs(fullNDC.y1 - 1) < 1e-12, "full height")
+
+    // The vertical axis flips: a rect in the top half of the view has positive y.
+    let top = ImageLayout(imageWidth: 200, imageHeight: 100, viewWidth: 200, viewHeight: 400, zoom: 1)
+    let topNDC = top.ndcRect()
+    try expectUI(topNDC.y1 > topNDC.y0, "y1 is the top edge")
+    // imageRect y = (400-100)/2 = 150, so top = 1 - 2*150/400 = 0.25.
+    try expectUI(abs(topNDC.y1 - 0.25) < 1e-12, "flipped top edge \(topNDC.y1)")
+    try expectUI(abs(topNDC.y0 + 0.25) < 1e-12, "flipped bottom edge \(topNDC.y0)")
+}

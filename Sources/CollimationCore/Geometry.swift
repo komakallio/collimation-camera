@@ -198,6 +198,27 @@ public struct ImageLayout: Equatable, Sendable {
         )
     }
 
+    /// The image quad in normalized device coordinates.
+    ///
+    /// `imageRect` has a top-left origin; NDC puts -1,-1 at the bottom left, so
+    /// the vertical axis flips. Both renderers call this so the quad is built
+    /// the same way on Metal and on SDL3 GPU.
+    public func ndcRect(
+        viewWidth: Double? = nil,
+        viewHeight: Double? = nil
+    ) -> (x0: Double, y0: Double, x1: Double, y1: Double) {
+        let width = viewWidth ?? self.viewWidth
+        let height = viewHeight ?? self.viewHeight
+        guard width > 0, height > 0 else { return (-1, -1, 1, 1) }
+        let r = imageRect
+        return (
+            x0: 2 * r.x / width - 1,
+            y0: 1 - 2 * (r.y + r.height) / height,
+            x1: 2 * (r.x + r.width) / width - 1,
+            y1: 1 - 2 * r.y / height
+        )
+    }
+
     public func viewPoint(image: SIMD2<Double>) -> SIMD2<Double> {
         let r = imageRect
         return SIMD2(r.x + image.x * zoom, r.y + image.y * zoom)
