@@ -22,6 +22,11 @@ enum SelfCheck {
     static func run(window: OpaquePointer, device: OpaquePointer) -> Never {
         Log.info("--- self check ---")
 
+        let displayScale = Double(SDL_GetWindowDisplayScale(window))
+        let pixelDensity = Double(SDL_GetWindowPixelDensity(window))
+        let pointScale = pixelDensity > 0 ? displayScale / pixelDensity : 1
+        Log.info("display scale \(displayScale), pixel density \(pixelDensity), point scale \(pointScale)")
+
         if let driver = SDL_GetGPUDeviceDriver(device) {
             Log.info("GPU driver: \(String(cString: driver))")
         }

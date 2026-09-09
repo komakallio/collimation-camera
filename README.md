@@ -9,7 +9,7 @@ Two apps ship from this repository, on one shared core:
 | **CollimationApp** | SwiftUI and Metal. The macOS release. | — |
 | **CollimationCamera** | SDL3 and Dear ImGui. A development and parity build. | SDL3 and Dear ImGui. The Windows release. |
 
-They drive the same engine and take every label, shortcut, and HUD from the same modules, so they behave the same. `PARITY.md` has the feature table and the deliberate differences; `PLAN-MULTIPLATFORM.md` has the milestones.
+They drive the same engine and take every label, shortcut, and HUD from the same modules, so they behave the same. `PARITY.md` has the feature table and the deliberate differences; `PLAN-MULTIPLATFORM.md` has the milestones and what has actually been run; `HARDWARE-CHECKLIST.md` is the order to work through the first time a camera is plugged in.
 
 ## Features
 
