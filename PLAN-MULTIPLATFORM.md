@@ -1966,6 +1966,12 @@ was not.
   Player One camera 3.10.1, ZWO 1.41, and Player One filter wheel 1.2.3.0
   through `DynamicLibrary`, and lists COM3 from the registry scanner. No
   camera or wheel was attached, so only the load path is confirmed.
+- **The app can photograph itself.** `--snapshot <file.png>` renders one frame
+  into an offscreen texture through the same `renderScene` the window uses and
+  writes it out, with no window shown. That is how the rendering was verified
+  once the machine's display went to sleep, and it is what §9.8's HUD
+  comparison between the two apps should use: identical state, no compositor
+  in the way.
 - **Frame rate against the simulator.** The log now carries a heartbeat line a
   minute. The packaged release runs at 72 to 77 fps with a 2048 ROI, the full
   analysis pipeline, and the HUD; the debug build runs at 14 to 17, which is

@@ -164,6 +164,14 @@ CollimationCamera.exe --check
 
 It opens no window. It reports the GPU driver, whether the 16-bit texture format is supported, whether the stretch pipeline builds, which fonts and vendor SDKs it found, the cameras and serial ports it can see, and where the log is — then exits, non-zero if the pipeline failed. Everything also goes to the log file, so it can be sent on. This is the useful thing to run over a remote desktop session, where a window is awkward and a message box is worse.
 
+**See what it would draw, without a window.**
+
+```powershell
+CollimationCamera.exe --snapshot shot.png --snapshot-after 8
+```
+
+Runs for the given number of seconds so the star settles, renders one frame into an offscreen texture, writes the PNG, and exits. The picture goes through the same renderer the window uses, so it is what the window would have shown — and it works over remote desktop, or with the display asleep.
+
 **A camera is not in the list.** In order:
 
 1. The vendor driver is installed, and the camera was plugged in after the driver.

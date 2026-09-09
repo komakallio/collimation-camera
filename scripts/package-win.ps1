@@ -157,6 +157,12 @@ pipeline, the fonts and vendor SDKs it found, the cameras and serial ports it
 can see, and the log path, then exits. Run this first on a new machine, and
 over remote desktop where a window is awkward.
 
+  CollimationCamera.exe --snapshot shot.png --snapshot-after 8
+
+Also opens no window: runs for eight seconds so the star settles, then writes
+one rendered frame to shot.png. Use it to show somebody what the app is
+drawing on a machine you cannot see.
+
 If a camera is not listed
 -------------------------
 
