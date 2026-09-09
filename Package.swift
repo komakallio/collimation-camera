@@ -25,18 +25,25 @@ var targets: [Target] = [
         name: "CollimationCore",
         dependencies: ["POACameraC", "ASICameraC", "CollimationKernels"]
     ),
+    // Platform-free UI model: commands, formatters, HUD scenes. Both apps
+    // depend on it, and neither it nor CollimationCore imports a UI framework.
+    .target(
+        name: "CollimationUI",
+        dependencies: ["CollimationCore"]
+    ),
     .executableTarget(
         name: "CaptureCLI",
         dependencies: ["CollimationCore"]
     ),
     .executableTarget(
         name: "CoreTests",
-        dependencies: ["CollimationCore"]
+        dependencies: ["CollimationCore", "CollimationUI"]
     ),
 ]
 
 var products: [Product] = [
     .library(name: "CollimationCore", targets: ["CollimationCore"]),
+    .library(name: "CollimationUI", targets: ["CollimationUI"]),
     .executable(name: "capture-cli", targets: ["CaptureCLI"]),
     .executable(name: "core-tests", targets: ["CoreTests"]),
 ]
@@ -45,7 +52,7 @@ var products: [Product] = [
 targets.append(
     .executableTarget(
         name: "CollimationApp",
-        dependencies: ["CollimationCore"],
+        dependencies: ["CollimationCore", "CollimationUI"],
         linkerSettings: [
             .linkedFramework("SwiftUI"),
             .linkedFramework("AppKit"),
