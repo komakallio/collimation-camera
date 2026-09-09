@@ -104,7 +104,20 @@ public struct DynamicLibrary: @unchecked Sendable {
         )
 #endif
         var seen = Set<String>()
-        return paths.filter { seen.insert($0).inserted }
+        return paths
+            .map(normalizeSeparators)
+            .filter { seen.insert($0).inserted }
+    }
+
+    /// `URL.path` yields forward slashes even on Windows. Win32 accepts them,
+    /// but native separators keep the loader diagnostics readable and avoid
+    /// any path-parsing corner case.
+    private static func normalizeSeparators(_ path: String) -> String {
+#if os(Windows)
+        return path.replacingOccurrences(of: "/", with: "\\")
+#else
+        return path
+#endif
     }
 
 #if os(Windows)
@@ -112,10 +125,22 @@ public struct DynamicLibrary: @unchecked Sendable {
         // LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR (0x100) lets a vendor DLL find its
         // own dependencies next to it; LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
         // (0x1000) keeps the application and system directories in the search.
-        let flags: DWORD = 0x0000_0100 | 0x0000_1000
+        // Both require a fully qualified path — passing them with a bare file
+        // name fails with ERROR_INVALID_PARAMETER instead of searching — so a
+        // bare name goes through the standard search order, which is the whole
+        // point of that fallback.
+        let flags: DWORD = isAbsolute(path) ? 0x0000_0100 | 0x0000_1000 : 0
         return path.withCString(encodedAs: UTF16.self) { wide in
             LoadLibraryExW(wide, nil, flags)
         }
+    }
+
+    /// `C:\...`, `\\server\share\...`, or `\\?\...`.
+    private static func isAbsolute(_ path: String) -> Bool {
+        let scalars = Array(path.unicodeScalars)
+        if scalars.count >= 2, scalars[0] == "\\", scalars[1] == "\\" { return true }
+        guard scalars.count >= 3, scalars[1] == ":" else { return false }
+        return scalars[2] == "\\" || scalars[2] == "/"
     }
 
     private static func lastError() -> String {
