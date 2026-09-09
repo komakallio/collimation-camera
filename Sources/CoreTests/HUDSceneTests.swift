@@ -253,7 +253,7 @@ func testStarProfileScene() throws {
     let profile = StarIntensityProfile(samples: [1.0, 0.5, 0.1, 0.01], radiusPixels: 32, sectionCount: 4)
     let drawn = StarProfileScene.primitives(profile: profile)
     let polylines = drawn.flatMap { primitive -> [[SIMD2<Double>]] in
-        if case .clipped(_, _, let inner) = primitive {
+        if case .clipped(_, _, _, let inner) = primitive {
             return inner.compactMap { if case .polyline(let points, _, _) = $0 { return points } else { return nil } }
         }
         return []

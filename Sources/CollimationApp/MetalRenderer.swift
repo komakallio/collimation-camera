@@ -115,15 +115,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             lockNormalized: lockNormalized,
             stabilizeCentroid: stabilizeCentroid
         )
-        let rect = layout.imageRect
-        let ndc = toNDC(
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: rect.height,
-            viewWidth: viewWidth,
-            viewHeight: viewHeight
-        )
+        // Shared with the portable app's renderer so both build the same quad.
+        let ndc = layout.ndcRect()
 
         var uniforms = StretchUniforms(
             black: Float(state.stretch.black),
@@ -140,11 +133,15 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         encoder.setFragmentTexture(texture, index: 0)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<StretchUniforms>.stride, index: 0)
 
+        let x0 = Float(ndc.x0)
+        let x1 = Float(ndc.x1)
+        let y0 = Float(ndc.y0)
+        let y1 = Float(ndc.y1)
         var vertices: [Float] = [
-            ndc.x0, ndc.y1, 0, 0,
-            ndc.x1, ndc.y1, 1, 0,
-            ndc.x0, ndc.y0, 0, 1,
-            ndc.x1, ndc.y0, 1, 1
+            x0, y1, 0, 0,
+            x1, y1, 1, 0,
+            x0, y0, 0, 1,
+            x1, y0, 1, 1
         ]
         encoder.setVertexBytes(&vertices, length: vertices.count * MemoryLayout<Float>.stride, index: 0)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
@@ -205,19 +202,6 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 bytesPerRow: frame.width * 2
             )
         }
-    }
-
-    private func toNDC(x: Double, y: Double, width: Double, height: Double, viewWidth: Double, viewHeight: Double)
-        -> (x0: Float, y0: Float, x1: Float, y1: Float)
-    {
-        // SwiftUI overlay uses top-left origin. Convert so y=0 is the top of the view.
-        let x0 = Float(2 * x / viewWidth - 1)
-        let x1 = Float(2 * (x + width) / viewWidth - 1)
-        let top = y
-        let bottom = y + height
-        let y1 = Float(1 - 2 * top / viewHeight)
-        let y0 = Float(1 - 2 * bottom / viewHeight)
-        return (x0, y0, x1, y1)
     }
 
     private struct StretchUniforms {

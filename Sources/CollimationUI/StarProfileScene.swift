@@ -43,7 +43,7 @@ public enum StarProfileScene {
         if let profile, profile.samples.count >= 2 {
             clipped += curvePrimitives(samples: profile.samples, origin: origin, size: plot)
         }
-        result.append(.clipped(origin: origin, size: plot, primitives: clipped))
+        result.append(.clipped(origin: origin, size: plot, cornerRadius: plotCornerRadius, primitives: clipped))
 
         result.append(
             .rect(origin: origin, size: plot, color: plotBorder, width: 1, cornerRadius: plotCornerRadius)

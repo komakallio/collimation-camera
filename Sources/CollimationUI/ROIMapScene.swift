@@ -51,7 +51,7 @@ public enum ROIMapScene {
             .fillRect(origin: origin, size: frame, color: sensorFill, cornerRadius: plotCornerRadius)
         ]
         result.append(
-            .clipped(origin: origin, size: frame, primitives: grid(origin: origin, size: frame))
+            .clipped(origin: origin, size: frame, cornerRadius: plotCornerRadius, primitives: grid(origin: origin, size: frame))
         )
         result.append(
             .rect(origin: origin, size: frame, color: sensorBorder, width: 1, cornerRadius: plotCornerRadius)

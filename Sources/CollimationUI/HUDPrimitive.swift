@@ -39,6 +39,7 @@ public enum HUDPrimitive: Equatable, Sendable {
     indirect case clipped(
         origin: SIMD2<Double>,
         size: SIMD2<Double>,
+        cornerRadius: Double,
         primitives: [HUDPrimitive]
     )
 }
