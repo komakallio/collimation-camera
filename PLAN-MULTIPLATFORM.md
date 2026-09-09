@@ -1970,8 +1970,16 @@ was not.
   into an offscreen texture through the same `renderScene` the window uses and
   writes it out, with no window shown. That is how the rendering was verified
   once the machine's display went to sleep, and it is what §9.8's HUD
-  comparison between the two apps should use: identical state, no compositor
-  in the way.
+  comparison between the two apps should use: run both with the same
+  `--window-size`, which is in points so the layout matches, and compare by
+  eye. Not pixel by pixel — the simulator drifts, so two runs never agree
+  exactly, and the geometry is already pinned by the scene tests. What eyes
+  are for is colour and text rendering.
+- **The release build renders exactly what the debug build does.** Snapshots
+  from the packaged release and from a development build are pixel-identical
+  across the whole sidebar (56,100 samples, zero differences), so the DXBC
+  shaders and the optimized build change nothing on screen. Only the live
+  region differs, because the simulated star has moved.
 - **Frame rate against the simulator.** The log now carries a heartbeat line a
   minute. The packaged release runs at 72 to 77 fps with a 2048 ROI, the full
   analysis pipeline, and the HUD; the debug build runs at 14 to 17, which is
@@ -2000,9 +2008,12 @@ was not.
   `SDL_GPU_TEXTUREFORMAT_*` constants when `WinSDK.DirectX` is in the module.
 
 Still open on Windows, and needing hardware: every camera, mount, and filter
-wheel item in §7.8, §9.8, and §10.3 — nothing has been plugged in. Still open
-everywhere else: the whole macOS side, including the portable app's first run
-there and §9.8's screenshot comparison between the two apps.
+wheel item in §7.8, §9.8, and §10.3 — nothing has been plugged in. Two things
+need a person rather than hardware: the error modal has never been seen, since
+nothing headless raises `engine.errorMessage`, and neither has the save
+dialog. Still open everywhere else: the whole macOS side, including the
+portable app's first run there and §9.8's screenshot comparison between the
+two apps.
 
 ## 14. Verified facts and sources
 
