@@ -17,9 +17,17 @@ import Foundation
 /// window uses, so it is what the window would have shown.
 @MainActor
 enum Snapshot {
+    /// Nil when `--snapshot` was not asked for. A `--snapshot` with nothing
+    /// after it is a mistake worth reporting rather than a window nobody
+    /// expected on a machine with no screen.
     static func requestedPath(_ arguments: [String]) -> String? {
-        guard let index = arguments.firstIndex(of: "--snapshot"),
-              arguments.indices.contains(index + 1) else { return nil }
+        guard let index = arguments.firstIndex(of: "--snapshot") else { return nil }
+        guard arguments.indices.contains(index + 1),
+              !arguments[index + 1].hasPrefix("--") else {
+            Log.info("--snapshot needs a file name after it")
+            Diagnostics.stop()
+            exit(2)
+        }
         return arguments[index + 1]
     }
 
