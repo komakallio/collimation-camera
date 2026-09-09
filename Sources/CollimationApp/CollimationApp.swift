@@ -11,13 +11,15 @@ struct CollimationApp: App {
     @State private var host = MacUIHost()
 
     var body: some Scene {
-        WindowGroup("Collimation Camera") {
+        // The label is explicit: WindowGroup has both init(_:content:) and
+        // init(_:makeContent:), and a trailing closure matches either.
+        WindowGroup("Collimation Camera", content: {
             ContentView(host: host)
                 .environment(engine)
                 .onAppear {
                     appDelegate.stopCapture = { engine.shutdown() }
                 }
-        }
+        })
         .defaultSize(width: 1280, height: 820)
         .commands {
             CommandGroup(replacing: .newItem) {}
