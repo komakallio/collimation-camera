@@ -1923,6 +1923,46 @@ Still open, and needing hardware or a Mac: the macOS side of tasks 3 and 4
 compute-pass reduction, `SDL_ShowSimpleMessageBox` before `SDL_Init`, and task 5
 (camera frame rates).
 
+## 14b. Milestone 3 to 5 acceptance, checked on Windows (2026-09-09)
+
+Same machine as §14a: Windows 11 Pro 26200, Intel Iris Xe, Swift 6.3.3,
+SDL 3.4.16, Dear ImGui 1.92.9b. Everything here was run; anything not listed
+was not.
+
+- **The portable app runs against the simulator.** Menu bar, sidebar with all
+  six sections, live view with the donut through the HLSL stretch shader, the
+  overlay and legend, the ROI map, the star profile, the histogram, the
+  compass dial, the status chip, and the zoom and fps readout. Confirmed from
+  a screen capture of the window at 2560×1640 (200% scale).
+- **Point scale.** `SDL_GetWindowDisplayScale` 2.0 and
+  `SDL_GetWindowPixelDensity` 1.0 at 200%, so window coordinates are pixels
+  and the style scales by 2. The live region works out to 980×795 points
+  beside a 300-point sidebar, which is what the engine is given.
+- **The live texture.** R16_UINT storage read, 512×512 while tracking and
+  2048×2048 on the first full frame, uploaded through a cycled transfer
+  buffer inside the same command buffer that draws it.
+- **The window icon** loads from `Resources/AppIcon-256.png` through
+  `SDL_LoadPNG` and shows in the title bar.
+- **The release build is a GUI subsystem image** (PE subsystem 2; the debug
+  build is 3) and carries two icon resources, so Explorer and Start show the
+  app icon.
+- **The package runs on its own.** `dist\CollimationCamera-win-x64.zip`
+  unzipped into a fresh directory outside the repository starts, finds its
+  fonts and the vendor DLLs beside the executable, and logs — with no Swift
+  toolchain on `PATH`.
+- **A failed GPU device is reported, not swallowed.** With
+  `SDL_GPU_DRIVER=vulkan` on this machine the release build logs
+  `FATAL SDL_CreateGPUDevice: SDL_HINT_GPU_DRIVER vulkan unsupported!` and
+  blocks on the message box naming the step and the log path (§9.8).
+- **Two release-only traps found and fixed**, both recorded in §13: the
+  trapping `FileHandle.write(_:)` on a subsystem-Windows process with no
+  standard output, and whole-module optimization losing the
+  `SDL_GPU_TEXTUREFORMAT_*` constants when `WinSDK.DirectX` is in the module.
+
+Still open on Windows, and needing hardware: every camera, mount, and filter
+wheel item in §7.8, §9.8, and §10.3 — nothing has been plugged in. Still open
+everywhere else: the whole macOS side, including the portable app's first run
+there and §9.8's screenshot comparison between the two apps.
 ## 14. Verified facts and sources
 
 Checked on 2026-09-08 against primary sources. Items marked "spike" are to
