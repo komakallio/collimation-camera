@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # The multiplatform branches build on every push: they are the only way to
+    # compile the Windows and macOS files until the port is done.
+    branches: [main, 'multiplatform-**']
   pull_request:
 
 concurrency:
