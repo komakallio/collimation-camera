@@ -20,7 +20,7 @@ Legend: ✅ shipped · ⏳ planned for a later milestone · — not applicable.
 | Zoom and fit | ✅ | ⏳ | One factor per scroll event by sign, not per tick. |
 | Auto-center | ✅ | ⏳ | `canToggleAutoCenter`. |
 | Stabilize view | ✅ | ⏳ | Always enabled. |
-| Search full frame | ✅ | ⏳ | `canSearchFullFrame`. The macOS menu item is still ungated; milestone 2 switches it over. |
+| Search full frame | ✅ | ⏳ | `canSearchFullFrame`. Tightened at milestone 2: the macOS menu item was ungated. |
 | Collimation overlay and legend | ✅ | ⏳ | Always enabled. |
 | ROI map | ✅ | ⏳ | 140×94 max. |
 | Star profile | ✅ | ⏳ | 148×102. |
@@ -30,9 +30,9 @@ Legend: ✅ shipped · ⏳ planned for a later milestone · — not applicable.
 | Save TIFF | ✅ | ⏳ | `canSaveSnapshot`. |
 | Save stacked | ✅ | ⏳ | `canSaveStacked`. |
 | Save constellation | ✅ | ⏳ | `canSaveConstellation`. |
-| Mount connect | ✅ | ⏳ | `canConnectMount`. The macOS menu item is still ungated; milestone 2 switches it over. |
-| Mount calibrate | ✅ | ⏳ | `canCalibrateMount`. The sidebar uses it now; the menu item still has its own looser predicate until milestone 2. |
-| Center star | ✅ | ⏳ | `canCenterStar`. Same as calibrate: sidebar now, menu at milestone 2. |
+| Mount connect | ✅ | ⏳ | `canConnectMount`. Tightened at milestone 2: the macOS menu item was ungated. |
+| Mount calibrate | ✅ | ⏳ | `canCalibrateMount`. Tightened at milestone 2: the menu item now also needs a connected camera and no stack in flight. |
+| Center star | ✅ | ⏳ | `canCenterStar`. Same tightening as calibrate. |
 | Filter wheel connect and goto | ✅ | ⏳ | `canConnectFilterWheel`, `canSelectFilter`. |
 | Keyboard shortcuts | ✅ | ⏳ | Return connects on both. |
 | Tooltips | ✅ | ⏳ | |
@@ -51,9 +51,8 @@ Legend: ✅ shipped · ⏳ planned for a later milestone · — not applicable.
   acceptable.
 - Fonts differ: the macOS app uses the system faces, the portable app bundles
   DejaVu so Windows and macOS render identically to each other.
-- Enablement is the engine's `can*` predicate. The sidebar reads it today; the
-  macOS menu still carries its own inline predicates and moves over in
-  milestone 2, when the menus are rebuilt from `CommandCatalog`. That will
-  tighten four items — Calibrate Mount, Center Star, Search Full Frame, and
-  Connect Mount — because the pre-port menu was looser than both the sidebar
-  and the engine's own early returns.
+- Enablement is the engine's `can*` predicate on every surface. Milestone 2
+  rebuilt the macOS menus from `CommandCatalog`, which tightened four items —
+  Calibrate Mount, Center Star, Search Full Frame, and Connect Mount — because
+  the pre-port menu was looser than both the sidebar and the engine's own
+  early returns.
