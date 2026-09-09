@@ -2006,6 +2006,12 @@ was not.
   trapping `FileHandle.write(_:)` on a subsystem-Windows process with no
   standard output, and whole-module optimization losing the
   `SDL_GPU_TEXTUREFORMAT_*` constants when `WinSDK.DirectX` is in the module.
+- **CI is green on both runners** for this branch's head (run 34315341408).
+  The macOS job matters most, because nothing here can compile macOS code: it
+  runs the import guard, `core-tests`, `capture-cli`, `CollimationApp`, and —
+  after `brew install sdl3` — `CollimationCamera`. So the shared `LogFile`,
+  the macOS app's use of it, and the whole portable app all build against
+  Homebrew's SDL3. Building is all that proves; nothing has been run there.
 
 Still open on Windows, and needing hardware: every camera, mount, and filter
 wheel item in §7.8, §9.8, and §10.3 — nothing has been plugged in. Two things
