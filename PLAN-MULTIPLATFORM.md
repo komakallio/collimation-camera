@@ -1966,6 +1966,12 @@ was not.
   Player One camera 3.10.1, ZWO 1.41, and Player One filter wheel 1.2.3.0
   through `DynamicLibrary`, and lists COM3 from the registry scanner. No
   camera or wheel was attached, so only the load path is confirmed.
+- **Frame rate against the simulator.** The log now carries a heartbeat line a
+  minute. The packaged release runs at 72 to 77 fps with a 2048 ROI, the full
+  analysis pipeline, and the HUD; the debug build runs at 14 to 17, which is
+  `-Onone` in the analysis code and in the simulator's own frame synthesis, not
+  the renderer. Never judge the port's speed from a development build. §9.8's
+  30 fps figure is about a camera and still needs one.
 - **Minimize, restore, and resize do not stall it.** `window-stress-win.ps1`
   minimizes the window for ten seconds, restores it, and resizes it from
   700×500 to 2400×1500 and back, checking after each step that the window
