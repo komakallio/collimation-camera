@@ -33,13 +33,23 @@ enum HUDDrawList {
             )
         }
         func scaled(_ value: Double) -> Float { Float(value * pointScale) }
-        // ImGui strokes thinner than a pixel disappear; the macOS canvas
-        // antialiases them instead, so a floor keeps the two comparable.
+
+        // ImGui cannot stroke thinner than a pixel, and a width under one
+        // disappears. SwiftUI's canvas antialiases the same line into a
+        // fainter one, so this does the arithmetic by hand: draw it a pixel
+        // wide and take the alpha down by however much thinner it should have
+        // been. Without this the ROI map's half-point grid is twice as heavy
+        // in this app as in the macOS one on a 100% display.
         func stroke(_ width: Double) -> Float { max(Float(width * pointScale), 1) }
+        func fade(_ color: HUDColor, _ width: Double) -> UInt32 {
+            let pixels = width * pointScale
+            guard pixels < 1 else { return color.packedABGR }
+            return color.opacity(Double(color.a) * max(pixels, 0)).packedABGR
+        }
 
         switch primitive {
         case .line(let from, let to, let color, let width):
-            ImDrawList_AddLine(list, point(from), point(to), color.packedABGR, stroke(width))
+            ImDrawList_AddLine(list, point(from), point(to), fade(color, width), stroke(width))
 
         case .polyline(let points, let color, let width):
             guard points.count >= 2 else { return }
@@ -49,14 +59,14 @@ enum HUDDrawList {
                     list,
                     buffer.baseAddress,
                     Int32(buffer.count),
-                    color.packedABGR,
+                    fade(color, width),
                     stroke(width),
                     0
                 )
             }
 
         case .circle(let center, let radius, let color, let width):
-            ImDrawList_AddCircle(list, point(center), scaled(radius), color.packedABGR, 0, stroke(width))
+            ImDrawList_AddCircle(list, point(center), scaled(radius), fade(color, width), 0, stroke(width))
 
         case .disc(let center, let radius, let color):
             ImDrawList_AddCircleFilled(list, point(center), scaled(radius), color.packedABGR, 0)
@@ -66,7 +76,7 @@ enum HUDDrawList {
                 list,
                 point(rectOrigin),
                 point(rectOrigin + size),
-                color.packedABGR,
+                fade(color, width),
                 scaled(cornerRadius),
                 stroke(width),
                 0

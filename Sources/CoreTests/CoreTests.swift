@@ -85,6 +85,7 @@ struct CoreTests {
         failures += run("histogram scene", testHistogramScene)
         failures += run("compass dial scene", testCompassDialScene)
         failures += run("star profile scene", testStarProfileScene)
+        failures += run("hud stroke widths", testHUDStrokeWidths)
         failures += run("image layout ndc rect", testImageLayoutNDCRect)
         failures += run("stretch shader math", testStretchShaderMath)
         failures += run("ui glyph coverage", testUIGlyphCoverage)

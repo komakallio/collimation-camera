@@ -293,3 +293,75 @@ func testImageLayoutNDCRect() throws {
     try expectUI(abs(topNDC.y1 - 0.25) < 1e-12, "flipped top edge \(topNDC.y1)")
     try expectUI(abs(topNDC.y0 + 0.25) < 1e-12, "flipped bottom edge \(topNDC.y0)")
 }
+
+/// Every stroke the scenes emit, including the ones inside a clip.
+private func strokeWidths(_ primitives: [HUDPrimitive]) -> [Double] {
+    var widths: [Double] = []
+    for primitive in primitives {
+        switch primitive {
+        case .line(_, _, _, let width): widths.append(width)
+        case .polyline(_, _, let width): widths.append(width)
+        case .circle(_, _, _, let width): widths.append(width)
+        case .rect(_, _, _, let width, _): widths.append(width)
+        case .clipped(_, _, _, let inner): widths.append(contentsOf: strokeWidths(inner))
+        case .disc, .fillRect, .fillPolygon, .text: continue
+        }
+    }
+    return widths
+}
+
+/// The two apps stroke the same geometry through different canvases: SwiftUI
+/// takes a width in points and antialiases it, ImGui takes one in pixels and
+/// cannot go under one. `HUDDrawList` draws a sub-pixel stroke at a pixel wide
+/// with the alpha scaled down, which is what antialiasing does — but only
+/// convincingly down to about half a pixel. Below that the two apps would
+/// start drawing visibly different pictures on a 100% display, so the scenes
+/// stay above it.
+func testHUDStrokeWidths() throws {
+    let roi = ROI(x: 512, y: 256, width: 512, height: 512)
+    let overlay = OverlayModel(
+        imageWidth: 512,
+        imageHeight: 512,
+        sensorWidth: 2048,
+        sensorHeight: 1024,
+        roi: roi
+    )
+    let viewSize = SIMD2(800.0, 700.0)
+
+    var scenes: [(String, [HUDPrimitive])] = [
+        ("overlay", OverlayScene.primitives(overlay: overlay, zoom: 1, viewSize: viewSize)),
+        ("roi map", ROIMapScene.primitives(sensorWidth: 2048, sensorHeight: 1024, roi: roi)),
+        ("compass dial", CompassDialScene.primitives(degrees: 30, magnitude: 0.4)),
+        ("compass dial, no coma", CompassDialScene.primitives(degrees: nil, magnitude: 0)),
+    ]
+
+    let histogram = Histogram(
+        bins: (0..<Histogram.binCount).map { UInt32($0 % 97) },
+        sampleCount: 4_096,
+        maxADU: 54_000
+    )
+    scenes.append((
+        "histogram",
+        HistogramScene.primitives(histogram: histogram, stretch: .default, size: SIMD2(276.0, 56.0))
+    ))
+
+    let profile = StarIntensityProfile(
+        samples: (0..<64).map { 1 - Double($0) / 64 },
+        radiusPixels: 32,
+        sectionCount: 4
+    )
+    scenes.append(("star profile", StarProfileScene.primitives(profile: profile)))
+    scenes.append(("star profile, empty", StarProfileScene.primitives(profile: nil)))
+
+    var thinnest = Double.greatestFiniteMagnitude
+    for (name, primitives) in scenes {
+        for width in strokeWidths(primitives) {
+            try expectUI(width >= 0.5, "\(name) strokes \(width) points, too thin to fake with alpha")
+            try expectUI(width <= 4, "\(name) strokes \(width) points, which is not a HUD line")
+            thinnest = min(thinnest, width)
+        }
+    }
+    // If this ever stops finding a sub-pixel stroke, HUDDrawList's alpha
+    // compensation has become dead code and can go.
+    try expectUI(thinnest < 1, "no scene strokes under a point any more (thinnest \(thinnest))")
+}
