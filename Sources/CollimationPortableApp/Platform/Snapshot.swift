@@ -32,6 +32,19 @@ enum Snapshot {
         return min(max(value, 0), 120)
     }
 
+    /// `--window-size 1280x820`, in window coordinates. A comparison between
+    /// the two apps only means something at the same size, and the layout is
+    /// worth checking at the small end too.
+    static func requestedWindowSize(_ arguments: [String]) -> (width: Int32, height: Int32)? {
+        guard let index = arguments.firstIndex(of: "--window-size"),
+              arguments.indices.contains(index + 1) else { return nil }
+        let parts = arguments[index + 1].lowercased().split(separator: "x")
+        guard parts.count == 2,
+              let width = Int32(parts[0]), let height = Int32(parts[1]),
+              width > 0, height > 0 else { return nil }
+        return (width, height)
+    }
+
     /// D3D12 wants 256-byte aligned rows in a copy, and the surface takes an
     /// explicit pitch, so the padding costs nothing but a few bytes.
     private static func alignedPixels(_ width: Int) -> Int {

@@ -49,6 +49,10 @@ AppWindow.applyIcon(to: window)
 // same kind of floor on macOS from the sidebar's minWidth.
 SDL_SetWindowMinimumSize(window, Int32(800 * initialScale), Int32(600 * initialScale))
 
+if let size = Snapshot.requestedWindowSize(CommandLine.arguments) {
+    SDL_SetWindowSize(window, size.width, size.height)
+}
+
 // DXBC on Windows, MSL on macOS. The fewer-resource-slots property admits
 // tier 1 Intel iGPUs; this renderer binds one storage texture, far under the
 // 8-resource limit that property imposes.
