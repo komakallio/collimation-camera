@@ -21,6 +21,12 @@ loop, or anything about actor isolation in the portable app.
 Pass: "SAVED" plus a file whose size matches the ROI, and a process that is
 still alive and not hung.
 
+Opening the dialog needs the app in the foreground, because SDL only reports
+key events to a focused window; committing it does not, because the file name
+is set and the default button pressed with messages. That matters on a machine
+somebody is using: a stray click used to make this report a cancelled save and
+look like a regression.
+
 .EXAMPLE
 scripts\save-dialog-win.ps1
 scripts\save-dialog-win.ps1 -Configuration debug -Settle 20
@@ -65,6 +71,35 @@ public class CollimationSaveDialogTest {
   [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
   [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindowExW(IntPtr parent, IntPtr after, string cls, string title);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr SendMessageW(IntPtr h, uint msg, IntPtr wp, string lp);
+  [DllImport("user32.dll")] public static extern IntPtr SendMessageW(IntPtr h, uint msg, IntPtr wp, IntPtr lp);
+  // Typing the file name with the keyboard depends on which control has focus
+  // inside the dialog, and it silently cancelled instead of saving when it did
+  // not. Setting the edit control's text and pressing the dialog's default
+  // button are both messages, so neither needs focus and neither can go
+  // somewhere else.
+  [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, EnumProc cb, IntPtr l);
+  // The file name field of a modern common item dialog is several levels down
+  // -- DUIViewWndClassName, DirectUIHWND, FloatNotifySink, ComboBox, Edit --
+  // so an immediate-children search does not find it. EnumChildWindows walks
+  // the whole tree.
+  public static IntPtr FindEdit(IntPtr dialog) {
+    IntPtr found = IntPtr.Zero;
+    EnumChildWindows(dialog, (h, l) => {
+      var c = new StringBuilder(64); GetClassNameW(h, c, 64);
+      if (c.ToString() == "Edit" && IsWindowVisible(h)) { found = h; return false; }
+      return true;
+    }, IntPtr.Zero);
+    return found;
+  }
+  public static bool CommitSaveAs(IntPtr dialog, string path) {
+    IntPtr edit = FindEdit(dialog);
+    if (edit == IntPtr.Zero) return false;
+    SendMessageW(edit, 0x000C /* WM_SETTEXT */, IntPtr.Zero, path);
+    SendMessageW(dialog, 0x0111 /* WM_COMMAND */, (IntPtr)1 /* IDOK */, IntPtr.Zero);
+    return true;
+  }
   // Windows refuses SetForegroundWindow to a process that does not already own
   // the foreground, and refuses it silently: it returns false and the
   // keystrokes go to whatever the user was using. Attaching this thread's
@@ -136,15 +171,10 @@ try {
     if ($dialog -eq [IntPtr]::Zero) {
         throw 'No save dialog appeared after three tries. Either the shortcut did not reach the window or Save TIFF was disabled because no frame had arrived - try a longer -Settle.'
     }
-    if (-not [CollimationSaveDialogTest]::Focus($dialog)) { throw 'The save dialog would not take the foreground.' }
     Start-Sleep -Milliseconds 500
-
-    $shell = New-Object -ComObject WScript.Shell
-    $shell.SendKeys('^a')
-    Start-Sleep -Milliseconds 300
-    $shell.SendKeys($SaveAs)
-    Start-Sleep -Milliseconds 800
-    $shell.SendKeys('{ENTER}')
+    if (-not [CollimationSaveDialogTest]::CommitSaveAs($dialog, $SaveAs)) {
+        throw 'Could not find the file name field in the save dialog.'
+    }
 
     for ($i = 0; $i -lt 20 -and -not $process.HasExited; $i++) { Start-Sleep -Milliseconds 500 }
 

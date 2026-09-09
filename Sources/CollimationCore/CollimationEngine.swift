@@ -209,8 +209,26 @@ public final class CollimationEngine {
     /// no way out of a move that never finished: the picker, Refresh and this
     /// button were all disabled together and quitting was the only recovery.
     /// Pulling the wheel out from under a move is the user's business.
+    ///
+    /// A free function so the rule can be tested for every combination without
+    /// forcing the engine into a state it will not enter on its own — which is
+    /// the point, since the states that matter here are the ones a bug leaves
+    /// behind.
+    public static func canConnectFilterWheel(
+        isConnected: Bool,
+        hasWheels: Bool,
+        isMoving: Bool
+    ) -> Bool {
+        if isConnected { return true }
+        return hasWheels && !isMoving
+    }
+
     public var canConnectFilterWheel: Bool {
-        isFilterWheelConnected || (!filterWheels.isEmpty && !isFilterWheelMoving)
+        Self.canConnectFilterWheel(
+            isConnected: isFilterWheelConnected,
+            hasWheels: !filterWheels.isEmpty,
+            isMoving: isFilterWheelMoving
+        )
     }
     public var canSelectFilterWheel: Bool { !isFilterWheelConnected && !isFilterWheelMoving }
     public var canRefreshFilterWheels: Bool { canSelectFilterWheel }
@@ -1233,17 +1251,32 @@ public final class CollimationEngine {
     /// port.isOpen`, and a Windows COM handle stays valid after the device is
     /// removed — so, as with the camera, re-enumerating is the only thing that
     /// can tell a vanished mount from a slow one.
-    private func noteMountFailure(_ error: Error) {
-        guard isMountConnected else { return }
-        // A star that was not found, a calibration that was too small, and a
-        // cancellation all say nothing about the cable.
+    /// Whether a failed mount command was the cable rather than the command.
+    ///
+    /// Free so it can be tested without a mount. A star that was not found, a
+    /// calibration that came out too small and a cancellation all say nothing
+    /// about the cable; a timeout or a protocol failure might, and the port
+    /// list is what settles it.
+    public static func mountFailureMeansDisconnected(
+        _ error: Error,
+        port: String,
+        availablePorts: [String]
+    ) -> Bool {
         switch error {
         case MountError.timeout, MountError.protocolFailure, MountError.notConnected:
-            break
+            return !availablePorts.contains(port)
         default:
-            return
+            return false
         }
-        guard !serialPortPaths().contains(selectedSerialPort) else { return }
+    }
+
+    private func noteMountFailure(_ error: Error) {
+        guard isMountConnected else { return }
+        guard Self.mountFailureMeansDisconnected(
+            error,
+            port: selectedSerialPort,
+            availablePorts: serialPortPaths()
+        ) else { return }
         Log.info("mount port \(selectedSerialPort) is gone; disconnecting")
         disconnectMount()
         mountStatus = "Mount disconnected — check the cable"

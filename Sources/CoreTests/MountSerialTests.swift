@@ -323,3 +323,38 @@ func testWindowsCOMScannerParsing() throws {
     try expectUI(sorted == ["AUX", "COM1", "COM3", "COM9", "COM10"], "sorted \(sorted)")
 }
 #endif
+
+/// A Meade mount answers `:V#` and then goes quiet: `:Mg` and `:Td` return
+/// nothing at all.
+///
+/// Both used to be followed by a read for a `#`, so connect failed with
+/// "Timed out waiting for the mount to respond" — leaving the port open —
+/// and every calibration pulse threw two seconds after the star had already
+/// moved. An LX200 mount could not be used at all. The old tests scripted the
+/// replies, so they passed while the app was broken; this one scripts nothing
+/// beyond the probe, which is what a real mount does.
+func testLX200SilentMountConnectsAndPulses() throws {
+    let port = ScriptedSerialPortDriver(ascii: [":V#": "1.0#"])
+    let mount = EQ6Mount(port: port)
+
+    try mount.connect(path: "SCRIPT", baud: 9600)
+    try expectUI(
+        mount.protocolName == EQ6Protocol.lx200.rawValue,
+        "connected as LX200, got \(mount.protocolName)"
+    )
+    try expectUI(mount.isConnected, "the port stays open")
+
+    let before = port.writes.count
+    try runBlocking { try await mount.pulse(.north, milliseconds: 40) }
+    let written = port.writtenASCII.dropFirst(before)
+    try expectUI(
+        written.contains(LX200PulseGuide.command(.north, milliseconds: 40)),
+        "the pulse was sent: \(Array(written))"
+    )
+
+    // And a second one, because the first failure used to leave the port in a
+    // state where everything after it timed out too.
+    try runBlocking { try await mount.pulse(.east, milliseconds: 40) }
+    mount.disconnect()
+    try expectUI(!mount.isConnected, "disconnect closes it")
+}

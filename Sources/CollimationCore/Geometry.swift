@@ -231,6 +231,44 @@ public struct ImageLayout: Equatable, Sendable {
         )
     }
 
+    /// The live region in target pixels, for a scissor rectangle.
+    ///
+    /// The image quad is laid out in view points inside the live region but
+    /// converted to NDC against the whole window, and `imageRect.x` goes
+    /// negative as soon as the image is wider than the region — so a zoomed
+    /// image reaches left of the sidebar unless it is clipped. Points and
+    /// pixels differ by the display scale on Windows and by the pixel density
+    /// on a Retina Mac, so the ratio is taken from the sizes rather than
+    /// assumed, and the result is clamped to the target: an empty or
+    /// out-of-bounds scissor is undefined behaviour in a graphics API, not a
+    /// no-op.
+    public static func scissorRect(
+        liveOrigin: SIMD2<Double>,
+        liveSize: SIMD2<Double>,
+        windowSize: SIMD2<Double>,
+        targetPixels: SIMD2<Double>
+    ) -> (x: Int, y: Int, width: Int, height: Int) {
+        let whole = (
+            x: 0,
+            y: 0,
+            width: Int(max(0, targetPixels.x.rounded())),
+            height: Int(max(0, targetPixels.y.rounded()))
+        )
+        guard windowSize.x > 0, windowSize.y > 0, targetPixels.x > 0, targetPixels.y > 0 else {
+            return whole
+        }
+        let scaleX = targetPixels.x / windowSize.x
+        let scaleY = targetPixels.y / windowSize.y
+        let x = min(max(0, Int((liveOrigin.x * scaleX).rounded(.down))), whole.width)
+        let y = min(max(0, Int((liveOrigin.y * scaleY).rounded(.down))), whole.height)
+        let width = min(max(0, Int((liveSize.x * scaleX).rounded())), whole.width - x)
+        let height = min(max(0, Int((liveSize.y * scaleY).rounded())), whole.height - y)
+        // A zero-sized scissor would clip everything away; better to draw the
+        // whole thing than to leave a blank window with no explanation.
+        guard width > 0, height > 0 else { return whole }
+        return (x: x, y: y, width: width, height: height)
+    }
+
     public func viewPoint(image: SIMD2<Double>) -> SIMD2<Double> {
         let r = imageRect
         return SIMD2(r.x + image.x * zoom, r.y + image.y * zoom)

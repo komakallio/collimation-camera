@@ -483,3 +483,74 @@ func testCommandReachability() throws {
     try expectUI(propertyName(for: "camera.saveTIFF") == "cameraSaveTIFF", "id to property name")
     try expectUI(propertyName(for: "filterWheel.connect") == "filterWheelConnect", "already camel case")
 }
+
+/// The filter wheel panel must never be able to lock itself shut.
+///
+/// `isFilterWheelMoving` gates the filter picker, the wheel picker, Refresh and
+/// the Connect/Disconnect toggle together, so any path that left it set killed
+/// the whole panel until the app was quit — and two did. Clearing the flag
+/// earlier fixed those two; this pins the invariant that makes a third one
+/// survivable: whatever state the wheel is in, a connected wheel can always be
+/// disconnected.
+@MainActor
+func testFilterWheelAlwaysDisconnectable() throws {
+    for hasWheels in [true, false] {
+        for isMoving in [true, false] {
+            let connected = CollimationEngine.canConnectFilterWheel(
+                isConnected: true,
+                hasWheels: hasWheels,
+                isMoving: isMoving
+            )
+            try expectUI(connected, "a connected wheel can always be disconnected (wheels \(hasWheels), moving \(isMoving))")
+        }
+    }
+    // Connecting still waits for a move to finish, and needs something to
+    // connect to.
+    try expectUI(
+        CollimationEngine.canConnectFilterWheel(isConnected: false, hasWheels: true, isMoving: false),
+        "connect is offered when a wheel is listed and nothing is moving"
+    )
+    try expectUI(
+        !CollimationEngine.canConnectFilterWheel(isConnected: false, hasWheels: true, isMoving: true),
+        "connect waits for the move"
+    )
+    try expectUI(
+        !CollimationEngine.canConnectFilterWheel(isConnected: false, hasWheels: false, isMoving: false),
+        "nothing to connect to"
+    )
+}
+
+/// Pulling the mount cable used to leave the button reading Disconnect while
+/// every command timed out, exactly as the camera unplug did. The mount cannot
+/// report it — a Windows COM handle stays valid after the device is removed —
+/// so the port list is what separates a mount that has gone from one that is
+/// slow.
+@MainActor
+func testMountFailureMeansDisconnected() throws {
+    let gone = ["COM3"]
+    let present = ["COM3", "COM4"]
+
+    try expectUI(
+        CollimationEngine.mountFailureMeansDisconnected(MountError.timeout, port: "COM4", availablePorts: gone),
+        "a timeout on a port that has vanished is a disconnect"
+    )
+    try expectUI(
+        !CollimationEngine.mountFailureMeansDisconnected(MountError.timeout, port: "COM4", availablePorts: present),
+        "a timeout on a port that is still there is just a slow mount"
+    )
+    try expectUI(
+        CollimationEngine.mountFailureMeansDisconnected(
+            MountError.protocolFailure("garbage"), port: "COM4", availablePorts: gone
+        ),
+        "so is a protocol failure"
+    )
+    // The ones that say nothing about the cable. noStar in particular is what
+    // a centering run throws when the star drifts off, and disconnecting the
+    // mount for that would be its own bug.
+    for error in [MountError.noStar, MountError.notCalibrated, MountError.calibrationTooSmall("x"), MountError.cancelled] {
+        try expectUI(
+            !CollimationEngine.mountFailureMeansDisconnected(error, port: "COM4", availablePorts: gone),
+            "\(error) must not disconnect the mount"
+        )
+    }
+}

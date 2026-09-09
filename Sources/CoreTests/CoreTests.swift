@@ -76,6 +76,8 @@ struct CoreTests {
         failures += run("camera error text", testCameraErrorText)
         failures += run("asi error mapping", testASIErrorMapping)
         failures += run("remembered serial port", testRememberedSerialPort)
+        failures += run("filter wheel always disconnectable", testFilterWheelAlwaysDisconnectable)
+        failures += run("mount failure means disconnected", testMountFailureMeansDisconnected)
         failures += run("command catalog enablement", testCommandCatalogEnablement)
         failures += run("command catalog coverage", testCommandCatalogCoverage)
         failures += run("command reachability", testCommandReachability)
@@ -92,6 +94,7 @@ struct CoreTests {
         failures += run("star profile scene", testStarProfileScene)
         failures += run("hud stroke widths", testHUDStrokeWidths)
         failures += run("image layout ndc rect", testImageLayoutNDCRect)
+        failures += run("live region scissor", testLiveRegionScissor)
         failures += run("stretch shader math", testStretchShaderMath)
         failures += run("stretch shader copies", testStretchShaderCopies)
         failures += run("ui glyph coverage", testUIGlyphCoverage)
@@ -100,6 +103,7 @@ struct CoreTests {
         failures += run("eq6 unrecognized mount", testEQ6UnrecognizedMount)
         failures += run("eq6 open failure", testEQ6OpenFailure)
         failures += run("eq6 pulse commands", testEQ6PulseCommands)
+        failures += run("lx200 silent mount", testLX200SilentMountConnectsAndPulses)
 #if os(Windows)
         failures += run("windows com scanner parsing", testWindowsCOMScannerParsing)
 #endif
@@ -2281,4 +2285,49 @@ private func testSlowCameraIsNotDeclaredUnplugged() throws {
 private final class Box<T>: @unchecked Sendable {
     var value: T
     init(_ value: T) { self.value = value }
+}
+
+/// The live image is laid out inside the live region but drawn against the
+/// whole window, so a zoomed image reaches under the sidebar unless it is
+/// clipped. The sidebar happened to be drawn over it afterwards, which is why
+/// nobody saw it; "happened to" is not a guarantee.
+private func testLiveRegionScissor() throws {
+    // Windows at 200%: window coordinates are pixels, so points are half.
+    let win = ImageLayout.scissorRect(
+        liveOrigin: SIMD2(300, 20),
+        liveSize: SIMD2(980, 800),
+        windowSize: SIMD2(1280, 820),
+        targetPixels: SIMD2(2560, 1640)
+    )
+    try expect(win.x == 600 && win.y == 40, "origin doubled: \(win)")
+    try expect(win.width == 1960 && win.height == 1600, "size doubled: \(win)")
+
+    // A 1:1 display leaves the numbers alone.
+    let plain = ImageLayout.scissorRect(
+        liveOrigin: SIMD2(300, 20),
+        liveSize: SIMD2(980, 800),
+        windowSize: SIMD2(1280, 820),
+        targetPixels: SIMD2(1280, 820)
+    )
+    try expect(plain.x == 300 && plain.width == 980, "unscaled: \(plain)")
+
+    // Never past the edge of the target, whatever the caller passes.
+    let clamped = ImageLayout.scissorRect(
+        liveOrigin: SIMD2(300, 20),
+        liveSize: SIMD2(5000, 5000),
+        windowSize: SIMD2(1280, 820),
+        targetPixels: SIMD2(1280, 820)
+    )
+    try expect(clamped.x + clamped.width <= 1280, "width clamped: \(clamped)")
+    try expect(clamped.y + clamped.height <= 820, "height clamped: \(clamped)")
+
+    // A degenerate window must not produce a scissor that clips everything
+    // away and leaves a blank live region with no explanation.
+    let degenerate = ImageLayout.scissorRect(
+        liveOrigin: SIMD2(0, 0),
+        liveSize: SIMD2(0, 0),
+        windowSize: SIMD2(0, 0),
+        targetPixels: SIMD2(1280, 820)
+    )
+    try expect(degenerate.width == 1280 && degenerate.height == 820, "falls back to the whole target: \(degenerate)")
 }

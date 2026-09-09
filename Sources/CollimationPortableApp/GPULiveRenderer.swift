@@ -164,13 +164,17 @@ final class GPULiveRenderer {
         // region — zoom in far enough and the quad reaches left of the sidebar.
         // The sidebar is drawn over it afterwards and mostly hides it, which is
         // why this was never obvious; "mostly" is not a guarantee.
-        let scaleX = windowSize.x > 0 ? targetPixels.x / windowSize.x : 1
-        let scaleY = windowSize.y > 0 ? targetPixels.y / windowSize.y : 1
+        let region = ImageLayout.scissorRect(
+            liveOrigin: liveRect.origin,
+            liveSize: liveRect.size,
+            windowSize: windowSize,
+            targetPixels: targetPixels
+        )
         var live = SDL_Rect(
-            x: Int32(max(0, (liveRect.origin.x * scaleX).rounded(.down))),
-            y: Int32(max(0, (liveRect.origin.y * scaleY).rounded(.down))),
-            w: Int32(max(0, (liveRect.size.x * scaleX).rounded())),
-            h: Int32(max(0, (liveRect.size.y * scaleY).rounded()))
+            x: Int32(region.x),
+            y: Int32(region.y),
+            w: Int32(region.width),
+            h: Int32(region.height)
         )
         SDL_SetGPUScissor(pass, &live)
         drawImage(
