@@ -9,7 +9,7 @@ Two apps ship from this repository, on one shared core:
 | **CollimationApp** | SwiftUI and Metal. The macOS release. | — |
 | **CollimationCamera** | SDL3 and Dear ImGui. A development and parity build. | SDL3 and Dear ImGui. The Windows release. |
 
-They drive the same engine and take every label, shortcut, and HUD from the same modules, so they behave the same. `PARITY.md` has the feature table and the deliberate differences; `PLAN-MULTIPLATFORM.md` has the milestones and what has actually been run; `HARDWARE-CHECKLIST.md` is the order to work through the first time a camera is plugged in.
+They drive the same engine and take every label, shortcut, and HUD from the same modules, so they behave the same. `CLAUDE.md` is the conventions and the traps — read it before changing anything. `PARITY.md` has the feature table and the deliberate differences; `PLAN-MULTIPLATFORM.md` has the milestones and what has actually been run; `HARDWARE-CHECKLIST.md` is the order to work through the first time a camera is plugged in.
 
 ## Features
 
@@ -72,7 +72,15 @@ scripts\build-win.ps1 build --product CollimationCamera
 scripts\run-win.ps1 CollimationCamera
 ```
 
-A debug build keeps a console; a release build does not, and writes everything to its log file instead.
+A debug build keeps a console; a release build does not, and writes everything to its log file instead. A debug build is also about five times slower than release against the simulator, almost all of it in the analysis pipeline — never judge performance from one. To build and run a release locally:
+
+```powershell
+scripts\build-win.ps1 build -c release --product CollimationCamera
+scripts\package-win.ps1 -SkipBuild
+dist\CollimationCamera-win-x64\CollimationCamera.exe
+```
+
+All the Windows scripts share the `.build-win` scratch path. If PowerShell refuses to run them, they are invoked here through `powershell -ExecutionPolicy Bypass -File`, which does not need the machine policy changed.
 
 ### Both
 

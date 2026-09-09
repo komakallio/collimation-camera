@@ -21,6 +21,15 @@ the macOS packages.
 | Swift runtime | Windows package only | Apache-2.0 with the Runtime Library Exception | <https://swift.org/LICENSE.txt> |
 | Microsoft C++ runtime | Windows package only | Microsoft's redistributable terms | <https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files> |
 
+## When a pin moves
+
+Nothing refreshes these automatically. Bumping SDL3 in `scripts/fetch-sdk.ps1`
+or the vendored cimgui/imgui in `scripts/vendor-cimgui.sh` means copying the
+new upstream licence text over the file here in the same commit — the projects
+change theirs rarely, but a stale one is a wrong claim about what ships.
+`Sources/CImGui/vendor/UPSTREAM.md` records the pinned cimgui SHA and imgui
+version; `$sdlVersion` in `fetch-sdk.ps1` records SDL3's.
+
 `scripts/fetch-sdk.ps1` and `scripts/fetch-sdk.sh` save any licence or EULA
 file they find in a vendor archive here, named after the vendor, so a package
 built after a fetch carries the vendors' own terms rather than only this
