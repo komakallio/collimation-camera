@@ -86,7 +86,26 @@ SDL_DestroyProperties(deviceProperties)
 if let driver = SDL_GetGPUDeviceDriver(device) {
     Log.info("GPU driver: \(String(cString: driver))")
 }
-Log.info("R16_UINT storage read supported: \(GPULiveRenderer.supportsR16UInt(device: device))")
+// The live view is an R16_UINT storage-read texture and nothing else. §13
+// sketches a fallback chain — R16_UNORM with a sampler, then R32_FLOAT — and
+// none of it is written. Without this check the texture simply fails to be
+// created, `drawImage` returns early, and the app runs perfectly with a black
+// live region and no clue why. Say so instead.
+let storageReadSupported = GPULiveRenderer.supportsR16UInt(device: device)
+Log.info("R16_UINT storage read supported: \(storageReadSupported)")
+if !storageReadSupported {
+    Diagnostics.fail(
+        "Checking the live-view texture format",
+        detail: """
+            This GPU cannot sample a 16-bit unsigned integer texture \
+            (R16_UINT with GRAPHICS_STORAGE_READ), which is the only format \
+            the live view uses. The fallback formats in the plan are not \
+            implemented. Try a machine with a newer GPU, or a different \
+            driver: SDL reports the driver as \
+            \(SDL_GetGPUDeviceDriver(device).map { String(cString: $0) } ?? "unknown").
+            """
+    )
+}
 
 guard SDL_ClaimWindowForGPUDevice(device, window) else {
     Diagnostics.fail("SDL_ClaimWindowForGPUDevice")

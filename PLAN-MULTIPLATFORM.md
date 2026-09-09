@@ -1852,7 +1852,7 @@ surface, tightened from the pre-port macOS menu.
 
 | Risk | Signal | Fallback |
 |---|---|---|
-| `R16_UINT` storage read unsupported on a GPU | `SDL_GPUTextureSupportsFormat` false in the spike or at startup | `R16_UNORM` + `SAMPLER` nearest with `round(v * 65535)`, then `R32_FLOAT` storage read; last resort Win32 + D3D11 |
+| `R16_UINT` storage read unsupported on a GPU | `SDL_GPUTextureSupportsFormat` false in the spike or at startup | **Not implemented.** The app checks at startup and refuses to run with a message box naming the format, rather than showing a black live region. The fallback if it is ever needed: `R16_UNORM` + `SAMPLER` nearest with `round(v * 65535)`, then `R32_FLOAT` storage read; last resort Win32 + D3D11 |
 | SDL 3.4.x D3D12 needs Shader Model 6 for its blit shaders | Device creation fails on old hardware | Startup error box names the failed device creation and the log path (§9.5); README documents the requirement; SDL 3.6 removes it |
 | Windows timer resolution quantizes sleeps to 15.6 ms | `engine.fps` 20 to 24 instead of 30 on Windows, guide pulses jitter, stacking slower than on macOS | `preciseSleep` in the capture loop and mount pulses (§7.3); `timeBeginPeriod(1)` on non-SDL paths (§6.2, `capture-cli`); spike task 6 numbers |
 | Swift toolchain regression on Windows | CI red after a toolchain bump | Pin the toolchain version in CI and in the README; upgrade deliberately |

@@ -122,6 +122,28 @@ The log carries a rate line once a minute. `%LOCALAPPDATA%\Collimation Camera\`
 on Windows, `~/Library/Logs/Collimation Camera/` on macOS, one generation of
 history beside it.
 
+## Things that are not there
+
+Worth knowing before you go looking:
+
+- **No fallback texture format.** §13 sketches one; none of it is written. The
+  app checks `R16_UINT` + `GRAPHICS_STORAGE_READ` at startup and refuses to run
+  without it, because the alternative is a black live region and no clue why.
+- **The SwiftUI app cannot snapshot itself.** `--snapshot` belongs to the
+  portable app. Producing the macOS half of the §9.8 HUD comparison still means
+  a screen grab by hand, at the same window size.
+- **The version number is written out in three places** — `SDL_SetAppMetadata`
+  in `main.swift` and `CFBundleVersion` in both packaging scripts — and there is
+  no release procedure, tag convention, or changelog. Bumping a version means
+  editing all three.
+- **`swift build` on Windows always warns** that it could not create a symbolic
+  link for the `debug`/`release` convenience path. It is SwiftPM wanting
+  Developer Mode; the build is fine and nothing depends on those links.
+- **`engine.connect()` runs before the first frame.** With a camera attached
+  that is a blocking SDK call, so a slow or wedged camera shows as a window
+  that never appears. The log stops after the ImGui version line — if that is
+  the last thing in it, the camera is why.
+
 ## Adding a feature
 
 1. Engine state and behaviour in `CollimationCore`, with a test in `CoreTests`.
