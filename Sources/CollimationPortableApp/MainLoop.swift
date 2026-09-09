@@ -136,6 +136,7 @@ final class MainLoop {
         engine.viewWidth = live.size.x
         engine.viewHeight = live.size.y
         engine.updateStabilization()
+        Diagnostics.heartbeat(engine)
 
         igRender()
 

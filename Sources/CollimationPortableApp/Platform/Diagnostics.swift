@@ -94,3 +94,34 @@ enum Diagnostics {
     }
 }
 
+extension Diagnostics {
+    nonisolated(unsafe) private static var lastHeartbeat: Date?
+
+    /// One line a minute while the app runs, so a session that misbehaved
+    /// overnight can be read back from the log rather than reconstructed.
+    /// Rate, tracking state, ROI, and zoom are the four numbers that answer
+    /// "was it working": everything else is already a log line of its own.
+    ///
+    /// The first line comes a minute in, not on the first frame, so the rate
+    /// it reports is a measured one.
+    @MainActor
+    static func heartbeat(_ engine: CollimationEngine) {
+        let now = Date()
+        guard let last = lastHeartbeat else {
+            lastHeartbeat = now
+            return
+        }
+        guard now.timeIntervalSince(last) >= 60 else { return }
+        lastHeartbeat = now
+        var line = "fps \(String(format: "%.1f", engine.fps))"
+            + "  \(engine.tracking.state.rawValue)"
+            + "  zoom \(String(format: "%.2f", engine.zoom))"
+        // The frame slot, not the render state: the render state carries an ROI
+        // only while stabilization is running.
+        if let latest = engine.frameSlot.peek() {
+            let roi = latest.frame.roi
+            line += "  roi \(roi.width)x\(roi.height) bin\(roi.binning) at \(roi.x),\(roi.y)"
+        }
+        Log.info(line)
+    }
+}
