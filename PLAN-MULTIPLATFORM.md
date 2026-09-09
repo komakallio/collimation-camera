@@ -1950,6 +1950,10 @@ was not.
   unzipped into a fresh directory outside the repository starts, finds its
   fonts and the vendor DLLs beside the executable, and logs — with no Swift
   toolchain on `PATH`.
+- **All three vendor libraries load.** `CollimationCamera --check` reports
+  Player One camera 3.10.1, ZWO 1.41, and Player One filter wheel 1.2.3.0
+  through `DynamicLibrary`, and lists COM3 from the registry scanner. No
+  camera or wheel was attached, so only the load path is confirmed.
 - **A failed GPU device is reported, not swallowed.** With
   `SDL_GPU_DRIVER=vulkan` on this machine the release build logs
   `FATAL SDL_CreateGPUDevice: SDL_HINT_GPU_DRIVER vulkan unsupported!` and
