@@ -83,4 +83,20 @@ done
 codesign --force --sign - "$LIBUSB" 2>/dev/null || true
 
 cp "$LIBUSB" "$ROOT/Vendor/PlayerOne/libusb-1.0.0.dylib"
+
+# libusb is LGPL, so its text has to travel with the macOS packages. Homebrew
+# keeps it in the keg; if it is not there, LICENSES/README.md has the link.
+for copying in \
+  /opt/homebrew/opt/libusb/share/doc/libusb-1.0/COPYING \
+  /usr/local/opt/libusb/share/doc/libusb-1.0/COPYING \
+  /opt/homebrew/opt/libusb/COPYING \
+  /usr/local/opt/libusb/COPYING
+do
+  if [[ -f "$copying" ]]; then
+    cp "$copying" "$ROOT/LICENSES/libusb-COPYING.txt"
+    echo "Kept $copying as LICENSES/libusb-COPYING.txt"
+    break
+  fi
+done
+
 echo "Vendor libraries are in $ROOT/Vendor."

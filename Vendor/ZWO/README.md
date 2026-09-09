@@ -11,7 +11,9 @@ dependency.
 
 https://www.zwoastro.com/software/product-sdk/
 
-Copy the x64 library from the package into this folder.
+Copy the x64 library from the package into this folder. The download is one
+archive holding one archive per platform, so on Windows the library is two
+levels in: `ASI_Camera_SDK/ASI_Windows_SDK_<version>.zip`, then `lib\x64\`.
 
 ## Convenience fetch
 
@@ -37,5 +39,7 @@ scripts\fetch-sdk.ps1
   macOS needs no driver.
 - Only RAW16 mono is used. RAW16 data is MSB-aligned, so a 12-bit camera
   saturates at 65520 and the shared clip threshold holds.
+- ZWO cameras report only the binnings the model supports, often just 1 and 2,
+  so the engine clamps its search binning to that list.
 - The binaries are gitignored. Without them the app simply lists no ZWO
   cameras.

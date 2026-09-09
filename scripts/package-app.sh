@@ -37,6 +37,9 @@ if [[ -f "$ROOT/Resources/AppIcon.icns" ]]; then
   cp "$ROOT/Resources/AppIcon.icns" "$DIST/Contents/Resources/AppIcon.icns"
 fi
 
+# The license texts for everything vendored into the bundle.
+cp -R "$ROOT/LICENSES" "$DIST/Contents/Resources/LICENSES"
+
 # Vendor libraries are loaded at run time from Contents/Frameworks. One copy of
 # libusb serves both vendors.
 copied_vendor_library=0

@@ -91,6 +91,18 @@ function Install-DllFromZip {
     }
     Copy-Item $found.FullName $target -Force
     Write-Host "Installed $target"
+
+    # Keep whatever terms the vendor ships, so a package carries them rather
+    # than only the pointer in LICENSES\README.md.
+    $licenses = Join-Path $root 'LICENSES'
+    $vendorName = Split-Path -Leaf $TargetDirectory
+    foreach ($pattern in @('LICENSE*', 'COPYING*', 'EULA*', 'License*')) {
+        foreach ($file in Get-ChildItem -Path $extracted -Recurse -Filter $pattern -File -ErrorAction SilentlyContinue) {
+            $extension = if ($file.Extension) { $file.Extension } else { '.txt' }
+            Copy-Item $file.FullName (Join-Path $licenses "$vendorName-$($file.BaseName)$extension") -Force
+            Write-Host "Kept $($file.Name) as $vendorName-$($file.BaseName)$extension"
+        }
+    }
 }
 
 if (-not $SDL3Only) {
