@@ -39,6 +39,11 @@ guard let window = SDL_CreateWindow(
 }
 AppWindow.applyIcon(to: window)
 
+// Below this the HUD panels in the bottom-right corner no longer fit beside
+// the 300-point sidebar and start drawing over each other. SwiftUI derives the
+// same kind of floor on macOS from the sidebar's minWidth.
+SDL_SetWindowMinimumSize(window, Int32(800 * initialScale), Int32(600 * initialScale))
+
 // DXBC on Windows, MSL on macOS. The fewer-resource-slots property admits
 // tier 1 Intel iGPUs; this renderer binds one storage texture, far under the
 // 8-resource limit that property imposes.
