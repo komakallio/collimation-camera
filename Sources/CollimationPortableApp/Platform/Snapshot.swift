@@ -32,9 +32,10 @@ enum Snapshot {
         return min(max(value, 0), 120)
     }
 
-    /// `--window-size 1280x820`, in window coordinates. A comparison between
-    /// the two apps only means something at the same size, and the layout is
-    /// worth checking at the small end too.
+    /// `--window-size 1280x820`, in view points rather than window
+    /// coordinates, so the same argument lays the UI out the same way on both
+    /// platforms — which is the whole point of comparing their screenshots.
+    /// The caller multiplies by the display's content scale.
     static func requestedWindowSize(_ arguments: [String]) -> (width: Int32, height: Int32)? {
         guard let index = arguments.firstIndex(of: "--window-size"),
               arguments.indices.contains(index + 1) else { return nil }

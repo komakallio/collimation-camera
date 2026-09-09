@@ -50,7 +50,11 @@ AppWindow.applyIcon(to: window)
 SDL_SetWindowMinimumSize(window, Int32(800 * initialScale), Int32(600 * initialScale))
 
 if let size = Snapshot.requestedWindowSize(CommandLine.arguments) {
-    SDL_SetWindowSize(window, size.width, size.height)
+    SDL_SetWindowSize(
+        window,
+        Int32(Double(size.width) * initialScale),
+        Int32(Double(size.height) * initialScale)
+    )
 }
 
 // DXBC on Windows, MSL on macOS. The fewer-resource-slots property admits

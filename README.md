@@ -172,6 +172,8 @@ CollimationCamera.exe --snapshot shot.png --snapshot-after 8
 
 Runs for the given number of seconds so the star settles, renders one frame into an offscreen texture, writes the PNG, and exits. The picture goes through the same renderer the window uses, so it is what the window would have shown — and it works over remote desktop, or with the display asleep.
 
+Add `--window-size 1280x820` to fix the size. It is in view points, so the same argument lays the UI out the same way on both platforms, which is what comparing the two apps needs.
+
 **A camera is not in the list.** In order:
 
 1. The vendor driver is installed, and the camera was plugged in after the driver.
