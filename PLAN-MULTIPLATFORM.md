@@ -1950,10 +1950,20 @@ was not.
   unzipped into a fresh directory outside the repository starts, finds its
   fonts and the vendor DLLs beside the executable, and logs — with no Swift
   toolchain on `PATH`.
+- **`capture-cli` works on Windows.** `--list` reports both SDK versions and
+  the two simulators; `--simulator --output frame.tif` writes a valid
+  little-endian 16-bit TIFF whose donut, stretched with the same black point
+  and midtones the app uses, matches what the live view shows.
 - **All three vendor libraries load.** `CollimationCamera --check` reports
   Player One camera 3.10.1, ZWO 1.41, and Player One filter wheel 1.2.3.0
   through `DynamicLibrary`, and lists COM3 from the registry scanner. No
   camera or wheel was attached, so only the load path is confirmed.
+- **A 200-second soak of the packaged release** against the simulator holds
+  steady: working set oscillates between 94 and 104 MB with no trend, private
+  bytes 80 to 90 MB, handle count 336 to 344. Nothing leaks over that window.
+  CPU runs at about 1.3 cores, which is the simulator synthesizing a
+  6252×4176 sensor frame per grab rather than the render loop; measure it
+  again with a real camera before reading anything into it.
 - **A failed GPU device is reported, not swallowed.** With
   `SDL_GPU_DRIVER=vulkan` on this machine the release build logs
   `FATAL SDL_CreateGPUDevice: SDL_HINT_GPU_DRIVER vulkan unsupported!` and
