@@ -129,6 +129,7 @@ final class GPULiveRenderer {
             renderState: renderState.peek(),
             liveRect: liveRect,
             windowSize: windowSize,
+            targetPixels: SIMD2(Double(width), Double(height)),
             drawImGui: drawImGui
         )
         _ = SDL_SubmitGPUCommandBuffer(commandBuffer)
@@ -144,6 +145,9 @@ final class GPULiveRenderer {
         renderState: RenderState,
         liveRect: (origin: SIMD2<Double>, size: SIMD2<Double>),
         windowSize: SIMD2<Double>,
+        /// The colour target's real size, for the scissor. Points are what the
+        /// layout is in; the scissor is in pixels.
+        targetPixels: SIMD2<Double>,
         drawImGui: (OpaquePointer, OpaquePointer) -> Void
     ) {
         var target = SDL_GPUColorTargetInfo()
@@ -153,6 +157,22 @@ final class GPULiveRenderer {
         target.store_op = SDL_GPU_STOREOP_STORE
 
         guard let pass = SDL_BeginGPURenderPass(commandBuffer, &target, 1, nil) else { return }
+
+        // Clip the image to the live region. The quad is placed in view points
+        // inside that region but converted to NDC against the whole window, and
+        // `image.x` goes negative as soon as the image is wider than the
+        // region — zoom in far enough and the quad reaches left of the sidebar.
+        // The sidebar is drawn over it afterwards and mostly hides it, which is
+        // why this was never obvious; "mostly" is not a guarantee.
+        let scaleX = windowSize.x > 0 ? targetPixels.x / windowSize.x : 1
+        let scaleY = windowSize.y > 0 ? targetPixels.y / windowSize.y : 1
+        var live = SDL_Rect(
+            x: Int32(max(0, (liveRect.origin.x * scaleX).rounded(.down))),
+            y: Int32(max(0, (liveRect.origin.y * scaleY).rounded(.down))),
+            w: Int32(max(0, (liveRect.size.x * scaleX).rounded())),
+            h: Int32(max(0, (liveRect.size.y * scaleY).rounded()))
+        )
+        SDL_SetGPUScissor(pass, &live)
         drawImage(
             pass: pass,
             commandBuffer: commandBuffer,
@@ -160,6 +180,10 @@ final class GPULiveRenderer {
             liveRect: liveRect,
             windowSize: windowSize
         )
+        // ImGui sets a scissor per draw command, but it is only ever narrowed
+        // from whatever is current, so hand it back the whole target.
+        var whole = SDL_Rect(x: 0, y: 0, w: Int32(targetPixels.x), h: Int32(targetPixels.y))
+        SDL_SetGPUScissor(pass, &whole)
         drawImGui(commandBuffer, pass)
         SDL_EndGPURenderPass(pass)
     }

@@ -477,11 +477,11 @@ public final class CollimationEngine {
             finishStacking()
             if startedMount {
                 if statusText.hasPrefix("Saved") {
-                    endMountWork("Constellation saved")
+                    endMountWorkWithoutWaiting("Constellation saved")
                 } else if statusText.contains("cancelled") {
-                    endMountWork("Constellation cancelled")
+                    endMountWorkWithoutWaiting("Constellation cancelled")
                 } else {
-                    endMountWork("Constellation stopped")
+                    endMountWorkWithoutWaiting("Constellation stopped")
                 }
             } else {
                 restoreTrackingDisplay()
@@ -877,6 +877,13 @@ public final class CollimationEngine {
     }
 
     private func publish(_ processed: ProcessedFrame) {
+        // A frame that was already in the analysis pipeline when the camera
+        // went away lands here after `disconnect()` has cleared everything, and
+        // puts the star, the overlay, the tracking state and a live fps reading
+        // back on screen for a camera that is not there. The hop to the main
+        // actor is unstructured, so there is nothing to cancel; the check has
+        // to be here.
+        guard isConnected else { return }
         frameSequence &+= 1
         fps = fpsMeter.current
         histogram = processed.histogram
@@ -950,7 +957,12 @@ public final class CollimationEngine {
     public func disconnectMount() {
         mountTask?.cancel()
         mountTask = nil
-        mount.disconnect()
+        // Off the actor for the same reason as `haltMotionsOffActor`: closing
+        // stops the nudges first, and that is a serial conversation which a
+        // mount that has gone will not answer. The UI state below is what the
+        // user sees, and it must not wait four seconds for a dead cable.
+        let mount = self.mount
+        Task.detached { mount.disconnect() }
         isMountConnected = false
         isMountBusy = false
         mountWork = nil
@@ -1164,11 +1176,11 @@ public final class CollimationEngine {
             guard calibration.isValid else { throw MountError.calibrationTooSmall("mount axes") }
             try GuideCalibrationStore.save(calibration)
             guideCalibration = calibration
-            endMountWork(Self.calibratedStatus(calibration))
+            await endMountWork(Self.calibratedStatus(calibration))
         } catch is CancellationError {
-            endMountWork("Calibration cancelled")
+            await endMountWork("Calibration cancelled")
         } catch {
-            endMountWork("Calibration failed")
+            await endMountWork("Calibration failed")
             noteMountFailure(error)
             presentError(error)
         }
@@ -1184,14 +1196,14 @@ public final class CollimationEngine {
             let centroid = try await waitForCentroid()
             let lastError = MountGuide.errorLength(centroid - sensorCenter())
             if MountGuide.isCentered(errorPixels: centroid - sensorCenter()) {
-                endMountWork(String(format: "Centered — %.1f px from sensor center", lastError))
+                await endMountWork(String(format: "Centered — %.1f px from sensor center", lastError))
             } else {
-                endMountWork(String(format: "Stopped — %.1f px from sensor center", lastError))
+                await endMountWork(String(format: "Stopped — %.1f px from sensor center", lastError))
             }
         } catch is CancellationError {
-            endMountWork("Centering cancelled")
+            await endMountWork("Centering cancelled")
         } catch {
-            endMountWork("Centering failed")
+            await endMountWork("Centering failed")
             noteMountFailure(error)
             presentError(error)
         }
@@ -1237,8 +1249,35 @@ public final class CollimationEngine {
         mountStatus = "Mount disconnected — check the cable"
     }
 
-    private func endMountWork(_ status: String) {
-        mount.haltMotions()
+    /// Stops the motors without freezing the window.
+    ///
+    /// `haltMotions` is a blocking serial conversation, and the engine is
+    /// main-actor isolated, so calling it directly stalled the UI at the end of
+    /// every calibration and every centering: a few tens of milliseconds with a
+    /// mount that answers, but 0.8 s on SynScan and up to 4 s on SkyWatcher
+    /// when it has stopped answering — long enough for Windows to paint the
+    /// ghost window and add "(Not Responding)". `mount` is nonisolated and
+    /// Sendable, so it costs nothing to do this off the actor.
+    private func haltMotionsOffActor() async {
+        let mount = self.mount
+        await Task.detached { mount.haltMotions() }.value
+    }
+
+    private func endMountWork(_ status: String) async {
+        await haltMotionsOffActor()
+        finishMountWork(status)
+    }
+
+    /// For `defer`, which cannot await. The halt still leaves the actor; it is
+    /// simply not waited for, and nothing below depends on the motors having
+    /// already stopped.
+    private func endMountWorkWithoutWaiting(_ status: String) {
+        let mount = self.mount
+        Task.detached { mount.haltMotions() }
+        finishMountWork(status)
+    }
+
+    private func finishMountWork(_ status: String) {
         restoreTrackingDisplay()
         mountHoldsROI = false
         applyPipelineConfig()
@@ -1358,7 +1397,7 @@ public final class CollimationEngine {
             }
             try await mount.applyNudge(nil)
         } catch {
-            mount.haltMotions()
+            await haltMotionsOffActor()
             throw error
         }
     }

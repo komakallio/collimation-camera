@@ -137,12 +137,14 @@ private func synScanScript() -> ScriptedSerialPortDriver {
     return driver
 }
 
-/// An LX200 mount: answers `:V#` and `:Td#`.
+/// An LX200 mount: answers `:V#` and nothing else.
+///
+/// It used to script a reply to `:Td#` as well, and the pulse test scripted
+/// one for `:Mg`. Neither command returns anything on a real Meade mount, so
+/// the tests agreed with the code rather than checking it, and an LX200 mount
+/// could not connect or pulse at all.
 private func lx200Script() -> ScriptedSerialPortDriver {
-    ScriptedSerialPortDriver(ascii: [
-        ":V#": "1.0#",
-        ":Td#": "#",
-    ])
+    ScriptedSerialPortDriver(ascii: [":V#": "1.0#"])
 }
 
 // MARK: - Tests
@@ -239,10 +241,9 @@ private func runBlocking(_ body: @escaping @Sendable () async throws -> Void) th
 }
 
 func testEQ6PulseCommands() throws {
-    // LX200: one :Mg command per pulse, no reply expected.
+    // LX200: one :Mg command per pulse, and no reply -- so nothing is
+    // scripted for it, and a mount that stays silent must still work.
     let lx = lx200Script()
-    let lxCommand = LX200PulseGuide.command(.north, milliseconds: 250)
-    lx.answer(Data(lxCommand.utf8), with: Data("#".utf8))
     let lxMount = EQ6Mount(port: lx)
     try lxMount.connect(path: "SCRIPT", baud: 9600)
     let beforePulse = lx.writes.count

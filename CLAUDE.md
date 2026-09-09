@@ -71,6 +71,20 @@ how a quit that never quit survived: `--snapshot` sets the loop's flag itself
 and `run-win.ps1 -Seconds` kills the process, so the close button reached
 nothing that was ever exercised. If you touch the event loop, run it.
 
+**The engine is `@MainActor`, so a blocking device call in it freezes the
+window.** `haltMotions`, `disconnect`, and anything else that talks to a serial
+port can take seconds when the device has stopped answering, and Windows
+answers a stalled message pump by painting the ghost window and appending
+"(Not Responding)". Hop off the actor — `haltMotionsOffActor` is the pattern —
+and remember that `defer` cannot await, which is why `endMountWork` has a
+non-waiting twin.
+
+**One flag that disables several controls is a trap in waiting.**
+`isFilterWheelMoving` gated the filter picker, the wheel picker, Refresh *and*
+the Connect/Disconnect toggle, so any path that failed to clear it left the
+panel with no way out but quitting. Never gate the escape hatch on the same
+flag as the thing it escapes from: disconnect is always allowed.
+
 **An unplugged camera reports nothing.** Neither vendor SDK raises an error
 when the cable goes: the camera simply stops saying a frame is ready, which
 reads as a timeout and is indistinguishable from a slow one. `CaptureSession`

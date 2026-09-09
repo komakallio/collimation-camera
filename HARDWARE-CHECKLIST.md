@@ -4,12 +4,16 @@ This is the order to work through, Player One first and ZWO after, with the
 commands to run and what a pass looks like. Each step's output belongs in the
 log file, so a failure can be sent on rather than described.
 
-**Where this stands.** Steps 0 to 5 pass on Player One — a Xena 585M and a
-Poseidon-M PRO — including Save TIFF, Save Stacked, and unplugging during both
-live view and a 1000-frame stack. Unplugging during Center is the one part of
-step 5 left, and it waits on the mount. Steps 6 and 7 and all of ZWO are
-untouched. `PLAN-MULTIPLATFORM.md` §14c has the numbers and every defect these
-sessions found; §14b is what was verified without hardware.
+**Where this stands.** Steps 0 to 7 pass on Player One — a Xena 585M, a
+Poseidon-M PRO, an EQDIR cable and a Phoenix wheel. What is left: unplugging
+the camera during Center, the seven fixes those sessions produced re-tested,
+and all of ZWO. `PLAN-MULTIPLATFORM.md` §14c has the numbers and every defect
+found; §14b is what was verified without hardware.
+
+**The EQDIR is an FTDI FT232R** (VID 0403, PID 6001). Windows ships the driver;
+if the port does not appear, check Device Manager rather than looking for one.
+The app reads `HKLM\HARDWARE\DEVICEMAP\SERIALCOMM`, which lists FTDI ports —
+WMI's `Win32_SerialPort`, which many tools use, does not.
 
 Log file: `%LOCALAPPDATA%\Collimation Camera\collimation.log` on Windows,
 `~/Library/Logs/Collimation Camera/collimation.log` on macOS. The previous run

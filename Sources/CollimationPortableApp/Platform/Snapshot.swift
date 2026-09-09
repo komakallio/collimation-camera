@@ -133,6 +133,7 @@ enum Snapshot {
             renderState: engine.renderStateSlot.peek(),
             liveRect: liveRect,
             windowSize: windowSize,
+            targetPixels: SIMD2(Double(width), Double(height)),
             drawImGui: drawImGui
         )
 

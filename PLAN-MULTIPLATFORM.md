@@ -2159,11 +2159,65 @@ going to Connect the rest of the time. OK takes default focus, and Escape,
 Return, keypad Return and Space all dismiss. Verified by driving each key at
 the real dialog; all three dismissed it.
 
+**Steps 6 and 7 pass**: an EQDIR cable on COM4 (FTDI FT232R, VID 0403 PID
+6001 — Windows already has the driver, and `SERIALCOMM` lists the port where
+WMI's `Win32_SerialPort` does not), calibration to RA 36 px / Dec 10 px of
+backlash, and a Phoenix wheel that connects, reads its aliases and moves.
+
+Before that session a read-only review swept the mount and wheel paths for the
+shapes the camera had already produced. Eight findings survived adversarial
+verification; seven are fixed:
+
+- **The filter wheel could latch dead.** Both wheel paths cleared
+  `isFilterWheelMoving` after `guard wheel.isConnected` rather than before, and
+  that one flag disables the filter picker, the wheel picker, Refresh and the
+  Connect/Disconnect toggle together — so a wheel that dropped out mid-move
+  left the panel unusable until the app was quit. `canConnectFilterWheel` now
+  always allows a disconnect as well: gating both halves of one toggle on the
+  same flag is what removed the way out.
+- **The mount never noticed a pulled cable**, exactly as the camera had not.
+  `EQ6Mount.isConnected` cannot tell — a Windows COM handle stays valid after
+  the device is removed — so a timeout or protocol failure during mount work
+  now re-enumerates the port and drops the mount if it has gone.
+- **Every Calibrate and Center ended with the window frozen.** `haltMotions` is
+  a blocking serial conversation and the engine is main-actor isolated: a few
+  tens of milliseconds with a mount that answers, up to four seconds with one
+  that does not, which is long enough for Windows to add "(Not Responding)".
+  The halt and the disconnect run off the actor now.
+- **`PhoenixWheel.disconnect` closed the SDK handle while a detached goto or
+  snapshot might be inside a call with it.** The poll loop checks its cancelled
+  flag between calls but not during one. Every SDK call and the close now take
+  one lock; the calls are short, so a close waits for one of them at most.
+- **LX200 mounts could not connect or pulse at all.** `:Mg` and `:Td` return
+  nothing on a Meade mount, and both paths read for a `#` that never comes.
+  Worse, the tests scripted those replies, so they agreed with the bug. Not
+  reachable with this project's EQ6 — the probe order matches SkyWatcher
+  first — but a 100% failure for anyone with a Meade.
+- **A frame in flight republished itself after disconnect**, putting the star,
+  the overlay and a live fps reading back for a camera that was not there.
+- **The live image quad was never scissored to the live region**, so a zoomed
+  image reached under the sidebar, which happened to be drawn over it.
+
+The eighth is **not fixed**: dragging or resizing the window enters the Win32
+modal loop and stalls the main actor, so the app does not repaint and a
+centering run keeps counting toward its 90 s deadline. The documented remedy
+is an `SDL_AddEventWatch` that renders during the modal loop, but that
+callback is a C function pointer — the save-dialog trap above — and it would
+have to re-enter the frame loop from inside ImGui's. Left alone deliberately
+rather than risk that crash in a path no automated check can exercise.
+
 **Still open**
 
-- The mount and the filter wheel on real hardware (§10.3), and an unplug
-  during Center.
+- An unplug during Center, and the mount and wheel fixes above re-tested.
 - Everything ZWO (§7.8).
+- **The app sometimes writes no log at all.** A session on 2026-09-09 ran for
+  minutes, calibrated a mount and wrote `guide-calibration.json`, and left not
+  one line in `collimation.log` — checked against the real path, not a
+  redirected view. Launches from a terminal have always logged. One real
+  mechanism was found and fixed (a second instance could neither rotate nor
+  re-create a held-open file, so it logged nowhere, having already deleted the
+  previous generation on the way in), but it has not been shown to be this
+  one.
 
 ## 14. Verified facts and sources
 
