@@ -90,9 +90,12 @@ public enum LogFile {
     }
 
     public static func write(_ message: String) {
-        let line = "\(formatter.string(from: Date()))  \(message)\n"
+        let now = Date()
         lock.lock()
         defer { lock.unlock() }
+        // Inside the lock: DateFormatter is not safe to use from two threads,
+        // and the capture, mount, and filter-wheel threads all log.
+        let line = "\(formatter.string(from: now))  \(message)\n"
         if let handle, let data = line.data(using: .utf8) {
             try? handle.write(contentsOf: data)
         }
