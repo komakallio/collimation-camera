@@ -59,6 +59,18 @@ everything a new curve has to touch.
 `igTextWrapped`, and `igSetItemTooltip` are all unavailable. `ImGuiText` in
 `HUDDrawList.swift` rebuilds each from its non-variadic parts.
 
+**ImGui identifies a widget by its label.** Two buttons that read `Connect` are
+one widget: clicking one can operate the other, and ImGui throws a modal
+"conflicting ID" dialog over the live view. Sidebar buttons carry `##` plus the
+command id for that reason — which also keeps a button's identity stable when
+its title flips between `Connect` and `Disconnect`. `--snapshot` exits non-zero
+if a conflict appears; nothing else catches it.
+
+**Nothing runs the portable app's quit path except `quit-win.ps1`.** That is
+how a quit that never quit survived: `--snapshot` sets the loop's flag itself
+and `run-win.ps1 -Seconds` kills the process, so the close button reached
+nothing that was ever exercised. If you touch the event loop, run it.
+
 **Whole-module optimization loses SDL's texture-format constants** when
 `WinSDK.DirectX` is imported anywhere in the same module — release only, and
 the type still resolves while every `SDL_GPU_TEXTUREFORMAT_*` vanishes. The
@@ -90,11 +102,19 @@ scripts\build-win.ps1 build --product CollimationCamera
 scripts\run-win.ps1 CollimationCamera                  # stages runtime + SDL3 + Resources first
 scripts\package-win.ps1                                # dist zip
 scripts\window-stress-win.ps1                          # minimize/restore/resize
+scripts\quit-win.ps1                                   # close the window, time the exit
 ```
 
 `win.cmd` wraps `build-win.ps1` through cmd, because PowerShell 5.1 turns a
 native tool's stderr into a failure even on exit 0. All of them share the
-`.build-win` scratch path.
+`.build-win` scratch path. Every one of them prints
+`'vswhere.exe' is not recognized` first; it comes from `Enter-VsDevShell`
+shelling out through cmd, the developer shell is entered anyway, and it cannot
+be redirected away from inside PowerShell.
+
+`quit-win.ps1` covers the one path the others cannot: `run-win.ps1 -Seconds`
+kills the process and `--snapshot` ends the loop by itself, so from the close
+button to a clean exit went untested for a long time and was broken.
 
 A build directory holds only the executable. Without the Swift runtime, SDL3,
 and `Resources/` beside it, Windows raises a loader box that suspends the
@@ -155,6 +175,13 @@ Worth knowing before you go looking:
    portable app.
 4. Wire it into **both** sidebars.
 5. Update `PARITY.md`, or say there why the apps differ.
+6. If it added a widget to the portable sidebar, run `--snapshot` once and
+   check the exit status. ImGui identifies a widget by its label, so two
+   controls that read the same word are the same widget — clicking one can
+   operate the other, and ImGui puts a modal error over the live view. The
+   snapshot run exits non-zero on that; nothing else catches it. Buttons built
+   from `CommandCatalog` are already keyed by command id, so this is about
+   anything hand-written.
 
 `.github/pull_request_template.md` is the checklist.
 
@@ -167,11 +194,13 @@ no ZWO camera, and the macOS side compiles in CI but has never been launched.
 checked and what was not. Do not read a ✅ in `PARITY.md` as "someone saw this
 work".
 
-That session found five defects in a couple of hours, four of which no
-simulator could have shown: a camera that only opens after the bus has been
-scanned, an acquisition path that believed a single noise peak, an ImGui fill
-that assumed convexity, and three buttons sharing one widget id. Expect the
-same ratio from the mount and the wheel.
+That session found six defects in a couple of hours: a camera that only opens
+after the bus has been scanned, a tool that reported failure as a stack trace,
+an acquisition path that believed a single noise peak, an ImGui fill that
+assumed convexity, three buttons sharing one widget id — and an app that could
+not be quit, because the close event set the loop's `running` flag to true
+instead of false and nothing had ever closed the window before. Expect the same
+ratio from the mount and the wheel.
 
 ## Conventions
 

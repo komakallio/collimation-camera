@@ -100,13 +100,19 @@ final class MainLoop {
             if event.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED.rawValue {
                 updatePointScale()
             }
-            Input.handle(
+            let quit = Input.handle(
                 event: event,
                 engine: engine,
                 liveRect: liveRect(),
-                pointScale: pointScale,
-                shouldQuit: &running
+                pointScale: pointScale
             )
+            if quit {
+                running = false
+                // Nothing after a quit needs the rest of the queue, and
+                // leaving now means one fewer frame between the click and the
+                // window going away.
+                return
+            }
         }
     }
 

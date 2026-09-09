@@ -8,6 +8,9 @@
 - [ ] Both apps updated, or `PARITY.md` explains the difference.
 - [ ] `swift run core-tests` green on macOS and Windows (CI).
 - [ ] Simulator smoke test on the portable app.
+- [ ] New portable sidebar widget: `--snapshot` run and its exit status
+      checked, which is the only thing that catches two widgets sharing an
+      ImGui id.
 - [ ] Hardware note if capture, mount, or wheel code changed.
 - [ ] A new vendored binary or library has its license text in `LICENSES/` and
       a row in `LICENSES/README.md`.

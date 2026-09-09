@@ -49,7 +49,17 @@ if (-not $devShell) {
 $vsInstall = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $devShell.FullName))
 
 Import-Module $devShell.FullName
+# Every run prints "'vswhere.exe' is not recognized". Ignore it: Enter-VsDevShell
+# runs its DevCmdArguments through cmd.exe, which looks for vswhere on PATH even
+# when the install path is given, then falls back to -VsInstallPath and gets it
+# right. The line comes from cmd's own console handle, so it cannot be
+# redirected from here. The cl.exe check is what actually says whether the
+# developer shell took.
 Enter-VsDevShell -VsInstallPath $vsInstall -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64' | Out-Null
+
+if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
+    throw "The Visual Studio developer shell did not take: cl.exe is not on PATH. SwiftPM cannot build without MSVC."
+}
 
 # Enter-VsDevShell replaces PATH, so put the Swift toolchain back in front.
 $env:Path = ((@($swiftBin, $runtimeBin) | Where-Object { $_ }) -join ';') + ';' + $env:Path

@@ -2057,7 +2057,8 @@ SDK loads and reports `1, 41, 0, 0`, but no ASI camera has been plugged in.
 
 **What it found**
 
-Four defects, all fixed in the same commit as this section:
+Six defects, all fixed in the same commit as this section. Four of them the
+camera found:
 
 1. `capture-cli --device poa-0` answered `POA_ERROR_INVALID_ID`. The
    properties lookup calls `POAGetCameraCount`, which is what scans the bus
@@ -2086,14 +2087,24 @@ over the live view, and two of the three controls shared state. Each command's
 button is now keyed by its catalogue id. `--snapshot` now exits non-zero on an
 id conflict, which makes the headless screenshot the regression test for it.
 
+And one that had nothing to do with the camera: **the app could not be
+quit**. `Input.handle` took `shouldQuit: inout Bool` and the loop passed its
+`running` flag to it, so closing the window ran `shouldQuit = true`, which set
+`running = true`, and the app carried on. Nothing had ever exercised that path
+— `--snapshot` ends the loop itself, and `run-win.ps1 -Seconds` kills the
+process — which is why §14b did not catch it. `Input.handle` now returns the
+flag rather than writing through a parameter whose polarity can be got wrong at
+the call site, there is a File ▸ Quit with ⌘Q/Ctrl+Q, and
+`scripts\quit-win.ps1` closes the real SDL window and times the exit: 0.4 s
+with a camera connected. The shutdown also logs a timing per step, and a
+watchdog ends the process if one of them never returns, so a future hang in a
+vendor call names itself.
+
 **Still open**
 
 - Unplugging a camera mid-run, the error modal, and the save dialog.
 - The mount and the filter wheel on real hardware (§10.3).
 - Everything ZWO (§7.8).
-- Quitting has been reported as unreliable and is not yet explained. The
-  shutdown now logs a timing for each step and a watchdog ends the process if
-  one of them never returns, so the next occurrence names its own cause.
 
 ## 14. Verified facts and sources
 
