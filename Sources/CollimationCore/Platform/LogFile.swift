@@ -55,38 +55,80 @@ public enum LogFile {
         directory.appendingPathComponent(name(basename))
     }
 
+    /// How many concurrent instances get a log of their own before giving up.
+    private static let instanceLimit = 8
+
     /// Rotates the previous run's file aside, opens a new one, and points
     /// `Log.sink` at it. Call once, as early as possible: a failure during
     /// startup is exactly what the file is for.
     ///
-    /// Returns the file's URL, or nil when it could not be opened — the caller
+    /// Returns the file's URL, or nil when nothing could be opened — the caller
     /// keeps running either way, with the default sink.
+    ///
+    /// A second instance does not fight the first for the file. On Windows a
+    /// file another process holds open can neither be renamed nor re-created,
+    /// and the old version of this did both blind, with `try?` over each: the
+    /// rotation failed, `createFile` failed, `start` returned nil, and the
+    /// second instance logged **nothing at all** — while having already deleted
+    /// the previous generation on the way in. That is how a mount session came
+    /// to leave no trace: the app was the second instance, and a log that is
+    /// only missing when two things are running is missing exactly when it is
+    /// most wanted. Now a second instance takes `<basename>-2.log` and the
+    /// first keeps writing to its own.
     @discardableResult
     public static func start(
         basename: String = defaultBasename,
         in directory: URL = LogFile.directory
     ) -> URL? {
         let manager = FileManager.default
-        let file = directory.appendingPathComponent(name(basename))
         try? manager.createDirectory(at: directory, withIntermediateDirectories: true)
+        rotate(basename: basename, in: directory, manager: manager)
 
+        for candidate in candidates(basename: basename, in: directory) {
+            // Both calls fail rather than truncate when another process holds
+            // the file, which is what makes this a working instance check.
+            guard manager.createFile(atPath: candidate.path, contents: nil),
+                  let opened = try? FileHandle(forWritingTo: candidate) else {
+                continue
+            }
+            lock.lock()
+            try? handle?.close()
+            handle = opened
+            lock.unlock()
+
+            Log.sink = { message in LogFile.write(message) }
+            return candidate
+        }
+        return nil
+    }
+
+    /// The primary file first, then one per additional instance.
+    private static func candidates(basename: String, in directory: URL) -> [URL] {
+        [directory.appendingPathComponent(name(basename))]
+            + (2...instanceLimit).map {
+                directory.appendingPathComponent("\(basename)-\($0).log")
+            }
+    }
+
+    /// Moves this run's file aside, keeping one generation.
+    ///
+    /// Staged through a third name so a rotation that cannot happen — another
+    /// instance is holding the file — leaves the previous generation where it
+    /// is. Deleting it first and then discovering the move fails threw away the
+    /// run before it for nothing, which is the opposite of the point.
+    private static func rotate(basename: String, in directory: URL, manager: FileManager) {
+        let file = directory.appendingPathComponent(name(basename))
+        guard manager.fileExists(atPath: file.path) else { return }
         let previous = directory.appendingPathComponent(previousName(basename))
-        if manager.fileExists(atPath: file.path) {
-            try? manager.removeItem(at: previous)
-            try? manager.moveItem(at: file, to: previous)
+        let staging = directory.appendingPathComponent("\(basename).log.rotating")
+        try? manager.removeItem(at: staging)
+        do {
+            try manager.moveItem(at: file, to: staging)
+        } catch {
+            return
         }
-        guard manager.createFile(atPath: file.path, contents: nil),
-              let opened = try? FileHandle(forWritingTo: file) else {
-            return nil
-        }
-
-        lock.lock()
-        try? handle?.close()
-        handle = opened
-        lock.unlock()
-
-        Log.sink = { message in LogFile.write(message) }
-        return file
+        try? manager.removeItem(at: previous)
+        try? manager.moveItem(at: staging, to: previous)
     }
 
     public static func write(_ message: String) {

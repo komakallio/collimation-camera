@@ -203,8 +203,14 @@ public final class CollimationEngine {
     public var canConnectMount: Bool { (isMountConnected || !serialPorts.isEmpty) && !isMountBusy }
     public var canSelectSerialPort: Bool { !isMountConnected && !isMountBusy }
     public var canRefreshSerialPorts: Bool { canSelectSerialPort }
+    /// Disconnect is always allowed; only connecting waits for a move to end.
+    ///
+    /// This is one toggle, so gating both halves on `!isFilterWheelMoving` left
+    /// no way out of a move that never finished: the picker, Refresh and this
+    /// button were all disabled together and quitting was the only recovery.
+    /// Pulling the wheel out from under a move is the user's business.
     public var canConnectFilterWheel: Bool {
-        (isFilterWheelConnected || !filterWheels.isEmpty) && !isFilterWheelMoving
+        isFilterWheelConnected || (!filterWheels.isEmpty && !isFilterWheelMoving)
     }
     public var canSelectFilterWheel: Bool { !isFilterWheelConnected && !isFilterWheelMoving }
     public var canRefreshFilterWheels: Bool { canSelectFilterWheel }
@@ -1001,6 +1007,12 @@ public final class CollimationEngine {
                     return try wheel.snapshot()
                 }.value
                 try Task.checkCancellation()
+                // Clear the flag before the guard, not after. It gates the
+                // filter picker, Refresh, and the wheel picker, so a return
+                // that leaves it set kills the whole panel until the app is
+                // quit — see `canConnectFilterWheel`, which now always allows
+                // a disconnect for the same reason.
+                isFilterWheelMoving = false
                 guard wheel.isConnected else { return }
                 applyFilterSnapshot(snapshot)
             } catch is CancellationError {
@@ -1048,6 +1060,9 @@ public final class CollimationEngine {
                     return try wheel.snapshot()
                 }.value
                 try Task.checkCancellation()
+                // As in `connectFilterWheel`: clearing this after the guard
+                // meant a wheel that went away mid-move left the panel dead.
+                isFilterWheelMoving = false
                 guard wheel.isConnected else { return }
                 applyFilterSnapshot(snapshot)
             } catch is CancellationError {
@@ -1154,6 +1169,7 @@ public final class CollimationEngine {
             endMountWork("Calibration cancelled")
         } catch {
             endMountWork("Calibration failed")
+            noteMountFailure(error)
             presentError(error)
         }
     }
@@ -1176,6 +1192,7 @@ public final class CollimationEngine {
             endMountWork("Centering cancelled")
         } catch {
             endMountWork("Centering failed")
+            noteMountFailure(error)
             presentError(error)
         }
     }
@@ -1191,6 +1208,33 @@ public final class CollimationEngine {
         if useFullFrame {
             showFullFramePreview()
         }
+    }
+
+    /// Drops the mount when a failed command was the cable rather than the
+    /// command.
+    ///
+    /// The camera defect, one subsystem over. Nothing reported that the mount
+    /// had gone: `isMountConnected` was written only by connect and disconnect,
+    /// so after an EQDIR unplug the button went on saying Disconnect, Calibrate
+    /// and Center stayed enabled, and each one failed a few seconds later with
+    /// a timeout. `EQ6Mount.isConnected` is no help — it is `proto != nil &&
+    /// port.isOpen`, and a Windows COM handle stays valid after the device is
+    /// removed — so, as with the camera, re-enumerating is the only thing that
+    /// can tell a vanished mount from a slow one.
+    private func noteMountFailure(_ error: Error) {
+        guard isMountConnected else { return }
+        // A star that was not found, a calibration that was too small, and a
+        // cancellation all say nothing about the cable.
+        switch error {
+        case MountError.timeout, MountError.protocolFailure, MountError.notConnected:
+            break
+        default:
+            return
+        }
+        guard !serialPortPaths().contains(selectedSerialPort) else { return }
+        Log.info("mount port \(selectedSerialPort) is gone; disconnecting")
+        disconnectMount()
+        mountStatus = "Mount disconnected — check the cable"
     }
 
     private func endMountWork(_ status: String) {

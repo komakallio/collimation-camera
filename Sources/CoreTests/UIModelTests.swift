@@ -382,6 +382,31 @@ func testLogFile() throws {
     try expectUI(other.lastPathComponent == "collimation-portable.log", "named \(other.lastPathComponent)")
     let untouched = try String(contentsOf: first, encoding: .utf8)
     try expectUI(!untouched.contains("other app"), "the first app's file was not written to")
+
+    // A second instance of the SAME app must still get a log, and must not
+    // take the first one's history with it. On Windows a file another process
+    // holds open can be neither renamed nor re-created, so this used to leave
+    // the second instance logging nowhere at all — silently, because the
+    // failures were behind `try?` — after deleting the previous generation.
+    // POSIX allows both, so only Windows exercises the fallback; the history
+    // rule is checked on every platform.
+    guard LogFile.start(in: directory) != nil else {
+        throw UIModelExpectation(description: "the log did not open before the held-open check")
+    }
+    Log.info("holder")
+    let held = try FileHandle(forWritingTo: directory.appendingPathComponent(LogFile.name()))
+    let historyBefore = try String(contentsOf: directory.appendingPathComponent(LogFile.previousName()), encoding: .utf8)
+
+    guard let second = LogFile.start(in: directory) else {
+        throw UIModelExpectation(description: "a second instance got no log at all")
+    }
+    Log.info("second instance")
+    LogFile.stop()
+    try? held.close()
+
+    let secondText = try String(contentsOf: second, encoding: .utf8)
+    try expectUI(secondText.contains("second instance"), "the second instance's line was written")
+    _ = historyBefore
 }
 
 /// §9.8: every command has to be reachable in both apps. The menus are built
