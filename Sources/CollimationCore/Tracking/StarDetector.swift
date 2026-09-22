@@ -47,7 +47,15 @@ public struct StarDetector: Sendable {
     public var minArea: Int
     public var maxAreaFraction: Double
 
-    public init(kSigma: Double = 5.0, minArea: Int = 20, maxAreaFraction: Double = 0.6) {
+    /// Reject only a blob that is essentially the whole frame (washed-out sky).
+    /// A well-exposed collimation donut can fill most of the 512 crop.
+    public static let defaultMaxAreaFraction = 0.95
+
+    /// Live-view moment window. Matches the 512 crop so a large donut is not
+    /// clipped when the seed is off-centre. GPUCentroid uses the same value.
+    public static let momentCentroidHalfWindow = CaptureLayout.displayCropSize
+
+    public init(kSigma: Double = 5.0, minArea: Int = 20, maxAreaFraction: Double = defaultMaxAreaFraction) {
         self.kSigma = kSigma
         self.minArea = minArea
         self.maxAreaFraction = maxAreaFraction
@@ -74,7 +82,7 @@ public struct StarDetector: Sendable {
     }
 
     private static func seedHalfWindow(width: Int, height: Int) -> Int {
-        max(384, min(width, height) / 2)
+        max(momentCentroidHalfWindow, min(width, height) / 2)
     }
 
     private func detectLargeFrame(_ frame: Frame) -> StarDetection? {
@@ -107,11 +115,15 @@ public struct StarDetector: Sendable {
         }
         samples.sort()
         guard !samples.isEmpty else { return (0, 1) }
-        let median = Double(samples[samples.count / 2])
-        let p16 = Double(samples[max(0, samples.count * 16 / 100)])
-        let p84 = Double(samples[min(samples.count - 1, samples.count * 84 / 100)])
-        let sigma = max(12.0, (p84 - p16) / 2.0)
-        return (median, sigma)
+        let n = samples.count
+        let p05 = Double(samples[max(0, n * 5 / 100)])
+        let p16 = Double(samples[max(0, n * 16 / 100)])
+        // Sky floor, not the sample median: a defocused donut can cover most of
+        // the 512 crop, which would put p50 on the annulus and push k·σ above
+        // the star. p16 stays on the sky while ~15% of the frame is still dark.
+        // Sigma from the lower tail so the bright ring cannot inflate it.
+        let sigma = max(12.0, (p16 - p05) * 1.55)
+        return (p16, sigma)
     }
 
     private func detectRegion(
@@ -290,7 +302,7 @@ public struct StarDetector: Sendable {
     public func momentCentroid(
         in frame: Frame,
         around seed: SIMD2<Double>?,
-        halfWindow: Int = 256
+        halfWindow: Int = momentCentroidHalfWindow
     ) -> SIMD2<Double>? {
         let width = frame.width
         let height = frame.height

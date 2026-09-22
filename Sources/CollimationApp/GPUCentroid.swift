@@ -1,3 +1,4 @@
+import CollimationCore
 import Foundation
 import Metal
 import simd
@@ -9,7 +10,7 @@ import simd
 /// `replace`, so the reduction sees the texels about to be presented. A second
 /// queue raced the previous draw and panned with a one-frame-late centroid.
 final class GPUCentroid {
-    static let halfWindow = 256
+    static let halfWindow = StarDetector.momentCentroidHalfWindow
 
     private let device: MTLDevice
     private let peakPipeline: MTLComputePipelineState

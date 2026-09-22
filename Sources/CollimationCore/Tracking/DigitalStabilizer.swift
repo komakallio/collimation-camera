@@ -87,10 +87,10 @@ public struct DigitalStabilizer: Equatable, Sendable {
 /// centroid on the GPU from the texture about to be drawn; tests and fallback
 /// use `process`, which does the same reduction on the CPU.
 public final class StabilizationController: @unchecked Sendable {
-    /// Drop a measurement that jumped this far from the last sensor seed. The
-    /// tracking ROI recenters at ~15% of the frame; beyond that the blob is not
-    /// the same star (or the crop changed and the seed is stale).
-    public static let maxLockDriftPixels = 96.0
+    /// Drop a measurement that jumped this far from the last sensor seed. A
+    /// large donut’s moment can wander more than a tight core; half the 512
+    /// crop still rejects a hop to a different blob.
+    public static let maxLockDriftPixels = 256.0
 
     private let lock = NSLock()
     private var enabled = false

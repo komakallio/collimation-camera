@@ -14,6 +14,7 @@ struct CoreTests {
         failures += run("arcsinh stretch", testArcsinhStretch)
         failures += run("star detection", testStarDetection)
         failures += run("large donut detection", testLargeDonutDetection)
+        failures += run("crop-filling donut detection", testCropFillingDonutDetection)
         failures += run("moment centroid", testMomentCentroid)
         failures += run("empty sky", testEmptySky)
         failures += run("star fwhm", testStarFWHM)
@@ -247,6 +248,50 @@ private func testLargeDonutDetection() throws {
         throw Expectation(description: "expected seeded large donut")
     }
     try expect(abs(seeded.centroid.x - center.x) < 20, "seeded x \(seeded.centroid.x)")
+}
+
+private func testCropFillingDonutDetection() throws {
+    // A well-exposed donut that fills the live 512 crop used to exceed
+    // maxAreaFraction (0.6) and drop tracking, which stops stabilization.
+    let size = CaptureLayout.displayCropSize
+    let center = SIMD2(Double(size) / 2, Double(size) / 2)
+    let scene = DonutScene(
+        sensorWidth: size,
+        sensorHeight: size,
+        starPosition: center,
+        outerRadius: 240,
+        innerRadius: 40,
+        comaOffset: .zero,
+        intensityAsymmetry: 0,
+        peakADU: 42_000,
+        backgroundADU: 900,
+        noiseSigma: 12,
+        seeingJitter: 0
+    )
+    var rng = RNG(seed: 13)
+    let frame = DonutRenderer(scene: scene).render(
+        roi: ROI(x: 0, y: 0, width: size, height: size),
+        jitter: .zero,
+        rng: &rng
+    )
+    guard let detection = StarDetector().detect(in: frame) else {
+        throw Expectation(description: "expected crop-filling donut")
+    }
+    try expect(abs(detection.centroid.x - center.x) < 25, "x \(detection.centroid.x)")
+    try expect(abs(detection.centroid.y - center.y) < 25, "y \(detection.centroid.y)")
+    try expect(detection.area > Int(Double(size * size) * 0.6), "area \(detection.area) should exceed the old 60% cap")
+
+    let controller = StabilizationController()
+    controller.configure(
+        enabled: true,
+        tracking: .tracking,
+        viewWidth: Double(size),
+        viewHeight: Double(size),
+        zoom: 1
+    )
+    let pose = controller.process(frame)
+    try expect(pose.centroid != nil, "stabilize a crop-filling donut")
+    try expect(pose.lockNormalized != nil, "keep a lock on a crop-filling donut")
 }
 
 private func testMomentCentroid() throws {
