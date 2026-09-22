@@ -116,6 +116,10 @@ With an EQDIR or SynScan cable:
 - The log carries every exchange as `EQ6 TX` and `EQ6 RX` lines. Keep them.
 - **Calibrate**, then **Center** on an artificial star. Compare the calibration
   numbers with the macOS ones for the same mount.
+- From a centred star, run **Save Constellation**. The first tile must remain
+  at the sensor centre; then check all eight outer positions. The log records
+  the full-frame readout, measured centroid, target and each correction. A
+  changed detection during the readout switch must stop before a new slew.
 - Unplug the camera during Center: the mount work should end with the
   disconnect error rather than `noStar` four seconds later, the mount should
   stay connected, and Calibrate should work again after the camera reconnects.

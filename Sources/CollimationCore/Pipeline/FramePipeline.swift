@@ -8,6 +8,7 @@ struct ProcessedFrame: Sendable {
     var starProfile: StarIntensityProfile?
     var overlay: OverlayModel
     var displayFrame: Frame
+    var captureROI: ROI
 }
 
 final class FramePipeline: @unchecked Sendable {
@@ -203,7 +204,8 @@ final class FramePipeline: @unchecked Sendable {
             fwhm: fwhm,
             starProfile: starProfile,
             overlay: overlay,
-            displayFrame: display
+            displayFrame: display,
+            captureROI: frame.roi
         )
     }
 }
