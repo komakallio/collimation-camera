@@ -39,7 +39,9 @@ struct CoreTests {
         failures += run("software crop", testSoftwareCrop)
         failures += run("readout fps cap", testReadoutFPSCap)
         failures += run("stack capture buffer", testStackCaptureBuffer)
+        failures += run("constellation stack crops at sensor edges", testConstellationStackCrops)
         failures += run("constellation layout", testConstellationLayout)
+        failures += run("mount frame switch gate", testMountFrameGate)
         failures += run("sensor center overlay", testSensorCenterOverlay)
         failures += run("auto exposure", testAutoExposure)
         failures += run("star quality from peak", testStarQuality)
@@ -55,6 +57,7 @@ struct CoreTests {
         failures += run("guide solve orthogonal", testGuideSolveOrthogonal)
         failures += run("guide solve rotated", testGuideSolveRotated)
         failures += run("guide solve singular", testGuideSolveSingular)
+        failures += run("guide rejects recorded degenerate calibration", testRecordedDegenerateCalibration)
         failures += run("guide pulse planner", testGuidePulsePlanner)
         failures += run("guide center threshold", testGuideCenterThreshold)
         failures += run("lx200 pulse command", testLX200PulseCommand)
@@ -1436,6 +1439,56 @@ private func starBlobFrame(at center: SIMD2<Double>, width: Int = 128, height: I
     )
 }
 
+private func testRecordedDegenerateCalibration() throws {
+    // Actual failed run: the star was only 51 px from centre, but the nearly
+    // parallel axes and ~1087 px return residuals produced repeated reversals.
+    let recorded = GuideCalibration(
+        eastRate: SIMD2(0.03223055677803442, -0.36301122945310543),
+        northRate: SIMD2(-0.006955926241831852, -0.36268507554454543),
+        sampleDurationMs: 3000,
+        raBacklashPixels: 1086.573817856865,
+        decBacklashPixels: 1087.8881621433718
+    )
+    try expect(!recorded.isValid, "reject the recorded nearly parallel axes")
+    try expect(recorded.pulses(toMoveStarBy: SIMD2(-50.809, 4.165)) == nil,
+               "bad calibration must not produce motor commands")
+    let restored = try JSONDecoder().decode(GuideCalibration.self, from: JSONEncoder().encode(recorded))
+    try expect(!restored.isValid, "saved bad calibration remains unusable after restart")
+
+    let calibration = GuideCalibration(
+        eastRate: SIMD2(0.072, -0.007), northRate: SIMD2(-0.007, -0.071),
+        sampleDurationMs: 3000, raBacklashPixels: 1087, decBacklashPixels: 1087
+    )
+    try expect(calibration.isValid, "earlier well-separated measured axes remain usable")
+    // With an overestimated backlash, follow the actual measured position at
+    // every iteration. Repeated compensation used to sustain an oscillation.
+    var position = SIMD2<Double>(51, 60)
+    var directions = AxisDirectionMemory(ra: .east, dec: .south)
+    var raSign: Double?
+    var decSign: Double?
+    var count = 0
+    while !MountGuide.isCentered(errorPixels: position), count < 10 {
+        guard let plan = AxisCentering.plan(calibration: calibration, movingStarBy: -position,
+                                           lastDirections: directions, lastRASign: raSign, lastDecSign: decSign),
+              let axes = calibration.signedAxisPixels(toMoveStarBy: -position) else { break }
+        raSign = axes.ra
+        decSign = axes.dec
+        if let ra = plan.ra {
+            let sign = ra.direction == .east ? 1.0 : -1.0
+            position += calibration.eastRate * (sign * ra.siderealMultiple * Double(ra.durationMs) * 1.15)
+            directions.record(ra.direction)
+        }
+        if let dec = plan.dec {
+            let sign = dec.direction == .north ? 1.0 : -1.0
+            position += calibration.northRate * (sign * dec.siderealMultiple * Double(dec.durationMs) * 1.15)
+            directions.record(dec.direction)
+        }
+        try expect(MountGuide.errorLength(position) < 200, "small correction must stay near the target")
+        count += 1
+    }
+    try expect(MountGuide.isCentered(errorPixels: position), "overestimated backlash must converge, got \(position)")
+}
+
 private func testGuideSolveOrthogonal() throws {
     let calibration = GuideCalibration(
         eastRate: SIMD2(0.01, 0),
@@ -1736,7 +1789,7 @@ private func testAxisCentering() throws {
     try expect(first?.nudge.ra == .east && first?.nudge.dec == nil, "single-axis ra nudge")
     let reverse = AxisCentering.plan(axis: .ra, remainingPixels: -90, pixelsPerMsAt1x: 0.01, lastSign: 800)
     try expect(reverse?.direction == .west && reverse?.overshot == true, "overshoot reverse")
-    try expect(abs((reverse?.siderealMultiple ?? 0) - 8.1) < 1e-9, "90% of 90 px")
+    try expect(abs((reverse?.siderealMultiple ?? 0) - 4.05) < 1e-9, "overshoot halves the correction")
     try expect(reverse?.nudge.dec == nil, "still only ra")
     let decPlan = AxisCentering.plan(axis: .dec, remainingPixels: 200, pixelsPerMsAt1x: 0.01)
     try expect(decPlan?.direction == .north && decPlan?.nudge.ra == nil, "single-axis dec")
@@ -2108,6 +2161,50 @@ private func testFrameStacker() throws {
     }
 }
 
+private func testConstellationStackCrops() throws {
+    let positions = ConstellationCapture.positions(sensorWidth: 3856, sensorHeight: 2180)
+    var tiles: [(row: Int, column: Int, image: StackedImage)] = []
+    for position in positions {
+        let roi = Alignment.centeredROI(around: position.sensorPoint, size: 2048,
+                                        sensorWidth: 3856, sensorHeight: 2180)
+        let point = roi.framePixel(fromSensorPoint: position.sensorPoint)
+        let x = Int(point.x.rounded()), y = Int(point.y.rounded())
+        var pixels = [UInt16](repeating: 200, count: roi.width * roi.height)
+        for sy in (y - 4)...(y + 4) {
+            for sx in (x - 4)...(x + 4) { pixels[sy * roi.width + sx] = 30_000 }
+        }
+        let frame = Frame(width: roi.width, height: roi.height, pixels: pixels, roi: roi)
+        if position.row == 2 {
+            try expect(CaptureLayout.stackingFrame(from: frame).pixels.max() == 200,
+                       "fixture reproduces a blank centre crop for \(position.label)")
+        }
+        let capture = StackCaptureBuffer()
+        capture.begin(target: 1, sensorCentroid: position.sensorPoint, expectedROI: roi)
+        let stale = Frame(width: 1, height: 1, pixels: [200],
+                          roi: ROI(x: 0, y: 0, width: 1, height: 1, binning: 4))
+        try expect(capture.offer(stale) == 0, "ignore old readout for \(position.label)")
+        capture.offer(frame)
+        guard let frames = capture.takeIfComplete(), let crop = frames.first else {
+            try expect(false, "missing capture for \(position.label)")
+            return
+        }
+        try expect(crop.width == 256 && crop.height == 256, "fixed tile dimensions")
+        let center = crop.roi.framePixel(fromSensorPoint: position.sensorPoint)
+        try expect(abs(center.x - 128) <= 1 && abs(center.y - 128) <= 1,
+                   "star centred even when hardware ROI is clamped: \(position.label) \(center)")
+        let stack = try FrameStacker.average(frames, seed: CaptureLayout.stackingSeed())
+        try expect(stack.pixels.max() == 30_000, "star preserved in \(position.label)")
+        tiles.append((position.row, position.column, stack))
+    }
+    let mosaic = try ConstellationCapture.mosaic(tiles)
+    for row in 0..<3 {
+        for column in 0..<3 {
+            let center = (row * 256 + 128) * mosaic.width + column * 256 + 128
+            try expect(mosaic.pixels[center] == 30_000, "star in mosaic tile \(row),\(column)")
+        }
+    }
+}
+
 private func testStackCaptureBuffer() throws {
     let buffer = StackCaptureBuffer()
     try expect(!buffer.isCapturing, "idle")
@@ -2163,6 +2260,46 @@ private func testMonoTIFFFloat32() throws {
 private func tiffShortValue(_ data: Data, ifdOffset: Int, entry: Int) -> UInt16 {
     let o = ifdOffset + 2 + entry * 12 + 8
     return UInt16(data[o]) | UInt16(data[o + 1]) << 8
+}
+
+private func testMountFrameGate() throws {
+    let full = ROI(x: 0, y: 0, width: 3856, height: 2180)
+    let reference = SIMD2<Double>(1947, 1098)
+    let detection = StarDetection(centroid: reference, peak: 50_000, flux: 50_000,
+                                  area: 40, background: 800, sigma: 20)
+    var status = TrackingStatus(state: .tracking, detection: detection, centroidOnSensor: reference)
+    var gate = MountFrameGate(expectedROI: full, reference: reference)
+    // Two published frames are insufficient when they still use the old crop.
+    let crop = ROI(x: 1691, y: 842, width: 512, height: 512)
+    for _ in 0..<3 {
+        let result = try gate.observe(roi: crop, tracking: status)
+        try expect(result == nil, "old crop must not authorise a slew")
+    }
+    let first = try gate.observe(roi: full, tracking: status)
+    try expect(first == nil, "wait for another full-frame detection")
+    status.detection = nil
+    let stale = try gate.observe(roi: full, tracking: status)
+    try expect(stale == nil, "cached centroid without a detection must not authorise a slew")
+    status.detection = detection
+    let restarted = try gate.observe(roi: full, tracking: status)
+    try expect(restarted == nil, "missing detection resets the count")
+    let ready = try gate.observe(roi: full, tracking: status)
+    try expect(ready == reference, "same star in two fresh full frames is ready")
+
+    var wrongStar = MountFrameGate(expectedROI: full, reference: reference)
+    status.centroidOnSensor = reference / 4
+    do {
+        _ = try wrongStar.observe(roi: full, tracking: status)
+        try expect(false, "a binning-scale position jump must stop before motion")
+    } catch MountError.starChangedDuringFrameSwitch {}
+
+    var invalid = MountFrameGate(expectedROI: full, reference: nil)
+    status.centroidOnSensor = SIMD2(.nan, 100)
+    let nonFinite = try invalid.observe(roi: full, tracking: status)
+    try expect(nonFinite == nil, "reject non-finite centroid")
+    status.centroidOnSensor = SIMD2(4000, 100)
+    let outside = try invalid.observe(roi: full, tracking: status)
+    try expect(outside == nil, "reject centroid outside the capture")
 }
 
 private func testConstellationLayout() throws {
