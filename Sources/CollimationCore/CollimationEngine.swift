@@ -121,6 +121,7 @@ public final class CollimationEngine {
     public var starProfile: StarIntensityProfile?
     public var overlay = OverlayModel()
     public var frameSequence: UInt64 = 0
+    @ObservationIgnored private var captureROI: ROI?
     public var fps: Double = 0
 
     public var serialPorts: [String] = []
@@ -516,7 +517,6 @@ public final class CollimationEngine {
             try beginMountWork(
                 "Constellation 1/\(steps)…",
                 holdROI: true,
-                useFullFrame: true,
                 work: .centering
             )
             startedMount = true
@@ -531,12 +531,13 @@ public final class CollimationEngine {
                 statusText = "Constellation \(step)/\(steps) — moving to \(position.label)…"
                 mountStatus = statusText
 
-                if index == 0 {
-                    _ = try await waitForCentroid(minNewFrames: 2, timeout: 12)
-                } else {
-                    try await enterFullFrame()
-                }
+                try await enterFullFrame()
+                Log.info("constellation \(step)/\(steps) \(position.label): target \(position.sensorPoint), sensor \(sensorWidth)x\(sensorHeight)")
                 try await moveStar(to: position.sensorPoint, calibration: calibration)
+                guard let reached = tracking.centroidOnSensor,
+                      MountGuide.isCentered(errorPixels: reached - position.sensorPoint) else {
+                    throw MountError.targetNotReached
+                }
                 let around = tracking.centroidOnSensor ?? position.sensorPoint
                 try await prepareStackWindow(around: around)
 
@@ -589,8 +590,13 @@ public final class CollimationEngine {
         frameCount: Int,
         onProgress: @escaping (Int, Int) -> Void
     ) async throws -> StackedImage {
+        guard tracking.state == .tracking, let sensor = tracking.centroidOnSensor,
+              let roi = captureROI, roi.contains(sensorPoint: sensor) else {
+            throw MountError.noStar
+        }
         coalescer.cancel()
-        stackCapture.begin(target: frameCount)
+        Log.info("stack capture: star \(sensor), camera ROI \(roi), frames \(frameCount)")
+        stackCapture.begin(target: frameCount, sensorCentroid: sensor, expectedROI: roi)
         session.requestFrameLimit(CaptureLayout.unlimitedReadoutFPS)
         defer {
             stackCapture.cancel()
@@ -599,6 +605,9 @@ public final class CollimationEngine {
         onProgress(0, frameCount)
         let frames = try await collectStackedFrames(target: frameCount, onProgress: onProgress)
         try Task.checkCancellation()
+        if let first = frames.first {
+            Log.info("stack crop: \(first.roi), star pixel \(first.roi.framePixel(fromSensorPoint: sensor))")
+        }
         session.requestFrameLimit(CaptureLayout.maxReadoutFPS)
         let seed = CaptureLayout.stackingSeed()
         return try await Task.detached(priority: .userInitiated) {
@@ -875,7 +884,7 @@ public final class CollimationEngine {
         frameSlot.store(displayed)
         _ = fpsMeter.tick()
         if stackCapture.isCapturing {
-            stackCapture.offer(CaptureLayout.stackingFrame(from: displayed))
+            stackCapture.offer(frame)
         }
         if !stackCapture.isCapturing {
             coalescer.submit(frame)
@@ -906,6 +915,7 @@ public final class CollimationEngine {
         // to be here.
         guard isConnected else { return }
         frameSequence &+= 1
+        captureROI = processed.captureROI
         fps = fpsMeter.current
         histogram = processed.histogram
         tracking = processed.tracking
@@ -1151,10 +1161,15 @@ public final class CollimationEngine {
     private func runCalibration() async {
         do {
             try beginMountWork("Calibrating — measuring east…", holdROI: true, work: .calibrating)
+            // A calibration pulse can leave the 512 analysis crop too. Use the
+            // same verified full-sensor capture as a centering move.
+            guideCalibration = nil
+            try await enterFullFrame()
             let duration = MountGuide.calibrationPulseMs
             let beforeEast = try await waitForCentroid()
             try await sendPulse(.east, milliseconds: duration)
             let afterEast = try await waitForSettledCentroid()
+            Log.info("calibration east: before \(beforeEast), after \(afterEast), duration \(duration) ms")
             let eastRate = MountGuide.rate(before: beforeEast, after: afterEast, durationMs: Double(duration))
             if hypot(eastRate.x, eastRate.y) * Double(duration) < MountGuide.minCalibrationMovePixels {
                 throw MountError.calibrationTooSmall("east")
@@ -1163,6 +1178,7 @@ public final class CollimationEngine {
             mountStatus = "Calibrating — returning from east…"
             try await sendPulse(.west, milliseconds: duration)
             let afterWest = try await waitForSettledCentroid()
+            Log.info("calibration west return: \(afterWest)")
             let raBacklash = MountGuide.backlashPixels(
                 start: beforeEast,
                 afterOutbound: afterEast,
@@ -1173,6 +1189,7 @@ public final class CollimationEngine {
             let beforeNorth = try await waitForCentroid()
             try await sendPulse(.north, milliseconds: duration)
             let afterNorth = try await waitForSettledCentroid()
+            Log.info("calibration north: before \(beforeNorth), after \(afterNorth), duration \(duration) ms")
             let northRate = MountGuide.rate(before: beforeNorth, after: afterNorth, durationMs: Double(duration))
             if hypot(northRate.x, northRate.y) * Double(duration) < MountGuide.minCalibrationMovePixels {
                 throw MountError.calibrationTooSmall("north")
@@ -1181,6 +1198,7 @@ public final class CollimationEngine {
             mountStatus = "Calibrating — returning from north…"
             try await sendPulse(.south, milliseconds: duration)
             let afterSouth = try await waitForSettledCentroid()
+            Log.info("calibration south return: \(afterSouth)")
             let decBacklash = MountGuide.backlashPixels(
                 start: beforeNorth,
                 afterOutbound: afterNorth,
@@ -1194,7 +1212,8 @@ public final class CollimationEngine {
                 raBacklashPixels: raBacklash,
                 decBacklashPixels: decBacklash
             )
-            guard calibration.isValid else { throw MountError.calibrationTooSmall("mount axes") }
+            Log.info("calibration result: east \(eastRate), north \(northRate), axis separation sine \(calibration.axisSeparationSine), backlash RA \(raBacklash) Dec \(decBacklash)")
+            guard calibration.isValid else { throw MountError.calibrationAxesUnreliable }
             try GuideCalibrationStore.save(calibration)
             guideCalibration = calibration
             await endMountWork(Self.calibratedStatus(calibration))
@@ -1212,7 +1231,8 @@ public final class CollimationEngine {
             guard let calibration = guideCalibration, calibration.isValid else {
                 throw MountError.notCalibrated
             }
-            try beginMountWork("Centering on sensor…", holdROI: true, useFullFrame: true, work: .centering)
+            try beginMountWork("Centering on sensor…", holdROI: true, work: .centering)
+            try await enterFullFrame()
             try await moveStar(to: sensorCenter(), calibration: calibration)
             let centroid = try await waitForCentroid()
             let lastError = MountGuide.errorLength(centroid - sensorCenter())
@@ -1230,7 +1250,7 @@ public final class CollimationEngine {
         }
     }
 
-    private func beginMountWork(_ status: String, holdROI: Bool, useFullFrame: Bool = false, work: MountWork) throws {
+    private func beginMountWork(_ status: String, holdROI: Bool, work: MountWork) throws {
         guard isMountConnected else { throw MountError.notConnected }
         guard isConnected else { throw CameraError.notConnected }
         isMountBusy = true
@@ -1238,9 +1258,6 @@ public final class CollimationEngine {
         mountStatus = status
         mountHoldsROI = holdROI
         applyPipelineConfig()
-        if useFullFrame {
-            showFullFramePreview()
-        }
     }
 
     /// Drops the mount when a failed command was the cable rather than the
@@ -1339,26 +1356,28 @@ public final class CollimationEngine {
         applyTrackingWindow(around: center)
     }
 
-    private func applyTrackingWindow(around sensor: SIMD2<Double>) {
+    @discardableResult
+    private func applyTrackingWindow(around sensor: SIMD2<Double>) -> ROI {
         showingFullFramePreview = false
         restoreZoomAfterFullFrame()
         coalescer.cancel()
         pipeline.dropInFlight()
         softwareCrop.setHoldDisabled(false)
         softwareCrop.update(enabled: true, sensorCentroid: sensor)
-        session.requestROI(
-            Alignment.centeredROI(
-                around: sensor,
-                size: CaptureLayout.trackingHardwareSize,
-                sensorWidth: sensorWidth,
-                sensorHeight: sensorHeight,
-                binning: 1,
-                alignment: roiAlignment
-            )
+        let roi = Alignment.centeredROI(
+            around: sensor,
+            size: CaptureLayout.trackingHardwareSize,
+            sensorWidth: sensorWidth,
+            sensorHeight: sensorHeight,
+            binning: 1,
+            alignment: roiAlignment
         )
+        session.requestROI(roi)
+        return roi
     }
 
-    private func showFullFramePreview() {
+    @discardableResult
+    private func showFullFramePreview() -> ROI {
         coalescer.cancel()
         pipeline.dropInFlight()
         softwareCrop.setHoldDisabled(true)
@@ -1366,14 +1385,13 @@ public final class CollimationEngine {
         if zoomBeforeFullFrame == nil {
             zoomBeforeFullFrame = zoom
         }
-        session.requestROI(
-            Alignment.fullFrameROI(
-                sensorWidth: sensorWidth,
-                sensorHeight: sensorHeight,
-                binning: 1,
-                alignment: roiAlignment
-            )
+        let roi = Alignment.fullFrameROI(
+            sensorWidth: sensorWidth,
+            sensorHeight: sensorHeight,
+            binning: 1,
+            alignment: roiAlignment
         )
+        session.requestROI(roi)
         zoom = clampedZoom(ImageLayout.fitZoom(
             imageWidth: sensorWidth,
             imageHeight: sensorHeight,
@@ -1381,6 +1399,7 @@ public final class CollimationEngine {
             viewHeight: viewHeight
         ))
         updateStabilization()
+        return roi
     }
 
     private func restoreZoomAfterFullFrame() {
@@ -1391,17 +1410,43 @@ public final class CollimationEngine {
     }
 
     private func enterFullFrame() async throws {
-        showFullFramePreview()
-        _ = try await waitForCentroid(minNewFrames: 2, timeout: 12)
+        let reference = tracking.state == .tracking ? tracking.centroidOnSensor : nil
+        let expected = showFullFramePreview()
+        try await waitForCaptureWindow(expected, reference: reference)
+    }
+
+    private func waitForCaptureWindow(_ expected: ROI, reference: SIMD2<Double>?) async throws {
+        var gate = MountFrameGate(expectedROI: expected, reference: reference)
+        var sequence = frameSequence
+        let deadline = Date().addingTimeInterval(12)
+        Log.info("mount capture request \(expected), previous centroid \(String(describing: reference))")
+        while Date() < deadline {
+            try Task.checkCancellation()
+            if frameSequence != sequence, let roi = captureROI {
+                sequence = frameSequence
+                do {
+                    if let centroid = try gate.observe(roi: roi, tracking: tracking) {
+                        Log.info("mount capture ready: centroid \(centroid), ROI \(roi)")
+                        return
+                    }
+                } catch {
+                    Log.info("mount frame switch rejected: centroid \(String(describing: tracking.centroidOnSensor)), ROI \(roi)")
+                    throw error
+                }
+            }
+            try await Task.sleep(nanoseconds: 40_000_000)
+        }
+        throw MountError.noStar
     }
 
     private func prepareStackWindow(around sensor: SIMD2<Double>) async throws {
-        applyTrackingWindow(around: sensor)
-        _ = try await waitForCentroid(minNewFrames: 2, timeout: 12)
+        let roi = applyTrackingWindow(around: sensor)
+        try await waitForCaptureWindow(roi, reference: sensor)
     }
 
     private func moveStar(to target: SIMD2<Double>, calibration: GuideCalibration) async throws {
         var centroid = try await waitForSettledCentroid()
+        Log.info("mount move: centroid \(centroid), target \(target), east \(calibration.eastRate), north \(calibration.northRate), backlash RA \(calibration.raBacklashPixels) Dec \(calibration.decBacklashPixels)")
         if MountGuide.isCentered(errorPixels: centroid - target) { return }
 
         let deadline = Date().addingTimeInterval(90)
@@ -1425,6 +1470,7 @@ public final class CollimationEngine {
                     lastDecSign = pixels.dec
                 }
                 mountStatus = Self.centeringStatus(plan)
+                Log.info("mount correction: centroid \(centroid), target \(target), RA \(String(describing: plan.ra)), Dec \(String(describing: plan.dec))")
                 try await mount.applyNudge(plan.nudge)
                 if let direction = plan.nudge.ra { axisDirections.record(direction) }
                 if let direction = plan.nudge.dec { axisDirections.record(direction) }
@@ -1496,6 +1542,7 @@ public final class CollimationEngine {
             try Task.checkCancellation()
             if frameSequence >= startSeq + UInt64(minNewFrames),
                tracking.state == .tracking,
+               tracking.detection != nil,
                let centroid = tracking.centroidOnSensor
             {
                 return centroid
