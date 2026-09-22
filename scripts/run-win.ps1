@@ -42,17 +42,20 @@ if (-not (Test-Path $exe)) { throw "No such executable: $exe" }
 . "$PSScriptRoot\stage-win.ps1"
 Add-WindowsRuntime -Directory $binDirectory
 
+$applicationArguments = @{}
+if ($Arguments.Count -gt 0) { $applicationArguments.ArgumentList = $Arguments }
+
 if ($Seconds -le 0) {
     # Start-Process, not the call operator: the release build is a GUI
     # subsystem image, and PowerShell does not wait for one of those, so `&`
     # returns at once and leaves $LASTEXITCODE empty. That matters because
     # --snapshot's exit status is a check, not decoration. -NoNewWindow keeps a
     # debug build's output inline.
-    $process = Start-Process -FilePath $exe -WorkingDirectory $root -ArgumentList $Arguments -NoNewWindow -Wait -PassThru
+    $process = Start-Process -FilePath $exe -WorkingDirectory $root @applicationArguments -NoNewWindow -Wait -PassThru
     exit $process.ExitCode
 }
 
-$process = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru -ArgumentList $Arguments
+$process = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru @applicationArguments
 Start-Sleep -Seconds $Seconds
 if (-not $process.HasExited) {
     Stop-Process -Id $process.Id -Force
