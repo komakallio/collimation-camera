@@ -50,6 +50,7 @@ struct CoreTests {
         failures += run("digital stabilize process frame", testDigitalStabilizeProcessFrame)
         failures += run("digital stabilize lost ignores noise", testDigitalStabilizeLostIgnoresNoise)
         failures += run("digital stabilize search then crop", testDigitalStabilizeSearchThenCrop)
+        failures += run("digital stabilize skips full frame", testDigitalStabilizeSkipsFullFrame)
         failures += run("guide solve orthogonal", testGuideSolveOrthogonal)
         failures += run("guide solve rotated", testGuideSolveRotated)
         failures += run("guide solve singular", testGuideSolveSingular)
@@ -887,6 +888,8 @@ private func testSoftwareCrop() throws {
     try expect(!CaptureLayout.isTrackingCapture(search), "full-frame search is not a tracking window")
     let shown = CaptureLayout.displayFrame(from: search, tracking: .searching, centroid: SIMD2(10, 10))
     try expect(shown.width == search.width, "search shows the full frame")
+    try expect(!CaptureLayout.shouldStabilize(search), "do not stabilize a full-frame search")
+    try expect(CaptureLayout.shouldStabilize(display), "stabilize the 512 crop")
 
     var fullPixels = [UInt16](repeating: 0, count: 2000 * 1500)
     fullPixels[800 * 2000 + 1000] = 40000
@@ -902,6 +905,7 @@ private func testSoftwareCrop() throws {
     try expect(local.pixel(x: 256, y: 256) == 40000, "star centered in the centering crop")
     let shownFull = CaptureLayout.displayFrame(from: centering, tracking: .tracking, centroid: SIMD2(1000, 800))
     try expect(shownFull.width == centering.width, "centering preview stays full frame")
+    try expect(!CaptureLayout.shouldStabilize(shownFull), "do not stabilize a centering preview")
     let scan = CaptureLayout.analysisFrame(from: centering, seed: nil)
     try expect(scan.width == centering.width, "search without a seed stays full")
 
@@ -1388,6 +1392,23 @@ private func testDigitalStabilizeSearchThenCrop() throws {
     try expect(abs(layout.pan.x) < 1 && abs(layout.pan.y) < 1, "crop frame is not panned with the search lock")
 }
 
+private func testDigitalStabilizeSkipsFullFrame() throws {
+    let controller = StabilizationController()
+    controller.configure(
+        enabled: true,
+        tracking: .tracking,
+        viewWidth: 800,
+        viewHeight: 600,
+        zoom: 1
+    )
+    let crop = controller.process(starBlobFrame(at: SIMD2(80, 80)))
+    try expect(crop.lockNormalized != nil, "lock on the 512-or-smaller crop")
+
+    let full = controller.process(starBlobFrame(at: SIMD2(400, 300), width: 800, height: 600))
+    try expect(full.lockNormalized == nil && full.centroid == nil, "no pan on a full-sensor frame")
+    try expect(controller.pose().lockNormalized == nil, "drop the crop lock while full frame is shown")
+}
+
 private func starBlobFrame(at center: SIMD2<Double>, width: Int = 128, height: Int = 128) -> Frame {
     var pixels = [UInt16](repeating: 800, count: width * height)
     let cx = Int(center.x.rounded())
@@ -1716,7 +1737,8 @@ private func testAxisCentering() throws {
     try expect(abs((decPlan?.siderealMultiple ?? 0) - 18) < 1e-9, "90% of 200 px")
     try expect(AxisCentering.plan(axis: .ra, remainingPixels: 10, pixelsPerMsAt1x: 0.01) == nil, "axis done")
 
-    try expect(abs(AxisCentering.commandedPixels(remaining: 87, travel: 87) - 78.3) < 1e-9, "90% of remaining")
+    try expect(AxisCentering.maxSlews == 5, "five slews then stop")
+    try expect(abs(AxisCentering.iterationFraction - 0.9) < 1e-12, "90% per slew")
     try expect(abs(AxisCentering.commandedPixels(remaining: 87, travel: 99) - 90.3) < 1e-9, "90% plus takeup")
 
     let both = AxisCentering.plan(calibration: calibration, movingStarBy: SIMD2(87, 50))

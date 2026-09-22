@@ -171,7 +171,7 @@ public final class StabilizationController: @unchecked Sendable {
         viewWidth viewWidthOverride: Double? = nil,
         viewHeight viewHeightOverride: Double? = nil
     ) -> StabilizationPose {
-        let measured = measuresCentroid
+        let measured = measuresCentroid && CaptureLayout.shouldStabilize(frame)
             ? detector.momentCentroid(in: frame, around: measurementSeed(in: frame))
             : nil
         return applyMeasured(
@@ -194,7 +194,7 @@ public final class StabilizationController: @unchecked Sendable {
         let viewWidth = viewWidthOverride ?? self.viewWidth
         let viewHeight = viewHeightOverride ?? self.viewHeight
         let zoom = self.zoom
-        if !enabled || tracking == .searching {
+        if !enabled || tracking == .searching || !CaptureLayout.shouldStabilize(frame) {
             stabilizer.reset()
             lastSensorCentroid = nil
             lastPose = StabilizationPose()

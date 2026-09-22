@@ -84,7 +84,7 @@ final class GPULiveRenderer {
                 pendingUpload = latest.frame
                 lastSequence = latest.sequence
             }
-            if stabilization.isEnabled {
+            if stabilization.isEnabled, CaptureLayout.shouldStabilize(latest.frame) {
                 if latest.sequence != lastStabilizedSequence {
                     let pose = stabilization.process(
                         latest.frame,
@@ -176,14 +176,15 @@ final class GPULiveRenderer {
         // The image is laid out inside the live region in view points, then
         // mapped to the whole swapchain in NDC, so the sidebar does not cover
         // it and the HUD lines up.
+        let allowStab = CaptureLayout.shouldStabilize(width: textureWidth, height: textureHeight)
         let layout = ImageLayout(
             imageWidth: textureWidth,
             imageHeight: textureHeight,
             viewWidth: liveRect.size.x,
             viewHeight: liveRect.size.y,
             zoom: renderState.zoom,
-            lockNormalized: renderState.stabilizeLock,
-            stabilizeCentroid: renderState.stabilizeCentroid
+            lockNormalized: allowStab ? renderState.stabilizeLock : nil,
+            stabilizeCentroid: allowStab ? renderState.stabilizeCentroid : nil
         )
         let image = layout.imageRect
         // The layout is in view points inside the live region; the quad covers

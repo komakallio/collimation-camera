@@ -65,7 +65,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 upload(latest.frame)
                 lastSequence = latest.sequence
             }
-            if stabilization.isEnabled {
+            if stabilization.isEnabled, CaptureLayout.shouldStabilize(latest.frame) {
                 if latest.sequence != lastStabilizedSequence {
                     let pose = stabilizePose(
                         frame: latest.frame,
@@ -104,8 +104,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
         let state = renderState.peek()
         let livePose = stabilization.pose()
-        let lockNormalized = stabilization.isEnabled ? livePose.lockNormalized : nil
-        let stabilizeCentroid = stabilization.isEnabled ? livePose.centroid : nil
+        let allowStab = stabilization.isEnabled
+            && CaptureLayout.shouldStabilize(width: texture.width, height: texture.height)
+        let lockNormalized = allowStab ? livePose.lockNormalized : nil
+        let stabilizeCentroid = allowStab ? livePose.centroid : nil
         let layout = ImageLayout(
             imageWidth: texture.width,
             imageHeight: texture.height,

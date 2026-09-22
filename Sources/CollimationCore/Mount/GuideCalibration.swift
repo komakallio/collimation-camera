@@ -223,6 +223,8 @@ public enum AxisCentering {
     /// Fraction of remaining on-axis error to command in one slew. Leaves a
     /// margin so a slightly fast mount does not overshoot the target.
     public static let iterationFraction = 0.9
+    /// After this many simultaneous RA/Dec moves, leave the star where it is.
+    public static let maxSlews = 5
 
     public struct Plan: Equatable, Sendable {
         public var axis: MountAxis

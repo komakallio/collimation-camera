@@ -170,7 +170,7 @@ public enum CommandCatalog {
             kind: .toggle(get: { $0.stabilize }, set: { $0.stabilize = $1 }),
             title: "Stabilize View",
             shortTitle: "Stabilize view",
-            help: "Nudge the live view so the detected centroid stays still in the window",
+            help: "Nudge the live 512×512 crop so the detected centroid stays still. Off while the full sensor is shown (search or centering).",
             shortcuts: [.primary("l")]
         ),
         Command(
@@ -215,7 +215,7 @@ public enum CommandCatalog {
             menu: .mount,
             title: "Center Star",
             shortTitle: "Center",
-            help: "Centers RA and Dec together on the full sensor. Each move covers about 90% of the remaining error and lasts about 1 s.",
+            help: "Centers RA and Dec together on the full sensor. Each move covers about 90% of the remaining error and lasts about 1 s. Stops after five moves even if the star is not yet on center.",
             shortcuts: [.primary("g")],
             isEnabled: { $0.canCenterStar },
             perform: { engine, _ in engine.centerStar() }

@@ -86,7 +86,15 @@ public enum CaptureLayout {
         return longest - shortest <= hardwareSizeSlack * 8
     }
 
-    /// 512×512 around the last centroid when the frame is larger than the crop.
+    /// Digital stabilization is for the 512 live crop. A full-sensor search or
+    /// centering preview must not pan.
+    public static func shouldStabilize(width: Int, height: Int) -> Bool {
+        min(width, height) <= displayCropSize
+    }
+
+    public static func shouldStabilize(_ frame: Frame) -> Bool {
+        shouldStabilize(width: frame.width, height: frame.height)
+    }
     /// Binned full-frame search (no seed) stays full so the whole sensor can be
     /// scanned. Unbinned mount-centering still gets a local crop so detection
     /// stays fast while the live view shows the full sensor.

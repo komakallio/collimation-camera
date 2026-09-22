@@ -813,7 +813,7 @@ public final class CollimationEngine {
 
     public func updateStabilization() {
         stabilization.configure(
-            enabled: stabilize,
+            enabled: stabilize && !showingFullFramePreview,
             tracking: tracking.state,
             viewWidth: viewWidth,
             viewHeight: viewHeight,
@@ -1280,8 +1280,9 @@ public final class CollimationEngine {
         let deadline = Date().addingTimeInterval(90)
         var lastRASign: Double?
         var lastDecSign: Double?
+        var slews = 0
         do {
-            while Date() < deadline {
+            while slews < AxisCentering.maxSlews, Date() < deadline {
                 try Task.checkCancellation()
                 if MountGuide.isCentered(errorPixels: centroid - target) { break }
 
@@ -1298,6 +1299,7 @@ public final class CollimationEngine {
                     lastDecSign = pixels.dec
                 }
                 mountStatus = Self.centeringStatus(plan)
+                slews += 1
                 try await mount.applyNudge(plan.nudge)
                 if let direction = plan.nudge.ra { axisDirections.record(direction) }
                 if let direction = plan.nudge.dec { axisDirections.record(direction) }
