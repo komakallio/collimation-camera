@@ -115,12 +115,18 @@ enum LiveChrome {
             panel(size: mapSize, at: mapOrigin, cornerRadius: ROIMapScene.cornerRadius,
                   background: ROIMapScene.background, border: ROIMapScene.border,
                   list: list, origin: origin, pointScale: pointScale)
+            let star = ROIMapScene.displayedStar(
+                poseROI: pose?.roi,
+                poseCentroid: pose?.stabilizeCentroid,
+                overlayROI: engine.overlay.roi,
+                overlayCentroid: engine.overlay.centroid
+            )
             HUDDrawList.draw(
                 ROIMapScene.primitives(
                     sensorWidth: engine.overlay.sensorWidth,
                     sensorHeight: engine.overlay.sensorHeight,
-                    roi: pose?.roi ?? engine.overlay.roi,
-                    centroidInFrame: pose?.stabilizeCentroid ?? engine.overlay.centroid,
+                    roi: star.roi,
+                    centroidInFrame: star.centroid,
                     size: mapSize
                 ),
                 on: list,

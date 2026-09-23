@@ -189,13 +189,19 @@ struct ContentView: View {
                             OverlayLegendView()
                         }
                         if engine.overlay.sensorWidth > 0, engine.overlay.sensorHeight > 0 {
+                            let star = ROIMapScene.displayedStar(
+                                poseROI: pose?.roi,
+                                poseCentroid: pose?.stabilizeCentroid,
+                                overlayROI: engine.overlay.roi,
+                                overlayCentroid: engine.overlay.centroid
+                            )
                             HStack(alignment: .bottom, spacing: 6) {
                                 StarProfileView(profile: engine.starProfile)
                                 ROIMapView(
                                     sensorWidth: engine.overlay.sensorWidth,
                                     sensorHeight: engine.overlay.sensorHeight,
-                                    roi: pose?.roi ?? engine.overlay.roi,
-                                    centroidInFrame: pose?.stabilizeCentroid ?? engine.overlay.centroid
+                                    roi: star.roi,
+                                    centroidInFrame: star.centroid
                                 )
                             }
                         }

@@ -51,6 +51,7 @@ struct CoreTests {
         failures += run("digital stabilize lost ignores noise", testDigitalStabilizeLostIgnoresNoise)
         failures += run("digital stabilize search then crop", testDigitalStabilizeSearchThenCrop)
         failures += run("digital stabilize skips full frame", testDigitalStabilizeSkipsFullFrame)
+        failures += run("stale analysis keeps newer frame", testStaleAnalysisKeepsNewerFrame)
         failures += run("guide solve orthogonal", testGuideSolveOrthogonal)
         failures += run("guide solve rotated", testGuideSolveRotated)
         failures += run("guide solve singular", testGuideSolveSingular)
@@ -1390,6 +1391,24 @@ private func testDigitalStabilizeSearchThenCrop() throws {
         stabilizeCentroid: crop.centroid
     )
     try expect(abs(layout.pan.x) < 1 && abs(layout.pan.y) < 1, "crop frame is not panned with the search lock")
+}
+
+private func testStaleAnalysisKeepsNewerFrame() throws {
+    let slot = FrameSlot()
+    let roi = ROI(x: 0, y: 0, width: 2, height: 1)
+    let older = Frame(width: 2, height: 1, pixels: [1, 0], roi: roi)
+    let newer = Frame(width: 2, height: 1, pixels: [9, 0], roi: roi)
+    let oldEpoch = slot.store(older)
+    let newEpoch = slot.store(newer)
+    try expect(oldEpoch != newEpoch, "each grab has its own epoch")
+    try expect(!slot.replaceIfCurrent(older, epoch: oldEpoch), "slow detect must not cover a newer grab")
+    try expect(slot.peek()?.frame.pixel(x: 0, y: 0) == 9, "newer grab stays on screen")
+    let sequence = slot.peek()?.sequence
+    try expect(slot.replaceIfCurrent(newer, epoch: newEpoch), "detect of the frame on screen may refresh it")
+    try expect(slot.peek()?.sequence != sequence, "a refresh is a new upload")
+    slot.clear()
+    try expect(!slot.replaceIfCurrent(newer, epoch: newEpoch), "a cleared slot does not come back")
+    try expect(slot.peek() == nil, "cleared")
 }
 
 private func testDigitalStabilizeSkipsFullFrame() throws {

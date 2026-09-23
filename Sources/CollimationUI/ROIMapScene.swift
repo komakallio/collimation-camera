@@ -33,6 +33,21 @@ public enum ROIMapScene {
         return SIMD2(sw * scale + padding * 2, sh * scale + padding * 2)
     }
 
+    /// The ROI and the star centroid are one measurement. Centering clears the
+    /// stabilizer centroid but used to leave the previous crop's ROI, and the
+    /// map then added a full-frame star coordinate to that crop's origin.
+    public static func displayedStar(
+        poseROI: ROI?,
+        poseCentroid: SIMD2<Double>?,
+        overlayROI: ROI,
+        overlayCentroid: SIMD2<Double>?
+    ) -> (roi: ROI, centroid: SIMD2<Double>?) {
+        if let poseROI, let poseCentroid {
+            return (poseROI, poseCentroid)
+        }
+        return (overlayROI, overlayCentroid)
+    }
+
     public static func primitives(
         sensorWidth: Int,
         sensorHeight: Int,

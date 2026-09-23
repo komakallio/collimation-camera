@@ -275,8 +275,8 @@ public final class CollimationEngine {
             guideCalibration = calibration
             mountStatus = "Calibrated — connect the mount to center"
         }
-        coalescer.handler = { [weak self] frame in
-            self?.analyze(frame)
+        coalescer.handler = { [weak self] frame, epoch in
+            self?.analyze(frame, epoch: epoch)
         }
         session.onFrame = { [weak self] frame in
             self?.ingest(frame)
@@ -839,23 +839,28 @@ public final class CollimationEngine {
             if !stabilize || tracking.state == .searching || showingFullFramePreview {
                 state.stabilizeLock = nil
                 state.stabilizeCentroid = nil
+                // The ROI belongs to the centroid. Leaving the crop in place
+                // made the sensor map add the full-frame star to the old origin.
+                state.roi = nil
+                state.imageWidth = 0
+                state.imageHeight = 0
             }
         }
     }
 
     private nonisolated func ingest(_ frame: Frame) {
         let displayed = softwareCrop.apply(frame)
-        frameSlot.store(displayed)
+        let epoch = frameSlot.store(displayed)
         _ = fpsMeter.tick()
         if stackCapture.isCapturing {
             stackCapture.offer(CaptureLayout.stackingFrame(from: displayed))
         }
         if !stackCapture.isCapturing {
-            coalescer.submit(frame)
+            coalescer.submit(frame, epoch: epoch)
         }
     }
 
-    private nonisolated func analyze(_ frame: Frame) {
+    private nonisolated func analyze(_ frame: Frame, epoch: UInt64) {
         guard let processed = pipeline.process(frame) else { return }
         if let roi = processed.tracking.requestedROI {
             session.requestTrackerROI(roi)
@@ -864,7 +869,10 @@ public final class CollimationEngine {
             enabled: CaptureLayout.isTrackingCapture(frame),
             sensorCentroid: processed.tracking.centroidOnSensor
         )
-        frameSlot.store(processed.displayFrame)
+        // The grab loop already showed this frame, and may have shown a newer
+        // one while a full-sensor search was running. Putting this exposure
+        // back would make the star jump backwards during a centering slew.
+        frameSlot.replaceIfCurrent(processed.displayFrame, epoch: epoch)
         Task { @MainActor in
             self.publish(processed)
         }

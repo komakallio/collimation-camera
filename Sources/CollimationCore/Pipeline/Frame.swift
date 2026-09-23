@@ -74,14 +74,20 @@ public final class FrameSlot: @unchecked Sendable {
     private let lock = NSLock()
     private var frame: Frame?
     private var sequence: UInt64 = 0
+    /// Which grab is on screen. A slow detect must not paint an older one back.
+    private var epoch: UInt64 = 0
 
     public init() {}
 
-    public func store(_ frame: Frame) {
+    @discardableResult
+    public func store(_ frame: Frame) -> UInt64 {
         lock.lock()
         self.frame = frame
         sequence &+= 1
+        epoch &+= 1
+        let epoch = self.epoch
         lock.unlock()
+        return epoch
     }
 
     public func peek() -> (frame: Frame, sequence: UInt64)? {
@@ -91,9 +97,23 @@ public final class FrameSlot: @unchecked Sendable {
         return (frame, sequence)
     }
 
+    /// Writes analysis pixels only while this grab is still the one on screen.
+    /// Full-frame centering searches the whole sensor, which is slower than
+    /// readout, so the grab loop will have moved on.
+    @discardableResult
+    public func replaceIfCurrent(_ frame: Frame, epoch expected: UInt64) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard self.epoch == expected, self.frame != nil else { return false }
+        self.frame = frame
+        sequence &+= 1
+        return true
+    }
+
     public func clear() {
         lock.lock()
         frame = nil
+        epoch &+= 1
         lock.unlock()
     }
 }

@@ -170,6 +170,34 @@ func testROIMapScene() throws {
     )
     let tinyRect = fillRects(tiny).first { $0.2 == ROIMapScene.roiFill }
     try expectUI(tinyRect.map { $0.1.x >= 1.5 && $0.1.y >= 1.5 } ?? false, "tiny ROI stays visible")
+
+    // Centering clears the stabilizer centroid and leaves the previous crop.
+    // The full-frame star must be mapped through the full-frame ROI, or the
+    // marker lands down and to the right of the sensor centre.
+    let crop = ROI(x: 744, y: 494, width: 512, height: 512)
+    let full = ROI(x: 0, y: 0, width: sensorWidth, height: sensorHeight)
+    let starOnSensor = SIMD2(1200.0, 700.0)
+    let fullCentroid = full.framePixel(fromSensorPoint: starOnSensor)
+    let duringCenter = ROIMapScene.displayedStar(
+        poseROI: crop,
+        poseCentroid: nil,
+        overlayROI: full,
+        overlayCentroid: fullCentroid
+    )
+    try expectUI(duringCenter.roi == full, "centering map uses the full-frame ROI")
+    let plotted = duringCenter.roi.sensorPoint(fromFramePixel: duringCenter.centroid ?? .zero)
+    try expectUI(
+        hypot(plotted.x - starOnSensor.x, plotted.y - starOnSensor.y) < 1,
+        "star stays on the sensor point, plotted \(plotted)"
+    )
+    let cropCentroid = crop.framePixel(fromSensorPoint: starOnSensor)
+    let whileTracking = ROIMapScene.displayedStar(
+        poseROI: crop,
+        poseCentroid: cropCentroid,
+        overlayROI: full,
+        overlayCentroid: fullCentroid
+    )
+    try expectUI(whileTracking.roi == crop, "a matched stabilize pose keeps its crop")
 }
 
 func testHistogramScene() throws {
