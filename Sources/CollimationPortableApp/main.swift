@@ -179,15 +179,21 @@ loop.run()
 
 // Shutdown in the ImGui example's order, and stop capture before the GPU goes
 // away so the capture thread is not inside an SDK call.
-engine.shutdown()
-SDL_WaitForGPUIdle(device)
+//
+// Every step here can block on hardware or on a driver, and the window is
+// already gone by now, so a step that never returns leaves a process nobody
+// can see and nothing can close. The watchdog ends it, and the step timings
+// say in the log which call was the slow one.
+Diagnostics.armShutdownWatchdog()
+Diagnostics.step("engine") { engine.shutdown() }
+Diagnostics.step("GPU idle") { SDL_WaitForGPUIdle(device) }
 cimgui_sdlgpu3_shutdown()
 ImGui_ImplSDL3_Shutdown()
 igDestroyContext(imguiContext)
 SDL_ReleaseWindowFromGPUDevice(device, window)
-SDL_DestroyGPUDevice(device)
+Diagnostics.step("GPU device") { SDL_DestroyGPUDevice(device) }
 SDL_DestroyWindow(window)
-SDL_Quit()
+Diagnostics.step("SDL_Quit") { SDL_Quit() }
 Log.info("clean exit")
 Diagnostics.stop()
 

@@ -19,6 +19,14 @@ public final class CaptureSession: @unchecked Sendable {
     private var holdROI = false
     private let loopGroup = DispatchGroup()
 
+    /// Consecutive timeouts before the loop stops assuming the camera is just
+    /// slow and asks whether it is still on the bus. Each timeout is the
+    /// exposure plus 400 ms, so this scales with the exposure by itself.
+    private static let timeoutsBeforePresenceCheck = 2
+    /// Consecutive timeouts before giving up on a camera that still enumerates
+    /// but has stopped delivering.
+    private static let timeoutsBeforeGivingUp = 10
+
     public init() {}
 
     public var isRunning: Bool {
@@ -120,6 +128,7 @@ public final class CaptureSession: @unchecked Sendable {
 
         var nextFrameDeadline = Date.distantPast
         var capFPS = CaptureLayout.maxReadoutFPS
+        var timeouts = 0
         while true {
             stateLock.lock()
             let keepGoing = running
@@ -169,8 +178,28 @@ public final class CaptureSession: @unchecked Sendable {
                 if !device.descriptor.isSimulator, capFPS > 0 {
                     nextFrameDeadline = Date().addingTimeInterval(1.0 / Double(capFPS))
                 }
+                timeouts = 0
                 onFrame?(frame)
             } catch CameraError.timeout {
+                // A single timeout is ordinary — a stream restart after an ROI
+                // change can miss one. A run of them is not, and an unplugged
+                // camera produces exactly that and nothing else: the SDK keeps
+                // answering "no frame ready yet" rather than reporting an
+                // error, for ever. Retrying for ever is what the loop used to
+                // do, so pulling the cable during live view froze the picture,
+                // raised no error, left the buttons saying Disconnect, and
+                // replugging did nothing because nobody had noticed.
+                timeouts += 1
+                if timeouts >= Self.timeoutsBeforePresenceCheck, !device.isStillPresent() {
+                    onError?(CameraError.disconnected)
+                    break
+                }
+                if timeouts >= Self.timeoutsBeforeGivingUp {
+                    // Still enumerated but not delivering. Just as unusable,
+                    // and the alternative is a frozen view with no explanation.
+                    onError?(CameraError.disconnected)
+                    break
+                }
                 continue
             } catch {
                 onError?(error)

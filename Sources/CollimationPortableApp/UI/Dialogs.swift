@@ -4,6 +4,40 @@ import CollimationCore
 import CollimationUI
 import Foundation
 
+/// What SDL calls when the save dialog closes, on its own thread on Windows.
+///
+/// A file-scope function on purpose. Written as a closure inside
+/// `PortableUIHost` it inherited that class's `@MainActor` isolation, and
+/// Swift emits an isolation check at the entry of an isolated closure reached
+/// through a C function pointer. On SDL's dialog thread that check is
+/// `dispatch_assert_queue` against the main queue, it fails, and libdispatch
+/// answers a failed assertion with `ud2`: the process died of
+/// STATUS_ILLEGAL_INSTRUCTION before the first line of the body ran, on every
+/// single Save TIFF. Nothing was written and nothing was logged, which is what
+/// made it look like a hang — the freeze is Windows Error Reporting collecting
+/// the crash.
+///
+/// The SDL log callback next door in `Diagnostics` fires from SDL's threads
+/// constantly and has never crashed, because `Diagnostics` is a plain enum and
+/// its closure is nonisolated. That is the difference, and it is the reason to
+/// keep every C callback out of an isolated type.
+private func portableDialogCallback(
+    _ userdata: UnsafeMutableRawPointer?,
+    _ files: UnsafePointer<UnsafePointer<CChar>?>?,
+    _ filter: Int32
+) {
+    _ = userdata
+    _ = filter
+    // A cancelled dialog gives a list whose first entry is null; an error
+    // gives no list at all. Both mean "no file".
+    var chosen: URL?
+    if let files, let first = files.pointee {
+        chosen = URL(fileURLWithPath: String(cString: first))
+    }
+    Log.info("save dialog: \(chosen.map { "chose \($0.path)" } ?? "cancelled")")
+    PortableUIHost.deliverDialogResult(chosen)
+}
+
 /// The portable `UIHost`: SDL's native save dialog, plus the error modal.
 ///
 /// SDL runs the callback on a worker thread on Windows and on the main thread
@@ -75,20 +109,13 @@ final class PortableUIHost: UIHost {
         dialogOpen = true
         pending = completion
         Self.active = self
-        Log.info("save dialog: \(title) — \(message)")
+        Log.info("save dialog opened: \(title) — \(message)")
 
         let start = directory?.appendingPathComponent(suggestedName).path ?? suggestedName
         start.withCString { location in
             Self.filters.withUnsafeBufferPointer { buffer in
                 SDL_ShowSaveFileDialog(
-                    { userdata, files, _ in
-                        var chosen: URL?
-                        if let files, let first = files.pointee {
-                            chosen = URL(fileURLWithPath: String(cString: first))
-                        }
-                        _ = userdata
-                        PortableUIHost.active?.deliver(chosen)
-                    },
+                    portableDialogCallback,
                     nil,
                     window,
                     buffer.baseAddress,
@@ -97,6 +124,11 @@ final class PortableUIHost: UIHost {
                 )
             }
         }
+    }
+
+    /// Entry point for the C callback, which has no `self` to work with.
+    nonisolated static func deliverDialogResult(_ url: URL?) {
+        active?.deliver(url)
     }
 
     /// Called from SDL's thread on Windows; only parks the value.
@@ -132,6 +164,25 @@ enum ErrorDialog {
             igOpenPopup_Str(title, 0)
         }
 
+        // Keyboard focus, and only while this modal is up.
+        //
+        // ImGui gives a widget keyboard focus only when NavEnableKeyboard is
+        // set, and it is off by default, so OK could never be reached from the
+        // keyboard: no focus ring, and Space did nothing. Leaving it on for the
+        // whole app is not the answer — Return is the Connect shortcut, and
+        // with navigation on it would go to whatever widget held focus instead.
+        // Scoping it to the modal costs nothing, because `handleShortcuts`
+        // already refuses to run any shortcut while a popup is open, so the two
+        // never apply at the same moment.
+        if let io = igGetIO_Nil() {
+            let nav = Int32(ImGuiConfigFlags_NavEnableKeyboard.rawValue)
+            if hasError {
+                io.pointee.ConfigFlags |= nav
+            } else {
+                io.pointee.ConfigFlags &= ~nav
+            }
+        }
+
         let viewport = igGetMainViewport()
         let center = viewport.map {
             ImVec2(
@@ -157,11 +208,20 @@ enum ErrorDialog {
         igPopTextWrapPos()
         igSpacing()
 
+        let appearing = igIsWindowAppearing()
         let dismissed = "OK".withCString { igButton($0, ImVec2(x: 120 * Float(UIScale.pointScale), y: 0)) }
+        // Focus lands on OK as the dialog opens, so it is obvious what Enter
+        // and Space will do and there is a focus ring to say so.
+        if appearing { igSetItemDefaultFocus() }
+        // Explicit keys as well as the focused button, because the button only
+        // answers the keyboard while navigation is on, and Escape has no
+        // button to be focused on. Keypad Enter is a separate key to ImGui, and
+        // somebody at a telescope is as likely to hit that one.
+        //
         // Not on the frame the popup appears: the key press that triggered the
         // failing command would otherwise dismiss the report of it.
-        let confirmed = !igIsWindowAppearing()
-            && (igIsKeyPressed_Bool(ImGuiKey_Escape, false) || igIsKeyPressed_Bool(ImGuiKey_Enter, false))
+        let keys: [ImGuiKey] = [ImGuiKey_Escape, ImGuiKey_Enter, ImGuiKey_KeypadEnter, ImGuiKey_Space]
+        let confirmed = !appearing && keys.contains { igIsKeyPressed_Bool($0, false) }
         if dismissed || confirmed {
             engine.errorMessage = nil
             igCloseCurrentPopup()

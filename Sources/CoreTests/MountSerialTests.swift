@@ -137,12 +137,14 @@ private func synScanScript() -> ScriptedSerialPortDriver {
     return driver
 }
 
-/// An LX200 mount: answers `:V#` and `:Td#`.
+/// An LX200 mount: answers `:V#` and nothing else.
+///
+/// It used to script a reply to `:Td#` as well, and the pulse test scripted
+/// one for `:Mg`. Neither command returns anything on a real Meade mount, so
+/// the tests agreed with the code rather than checking it, and an LX200 mount
+/// could not connect or pulse at all.
 private func lx200Script() -> ScriptedSerialPortDriver {
-    ScriptedSerialPortDriver(ascii: [
-        ":V#": "1.0#",
-        ":Td#": "#",
-    ])
+    ScriptedSerialPortDriver(ascii: [":V#": "1.0#"])
 }
 
 // MARK: - Tests
@@ -239,10 +241,9 @@ private func runBlocking(_ body: @escaping @Sendable () async throws -> Void) th
 }
 
 func testEQ6PulseCommands() throws {
-    // LX200: one :Mg command per pulse, no reply expected.
+    // LX200: one :Mg command per pulse, and no reply -- so nothing is
+    // scripted for it, and a mount that stays silent must still work.
     let lx = lx200Script()
-    let lxCommand = LX200PulseGuide.command(.north, milliseconds: 250)
-    lx.answer(Data(lxCommand.utf8), with: Data("#".utf8))
     let lxMount = EQ6Mount(port: lx)
     try lxMount.connect(path: "SCRIPT", baud: 9600)
     let beforePulse = lx.writes.count
@@ -322,3 +323,38 @@ func testWindowsCOMScannerParsing() throws {
     try expectUI(sorted == ["AUX", "COM1", "COM3", "COM9", "COM10"], "sorted \(sorted)")
 }
 #endif
+
+/// A Meade mount answers `:V#` and then goes quiet: `:Mg` and `:Td` return
+/// nothing at all.
+///
+/// Both used to be followed by a read for a `#`, so connect failed with
+/// "Timed out waiting for the mount to respond" — leaving the port open —
+/// and every calibration pulse threw two seconds after the star had already
+/// moved. An LX200 mount could not be used at all. The old tests scripted the
+/// replies, so they passed while the app was broken; this one scripts nothing
+/// beyond the probe, which is what a real mount does.
+func testLX200SilentMountConnectsAndPulses() throws {
+    let port = ScriptedSerialPortDriver(ascii: [":V#": "1.0#"])
+    let mount = EQ6Mount(port: port)
+
+    try mount.connect(path: "SCRIPT", baud: 9600)
+    try expectUI(
+        mount.protocolName == EQ6Protocol.lx200.rawValue,
+        "connected as LX200, got \(mount.protocolName)"
+    )
+    try expectUI(mount.isConnected, "the port stays open")
+
+    let before = port.writes.count
+    try runBlocking { try await mount.pulse(.north, milliseconds: 40) }
+    let written = port.writtenASCII.dropFirst(before)
+    try expectUI(
+        written.contains(LX200PulseGuide.command(.north, milliseconds: 40)),
+        "the pulse was sent: \(Array(written))"
+    )
+
+    // And a second one, because the first failure used to leave the port in a
+    // state where everything after it timed out too.
+    try runBlocking { try await mount.pulse(.east, milliseconds: 40) }
+    mount.disconnect()
+    try expectUI(!mount.isConnected, "disconnect closes it")
+}

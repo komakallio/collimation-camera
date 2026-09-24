@@ -221,8 +221,12 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
     }
 
     private func pulseLX200Locked(_ direction: GuideDirection, milliseconds: Int) throws {
+        // `:MgnDDDD#` returns nothing. Meade's command set says so and INDI's
+        // driver writes it without a read; this waited two seconds for a `#`
+        // that never comes and threw a timeout on every pulse, which made
+        // calibration impossible on an LX200 mount. The test scripted the
+        // reply, so it agreed with the bug rather than catching it.
         try port.writeASCII(LX200PulseGuide.command(direction, milliseconds: milliseconds))
-        _ = try readHashLocked(timeout: 2)
         preciseSleep(milliseconds: milliseconds + 40)
     }
 
@@ -327,20 +331,26 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
             try port.write(Data([UInt8(ascii: "T"), 0]))
             _ = try readHashLocked(timeout: 2)
         case .lx200:
-            try stopLX200TrackingLocked()
+            stopLX200TrackingLocked()
         case nil:
             break
         }
     }
 
-    private func stopLX200TrackingLocked() throws {
-        do {
-            try port.writeASCII(":Td#")
-            _ = try readHashLocked(timeout: 1.2)
-        } catch {
+    /// Best effort, both ways.
+    ///
+    /// The LX200 tracking commands return nothing either, and `connect` calls
+    /// this unguarded, so a mount that answered `:V#` and then stayed silent
+    /// failed to connect with "Timed out waiting for the mount to respond" —
+    /// and left the port open, because the failure path in `connectMount` does
+    /// not close it. A mount that ignores the request to stop tracking is
+    /// still a mount worth talking to.
+    private func stopLX200TrackingLocked() {
+        try? port.writeASCII(":Td#")
+        if (try? readHashLocked(timeout: 1.2)) == nil {
             port.flush()
-            try port.write(Data([UInt8(ascii: "T"), 0]))
-            _ = try readHashLocked(timeout: 2)
+            try? port.write(Data([UInt8(ascii: "T"), 0]))
+            _ = try? readHashLocked(timeout: 2)
         }
     }
 

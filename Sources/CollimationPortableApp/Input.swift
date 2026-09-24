@@ -13,43 +13,52 @@ enum Input {
     static let zoomIn = 1.08
     static let zoomOut = 0.92
 
+    /// Returns true when the event asked the app to quit.
+    ///
+    /// This used to be `shouldQuit: inout Bool`, and the loop passed its
+    /// `running` flag to it. The two mean opposite things, so closing the
+    /// window ran `shouldQuit = true`, which set `running = true`, and the app
+    /// went on running — that was "I cannot quit it". Nothing caught it:
+    /// `--snapshot` ends the loop by itself, and every scripted run so far had
+    /// killed the process rather than closing the window. A return value has
+    /// no polarity to get wrong at the call site.
     static func handle(
         event: SDL_Event,
         engine: CollimationEngine,
         liveRect: (origin: SIMD2<Double>, size: SIMD2<Double>),
-        pointScale: Double,
-        shouldQuit: inout Bool
-    ) {
+        pointScale: Double
+    ) -> Bool {
         // SDL event constants import with an Int32 raw value while event.type is
         // UInt32, so these are compared rather than switched.
         let type = event.type
         if type == UInt32(SDL_EVENT_QUIT.rawValue) || type == UInt32(SDL_EVENT_WINDOW_CLOSE_REQUESTED.rawValue) {
-            shouldQuit = true
-            return
+            Log.info("quit: \(type == UInt32(SDL_EVENT_QUIT.rawValue) ? "SDL_EVENT_QUIT" : "window close")")
+            return true
         }
 
         if type == UInt32(SDL_EVENT_MOUSE_WHEEL.rawValue) {
             // ImGui owns the wheel while the pointer is over a window.
-            guard let io = igGetIO_Nil(), !io.pointee.WantCaptureMouse else { return }
-            guard event.wheel.y != 0 else { return }
+            guard let io = igGetIO_Nil(), !io.pointee.WantCaptureMouse else { return false }
+            guard event.wheel.y != 0 else { return false }
             let factor = event.wheel.y > 0 ? zoomIn : zoomOut
             engine.zoom = engine.clampedZoom(engine.zoom * factor)
             engine.updateStabilization()
-            return
+            return false
         }
 
 #if os(macOS)
         // Trackpad pinch, macOS and Wayland only (SDL 3.4+). Windows has no
         // pinch event; precision touchpads send Ctrl + wheel instead.
         if type == UInt32(SDL_EVENT_PINCH_UPDATE.rawValue) {
-            guard let io = igGetIO_Nil(), !io.pointee.WantCaptureMouse else { return }
+            guard let io = igGetIO_Nil(), !io.pointee.WantCaptureMouse else { return false }
             let scale = Double(event.pinch.scale)
-            guard scale > 0 else { return }
+            guard scale > 0 else { return false }
             engine.zoom = engine.clampedZoom(engine.zoom * scale)
             engine.updateStabilization()
-            return
+            return false
         }
 #endif
+        return false
     }
 
     /// Global shortcuts from the catalog. ImGui's routing skips these while a
@@ -59,6 +68,12 @@ enum Input {
         // while the error dialog is asking about the last one.
         let anyPopup = Int32(ImGuiPopupFlags_AnyPopupId.rawValue | ImGuiPopupFlags_AnyPopupLevel.rawValue)
         guard !igIsPopupOpen_Str(nil, anyPopup) else { return }
+
+        if let quit = chord(for: MenuBar.quitShortcut),
+           igShortcut_Nil(quit, Int32(ImGuiInputFlags_RouteGlobal.rawValue))
+        {
+            MenuBar.quitRequested = true
+        }
 
         for command in CommandCatalog.all + CommandCatalog.filterCommands(engine) {
             guard command.isEnabled(engine) else { continue }

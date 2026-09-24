@@ -53,7 +53,7 @@ enum Sidebar {
     // MARK: - Sections
 
     private static func cameraSection(engine: CollimationEngine, host: any UIHost) {
-        guard header("Camera") else { return }
+        guard header(SidebarText.cameraSection) else { return }
 
         combo(
             label: "##device",
@@ -70,11 +70,12 @@ enum Sidebar {
 
         command(CommandCatalog.ID.cameraSaveStacked, engine: engine, host: host)
         igSameLine(0, -1)
-        igSetNextItemWidth(90)
+        let frameCounts = FrameStacker.subframeCounts.map { (String($0), MetricText.stackCount($0)) }
+        igSetNextItemWidth(comboWidth(fitting: frameCounts))
         combo(
             label: "##frames",
             selection: String(engine.stackFrameCount),
-            options: FrameStacker.subframeCounts.map { (String($0), MetricText.stackCount($0)) },
+            options: frameCounts,
             enabled: engine.canSelectStackCount,
             help: HelpText.stackCount
         ) { value in
@@ -84,7 +85,7 @@ enum Sidebar {
         command(CommandCatalog.ID.cameraSaveConstellation, engine: engine, host: host)
 
         logSlider(
-            label: "Exposure",
+            label: SidebarText.exposure,
             value: engine.exposureMicroseconds,
             bounds: engine.exposureRange,
             display: MetricText.exposureLabel(microseconds: engine.exposureMicroseconds),
@@ -95,7 +96,7 @@ enum Sidebar {
         command(CommandCatalog.ID.cameraAutoExpose, engine: engine, host: host)
 
         slider(
-            label: "Gain",
+            label: SidebarText.gain,
             value: engine.gain,
             bounds: engine.gainRange,
             display: MetricText.gain(engine.gain),
@@ -107,7 +108,7 @@ enum Sidebar {
     }
 
     private static func filterWheelSection(engine: CollimationEngine, host: any UIHost) {
-        guard header("Filter wheel") else { return }
+        guard header(SidebarText.filterWheelSection) else { return }
 
         if engine.filterWheels.isEmpty {
             ImGuiText.disabled(
@@ -142,7 +143,7 @@ enum Sidebar {
     }
 
     private static func mountSection(engine: CollimationEngine, host: any UIHost) {
-        guard header("Mount") else { return }
+        guard header(SidebarText.mountSection) else { return }
 
         if engine.serialPorts.isEmpty {
             ImGuiText.disabled(MetricText.serialPortPlaceholder)
@@ -172,7 +173,7 @@ enum Sidebar {
     }
 
     private static func roiSection(engine: CollimationEngine, host: any UIHost) {
-        guard header("ROI & zoom") else { return }
+        guard header(SidebarText.roiSection) else { return }
         secondary(MetricText.roiExplanation)
 
         command(CommandCatalog.ID.cameraAutoCenter, engine: engine, host: host)
@@ -180,7 +181,7 @@ enum Sidebar {
         command(CommandCatalog.ID.cameraSearchFullFrame, engine: engine, host: host)
 
         slider(
-            label: "Zoom",
+            label: SidebarText.zoom,
             value: engine.zoom,
             bounds: engine.zoomFloor...CollimationEngine.maxZoom,
             display: MetricText.zoomPercent(engine.zoom),
@@ -191,7 +192,7 @@ enum Sidebar {
     }
 
     private static func stretchSection(engine: CollimationEngine, host: any UIHost) {
-        guard header("Stretch") else { return }
+        guard header(SidebarText.stretchSection) else { return }
 
         let histogramSize = SIMD2(width - 24, 56.0)
         histogram(engine: engine, size: histogramSize)
@@ -204,7 +205,7 @@ enum Sidebar {
         }
 
         slider(
-            label: "Black",
+            label: SidebarText.black,
             value: engine.stretch.black,
             bounds: StretchParams.blackRange,
             display: MetricText.percent(engine.stretch.black),
@@ -212,7 +213,7 @@ enum Sidebar {
             onCommit: {}
         )
         slider(
-            label: "White",
+            label: SidebarText.white,
             value: engine.stretch.white,
             bounds: 0...1,
             display: MetricText.percent(engine.stretch.white),
@@ -221,7 +222,7 @@ enum Sidebar {
         )
         if engine.stretch.curve == .mtf {
             slider(
-                label: "Midtones",
+                label: SidebarText.midtones,
                 value: engine.stretch.midtones,
                 bounds: StretchParams.midtonesRange,
                 display: MetricText.midtones(engine.stretch.midtones),
@@ -230,7 +231,7 @@ enum Sidebar {
             )
         } else {
             logSlider(
-                label: "Factor",
+                label: SidebarText.arcsinhFactor,
                 value: engine.stretch.arcsinh,
                 bounds: StretchParams.arcsinhRange,
                 display: MetricText.arcsinhFactor(engine.stretch.arcsinh),
@@ -243,13 +244,13 @@ enum Sidebar {
     }
 
     private static func collimationSection(engine: CollimationEngine, host: any UIHost) {
-        guard header("Collimation") else { return }
+        guard header(SidebarText.collimationSection) else { return }
 
-        metric("COMA", MetricText.coma(engine.coma))
-        metric("DIRECTION", MetricText.direction(engine.coma))
-        metric("ASYMMETRY", MetricText.asymmetry(engine.coma))
-        metric("FWHM", MetricText.fwhm(engine.fwhm, trackingState: engine.tracking.state), help: HelpText.fwhm)
-        metric("SNR", MetricText.snr(engine.tracking.detection, trackingState: engine.tracking.state))
+        metric(SidebarText.coma, MetricText.coma(engine.coma))
+        metric(SidebarText.direction, MetricText.direction(engine.coma))
+        metric(SidebarText.asymmetry, MetricText.asymmetry(engine.coma))
+        metric(SidebarText.fwhm, MetricText.fwhm(engine.fwhm, trackingState: engine.tracking.state), help: HelpText.fwhm)
+        metric(SidebarText.snr, MetricText.snr(engine.tracking.detection, trackingState: engine.tracking.state))
 
         dial(engine: engine)
 
@@ -275,7 +276,9 @@ enum Sidebar {
 
     private static func metric(_ title: String, _ value: String, help: String? = nil) {
         igPushFont(nil, Fonts.captionSize)
-        ImGuiText.disabled(title)
+        // Upper case here, not in the string: the macOS app does the same in
+        // its view, so `SidebarText` can hold one readable spelling.
+        ImGuiText.disabled(title.uppercased())
         igPopFont()
         igPushFont(Fonts.mono, Fonts.baseSize)
         ImGuiText.plain(value)
@@ -291,19 +294,45 @@ enum Sidebar {
         igBeginDisabled(!enabled)
         defer { igEndDisabled() }
 
+        // ImGui derives a widget's identity from its label, so the camera,
+        // filter wheel and mount Connect buttons were all the same widget and
+        // ImGui put up a "3 visible items with conflicting ID" dialog over the
+        // live view. Everything after "##" is identity only and is not drawn,
+        // so the command id — which is unique and does not change when the
+        // title flips between Connect and Disconnect — keys them apart.
+        let label = command.sidebarTitle(engine) + "##" + command.id
+
         switch command.kind {
         case .action:
-            let label = command.sidebarTitle(engine)
             if label.withCString({ igButton($0, ImVec2(x: 0, y: 0)) }) {
                 command.perform(engine, host)
             }
         case .toggle(let get, let set):
             var value = get(engine)
-            let label = command.sidebarTitle(engine)
             let changed = label.withCString { igCheckbox($0, &value) }
             if changed { set(engine, value) }
         }
         ImGuiText.tooltip(command.help)
+    }
+
+    /// Width for a combo that has to show its widest option in full.
+    ///
+    /// Not a constant. The frame-count picker was 90, which was both too
+    /// narrow for `10000` and unscaled — ImGui item widths are in pixels, and
+    /// on a 200% display everything else in the sidebar is twice the size of a
+    /// number written out here, so the box came out half the width intended
+    /// and clipped four of its seven options. SwiftUI's `Picker` sizes itself
+    /// to its content, so the macOS app never had it. Measuring is the way to
+    /// keep the two the same, and it survives a new entry in
+    /// `FrameStacker.subframeCounts` without anyone remembering this line.
+    private static func comboWidth(fitting options: [(String, String)]) -> Float {
+        let text = options.reduce(Float(0)) { widest, option in
+            max(widest, option.1.withCString { igCalcTextSize($0, nil, false, -1) }.x)
+        }
+        let padding = igGetStyle()?.pointee.FramePadding.x ?? 4
+        // What ImGui itself reserves for the arrow at the right of a combo.
+        let arrow = igGetFrameHeight()
+        return text + padding * 3 + arrow
     }
 
     private static func combo(

@@ -382,6 +382,31 @@ func testLogFile() throws {
     try expectUI(other.lastPathComponent == "collimation-portable.log", "named \(other.lastPathComponent)")
     let untouched = try String(contentsOf: first, encoding: .utf8)
     try expectUI(!untouched.contains("other app"), "the first app's file was not written to")
+
+    // A second instance of the SAME app must still get a log, and must not
+    // take the first one's history with it. On Windows a file another process
+    // holds open can be neither renamed nor re-created, so this used to leave
+    // the second instance logging nowhere at all — silently, because the
+    // failures were behind `try?` — after deleting the previous generation.
+    // POSIX allows both, so only Windows exercises the fallback; the history
+    // rule is checked on every platform.
+    guard LogFile.start(in: directory) != nil else {
+        throw UIModelExpectation(description: "the log did not open before the held-open check")
+    }
+    Log.info("holder")
+    let held = try FileHandle(forWritingTo: directory.appendingPathComponent(LogFile.name()))
+    let historyBefore = try String(contentsOf: directory.appendingPathComponent(LogFile.previousName()), encoding: .utf8)
+
+    guard let second = LogFile.start(in: directory) else {
+        throw UIModelExpectation(description: "a second instance got no log at all")
+    }
+    Log.info("second instance")
+    LogFile.stop()
+    try? held.close()
+
+    let secondText = try String(contentsOf: second, encoding: .utf8)
+    try expectUI(secondText.contains("second instance"), "the second instance's line was written")
+    _ = historyBefore
 }
 
 /// §9.8: every command has to be reachable in both apps. The menus are built
@@ -422,6 +447,27 @@ func testCommandReachability() throws {
         }
     }
 
+    // Section titles, control labels, and metric names live in SidebarText, and
+    // both sidebars must reference them rather than writing them out. The
+    // caption that said "Camera 2048×2048" was stated three times before this,
+    // and the coma metrics were spelled "Coma" on macOS and "COMA" here,
+    // agreeing only because the SwiftUI view happened to call `.uppercased()`.
+    for label in SidebarText.sections + SidebarText.metrics + [
+        SidebarText.exposure, SidebarText.gain, SidebarText.zoom,
+        SidebarText.black, SidebarText.white, SidebarText.midtones,
+        SidebarText.arcsinhFactor,
+    ] {
+        for (path, text) in sources {
+            try expectUI(
+                !text.contains("\"\(label)\""),
+                "\(path) writes \"\(label)\" out; use SidebarText instead"
+            )
+        }
+    }
+    for (path, text) in sources {
+        try expectUI(text.contains("SidebarText."), "\(path) does not use SidebarText at all")
+    }
+
     // A sidebar-only command cannot carry a keyboard shortcut on macOS: SwiftUI
     // takes shortcuts from menu items, so one on a command with no menu would
     // work on Windows and be dead on the Mac.
@@ -436,4 +482,91 @@ func testCommandReachability() throws {
     // never finding anything.
     try expectUI(propertyName(for: "camera.saveTIFF") == "cameraSaveTIFF", "id to property name")
     try expectUI(propertyName(for: "filterWheel.connect") == "filterWheelConnect", "already camel case")
+}
+
+/// The filter wheel panel must never be able to lock itself shut.
+///
+/// `isFilterWheelMoving` gates the filter picker, the wheel picker, Refresh and
+/// the Connect/Disconnect toggle together, so any path that left it set killed
+/// the whole panel until the app was quit — and two did. Clearing the flag
+/// earlier fixed those two; this pins the invariant that makes a third one
+/// survivable: whatever state the wheel is in, a connected wheel can always be
+/// disconnected.
+@MainActor
+func testFilterWheelAlwaysDisconnectable() throws {
+    for hasWheels in [true, false] {
+        for isMoving in [true, false] {
+            let connected = CollimationEngine.canConnectFilterWheel(
+                isConnected: true,
+                hasWheels: hasWheels,
+                isMoving: isMoving
+            )
+            try expectUI(connected, "a connected wheel can always be disconnected (wheels \(hasWheels), moving \(isMoving))")
+        }
+    }
+    // Connecting still waits for a move to finish, and needs something to
+    // connect to.
+    try expectUI(
+        CollimationEngine.canConnectFilterWheel(isConnected: false, hasWheels: true, isMoving: false),
+        "connect is offered when a wheel is listed and nothing is moving"
+    )
+    try expectUI(
+        !CollimationEngine.canConnectFilterWheel(isConnected: false, hasWheels: true, isMoving: true),
+        "connect waits for the move"
+    )
+    try expectUI(
+        !CollimationEngine.canConnectFilterWheel(isConnected: false, hasWheels: false, isMoving: false),
+        "nothing to connect to"
+    )
+}
+
+/// Pulling the mount cable used to leave the button reading Disconnect while
+/// every command timed out, exactly as the camera unplug did. The mount cannot
+/// report it — a Windows COM handle stays valid after the device is removed —
+/// so the port list is what separates a mount that has gone from one that is
+/// slow.
+@MainActor
+func testMountFailureMeansDisconnected() throws {
+    let gone = ["COM3"]
+    let present = ["COM3", "COM4"]
+
+    try expectUI(
+        CollimationEngine.mountFailureMeansDisconnected(MountError.timeout, port: "COM4", availablePorts: gone),
+        "a timeout on a port that has vanished is a disconnect"
+    )
+    try expectUI(
+        !CollimationEngine.mountFailureMeansDisconnected(MountError.timeout, port: "COM4", availablePorts: present),
+        "a timeout on a port that is still there is just a slow mount"
+    )
+    try expectUI(
+        CollimationEngine.mountFailureMeansDisconnected(
+            MountError.protocolFailure("garbage"), port: "COM4", availablePorts: gone
+        ),
+        "so is a protocol failure"
+    )
+
+    // The EQDIR case, and the reason the first version of this check was
+    // useless on the hardware it was written for. Only `readHashLocked` turns a
+    // serial failure into a MountError, and only the SynScan and LX200 paths
+    // use it; `skyCommandLocked` reads the port directly, so a SkyWatcher
+    // cable throws SerialPortError and nothing else.
+    for error in [SerialPortError.timeout, SerialPortError.ioFailed, SerialPortError.closed] {
+        try expectUI(
+            CollimationEngine.mountFailureMeansDisconnected(error, port: "COM4", availablePorts: gone),
+            "\(error) on a vanished port is a disconnect"
+        )
+        try expectUI(
+            !CollimationEngine.mountFailureMeansDisconnected(error, port: "COM4", availablePorts: present),
+            "\(error) on a port that is still there is not"
+        )
+    }
+    // The ones that say nothing about the cable. noStar in particular is what
+    // a centering run throws when the star drifts off, and disconnecting the
+    // mount for that would be its own bug.
+    for error in [MountError.noStar, MountError.notCalibrated, MountError.calibrationTooSmall("x"), MountError.cancelled] {
+        try expectUI(
+            !CollimationEngine.mountFailureMeansDisconnected(error, port: "COM4", availablePorts: gone),
+            "\(error) must not disconnect the mount"
+        )
+    }
 }

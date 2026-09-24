@@ -2021,6 +2021,211 @@ dialog. Still open everywhere else: the whole macOS side, including the
 portable app's first run there and §9.8's screenshot comparison between the
 two apps.
 
+## 14c. First hardware session (Player One, Windows, 2026-09-09)
+
+Same machine as §14a and §14b. Two Player One cameras on USB 3: a Xena 585M
+(IMX585, 3856×2180, 12-bit) and a Poseidon-M PRO (IMX571, 6252×4176). No
+optics on the Xena for the first half, an artificial star for the second. The
+mount and the filter wheel are still untouched. ZWO is still untouched: the
+SDK loads and reports `1, 41, 0, 0`, but no ASI camera has been plugged in.
+
+**What works**
+
+- **Both cameras enumerate.** `capture-cli --list` reports Player One SDK
+  3.10.1, `poa-0 Xena 585M 3856x2180` and `poa-1 Poseidon-M PRO 6252x4176`,
+  with the sensor sizes read from the SDK rather than the placeholder in
+  `POACameraDevice.init`.
+- **RAW16 is MSB-aligned as §7.4 assumed.** A saturated Xena frame tops out at
+  exactly 65520, which is `StarQuality.clipADU`, so the clip warning fires on
+  a real 12-bit sensor at the right point and no rescaling is needed.
+- **Exposure is linear and the bias is small.** 1752 and 1760 ADU/ms over two
+  runs, intercept about 210 ADU.
+- **The Xena holds 30.0 fps at both 512 and 2048**, which is the app's own
+  live-view cap (`CaptureLayout.maxReadoutFPS`), not the camera's limit.
+- **The Poseidon is readout-bound above 512.** 30.0 fps at 512, 22.8 at 1024,
+  11.6 at 2048 — 86 ms per 2048×2048 frame, about 97 MB/s. Not a defect and
+  not something the app can fix: `POA_USB_BANDWIDTH_LIMIT` already reads 100
+  out of 35...100 on both cameras. It does mean the tracking window on a
+  26 MP camera updates at about a third of the rate it does on the Xena, which
+  is worth knowing before reading anything into an fps figure.
+- **ROI centring is right on a real sensor.** A 2048 window on the 3856×2180
+  Xena lands at 904,66; a 512 window on the 6252×4176 Poseidon lands at
+  2868,1832. Both are centred and both satisfy the vendor's alignment rule.
+- **The live view works against the camera.** The defocused donut, the
+  overlay, the star profile, the histogram, the ROI map and the dial all
+  render from real frames.
+
+**What it found**
+
+Six defects, all fixed in the same commit as this section. Four of them the
+camera found:
+
+1. `capture-cli --device poa-0` answered `POA_ERROR_INVALID_ID`. The
+   properties lookup calls `POAGetCameraCount`, which is what scans the bus
+   and makes an id valid, and `open()` called it second. The app enumerates
+   in the same process before connecting, so only the tool could see this.
+   Both vendor devices now look properties up first.
+2. `capture-cli` reported a failure as a Swift stack trace. `main()` catches
+   and prints instead.
+3. **Searching flickered between the crop and the full frame**, about three
+   times a second with no optics on the camera. Losing a star was debounced
+   from the start and finding one was not, so one noise peak above `minSNR`
+   promoted `.searching` to `.tracking`, moved the camera to the 2048 window,
+   found nothing, and fell back `lostFrameLimit` frames later. Acquisition is
+   now debounced too: `foundFrameLimit` detections within `acquireRadius`
+   sensor pixels before the camera is moved. Noise peaks jump; a star does
+   not.
+4. **The fill under the star profile was a wedge.** The area under a curve is
+   concave and `ImDrawList_AddConvexPolyFilled` draws a triangle fan from the
+   first vertex; SwiftUI's `Canvas` fills a `Path` by winding, so this was a
+   portable-app-only defect and no shared test could have caught it.
+
+And one more, found while disconnecting the camera rather than by the camera:
+three sidebar **Connect** buttons shared one ImGui id — ImGui derives identity
+from the label — so ImGui put a "3 visible items with conflicting ID" dialog
+over the live view, and two of the three controls shared state. Each command's
+button is now keyed by its catalogue id. `--snapshot` now exits non-zero on an
+id conflict, which makes the headless screenshot the regression test for it.
+
+And one that had nothing to do with the camera: **the app could not be
+quit**. `Input.handle` took `shouldQuit: inout Bool` and the loop passed its
+`running` flag to it, so closing the window ran `shouldQuit = true`, which set
+`running = true`, and the app carried on. Nothing had ever exercised that path
+— `--snapshot` ends the loop itself, and `run-win.ps1 -Seconds` kills the
+process — which is why §14b did not catch it. `Input.handle` now returns the
+flag rather than writing through a parameter whose polarity can be got wrong at
+the call site, there is a File ▸ Quit with ⌘Q/Ctrl+Q, and
+`scripts\quit-win.ps1` closes the real SDL window and times the exit: 0.4 s
+with a camera connected. The shutdown also logs a timing per step, and a
+watchdog ends the process if one of them never returns, so a future hang in a
+vendor call names itself.
+
+**Save TIFF killed the app, and had always killed it.** Checklist step 4 ran
+clean until the save. The dialog opened, and committing a file name froze the
+window for about ten seconds and then took the process down. The Windows event
+log named `dispatch.dll` and `0xc000001d`; disassembling that offset gave a
+`ud2` immediately after libdispatch's "Assertion failed: Block was not expected
+to execute on queue" string, which is `dispatch_assert_queue` — a main-actor
+isolation check running on a thread that is not the main queue.
+
+The callback passed to `SDL_ShowSaveFileDialog` was a closure written inside
+the `@MainActor` `PortableUIHost`, so it inherited that isolation, and Swift
+checks isolation at the entry of an isolated closure reached through a C
+function pointer. SDL runs that callback on its own thread on Windows, the
+check failed, and the process died before the first statement — which is why
+nothing was written and nothing was logged, and why the freeze looked like a
+hang: it is Windows Error Reporting collecting the crash. The callback is now a
+file-scope `nonisolated` function. The SDL log callback next door in
+`Diagnostics` has fired from SDL's threads all along without trouble, because
+its enclosing type is a plain enum; that contrast is the whole lesson.
+
+`scripts\save-dialog-win.ps1` drives the dialog end to end and checks the file,
+the exit code and the window. With it, a 512 ROI saves in about 10 ms and comes
+out at 524422 bytes.
+
+**Unplugging did nothing at all.** Checklist step 5: pulling the cable during
+live view froze the picture, raised no error, left the buttons saying
+Disconnect, and replugging changed nothing. An unplugged Player One camera does
+not report an error — the SDK goes on answering "no frame ready yet" for ever —
+so every grab timed out, and `CaptureSession.runLoop` swallowed
+`CameraError.timeout` with a bare `continue`. It retried until the process
+ended. The loop now counts consecutive timeouts, asks the device whether it is
+still enumerated once there have been two, and raises `CameraError.disconnected`
+when it is not; a camera that still enumerates but never delivers is given ten
+before the same verdict, because a frozen view with no explanation is the worst
+outcome either way. `CameraDevice.isStillPresent()` is new, implemented for
+both vendors by re-enumerating and defaulting to true for anything that cannot
+tell. Two tests in `CoreTests` cover it, one per direction. The real cable pull
+is still the user's to repeat.
+
+**The frame-count picker clipped its own options.** `igSetNextItemWidth(90)` —
+a raw pixel count, and ImGui item widths are pixels, so on a 200% display the
+box came out half the width everything around it is, and four of the seven
+counts did not fit. It measures the widest option now. SwiftUI's `Picker` sizes
+to content, so this was portable-app-only, like the star-profile fill.
+
+**The unplug fix passes on hardware**, during live view and during a
+1000-frame stack. Pulling the cable during Center is still untried, because the
+mount is untested.
+
+That run found the error modal's last defect: **OK could not be reached from
+the keyboard.** `ImGuiConfigFlags_NavEnableKeyboard` was never set, so no
+widget in the app could hold keyboard focus — there was no focus ring and Space
+did nothing, and a dialog that has to be dismissed with the mouse is a poor
+thing to meet at a telescope in the dark. Navigation is now enabled while the
+modal is up and only then: `Input.handleShortcuts` already refuses to run a
+shortcut while a popup is open, so the two never overlap, and Return keeps
+going to Connect the rest of the time. OK takes default focus, and Escape,
+Return, keypad Return and Space all dismiss. Verified by driving each key at
+the real dialog; all three dismissed it.
+
+**Steps 6 and 7 pass**: an EQDIR cable on COM4 (FTDI FT232R, VID 0403 PID
+6001 — Windows already has the driver, and `SERIALCOMM` lists the port where
+WMI's `Win32_SerialPort` does not), calibration to RA 36 px / Dec 10 px of
+backlash, and a Phoenix wheel that connects, reads its aliases and moves.
+
+Before that session a read-only review swept the mount and wheel paths for the
+shapes the camera had already produced. Eight findings survived adversarial
+verification; seven are fixed:
+
+- **The filter wheel could latch dead.** Both wheel paths cleared
+  `isFilterWheelMoving` after `guard wheel.isConnected` rather than before, and
+  that one flag disables the filter picker, the wheel picker, Refresh and the
+  Connect/Disconnect toggle together — so a wheel that dropped out mid-move
+  left the panel unusable until the app was quit. `canConnectFilterWheel` now
+  always allows a disconnect as well: gating both halves of one toggle on the
+  same flag is what removed the way out.
+- **The mount never noticed a pulled cable**, exactly as the camera had not.
+  `EQ6Mount.isConnected` cannot tell — a Windows COM handle stays valid after
+  the device is removed — so a timeout or protocol failure during mount work
+  now re-enumerates the port and drops the mount if it has gone.
+- **Every Calibrate and Center ended with the window frozen.** `haltMotions` is
+  a blocking serial conversation and the engine is main-actor isolated: a few
+  tens of milliseconds with a mount that answers, up to four seconds with one
+  that does not, which is long enough for Windows to add "(Not Responding)".
+  The halt and the disconnect run off the actor now.
+- **`PhoenixWheel.disconnect` closed the SDK handle while a detached goto or
+  snapshot might be inside a call with it.** The poll loop checks its cancelled
+  flag between calls but not during one. Every SDK call and the close now take
+  one lock; the calls are short, so a close waits for one of them at most.
+- **LX200 mounts could not connect or pulse at all.** `:Mg` and `:Td` return
+  nothing on a Meade mount, and both paths read for a `#` that never comes.
+  Worse, the tests scripted those replies, so they agreed with the bug. Not
+  reachable with this project's EQ6 — the probe order matches SkyWatcher
+  first — but a 100% failure for anyone with a Meade.
+- **A frame in flight republished itself after disconnect**, putting the star,
+  the overlay and a live fps reading back for a camera that was not there.
+- **The live image quad was never scissored to the live region**, so a zoomed
+  image reached under the sidebar, which happened to be drawn over it.
+
+The eighth is **not fixed**: dragging or resizing the window enters the Win32
+modal loop and stalls the main actor, so the app does not repaint and a
+centering run keeps counting toward its 90 s deadline. The documented remedy
+is an `SDL_AddEventWatch` that renders during the modal loop, but that
+callback is a C function pointer — the save-dialog trap above — and it would
+have to re-enter the frame loop from inside ImGui's. Left alone deliberately
+rather than risk that crash in a path no automated check can exercise.
+
+**A log that looked missing was not.** A session appeared to write nothing:
+`collimation.log` showed 0 bytes and a stale timestamp in a directory listing
+while the app was running. Windows does not update a file's directory entry
+until the handle is flushed or closed, so the size and the modification time
+both lie for as long as the app is up — the content is there and readable the
+whole time, and the listing catches up on exit. Read the bytes, not the
+listing, and do not conclude anything from `Get-ChildItem` about a file the app
+still has open.
+
+Two real defects came out of chasing it, and both are fixed: rotation deleted
+the previous generation *before* attempting the move, so a rotation that could
+not happen threw away the run before it for nothing; and a second instance that
+could neither rotate nor re-create the file ended up with no log at all rather
+than one of its own. A second instance now takes `<basename>-2.log`.
+
+**Still open**
+
+- The mount and wheel fixes above re-tested.
+- Everything ZWO (§7.8).
+
 ## 14. Verified facts and sources
 
 Checked on 2026-09-08 against primary sources. Items marked "spike" are to

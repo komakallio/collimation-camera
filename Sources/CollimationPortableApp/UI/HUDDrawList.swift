@@ -96,7 +96,14 @@ enum HUDDrawList {
             guard points.count >= 3 else { return }
             var converted = points.map(point)
             converted.withUnsafeMutableBufferPointer { buffer in
-                ImDrawList_AddConvexPolyFilled(
+                // Concave, not convex. The only polygon the scenes fill is the
+                // area under the star profile, which is a curve and so never
+                // convex; ImGui's convex fill draws a triangle fan from the
+                // first vertex and turns it into a wedge. SwiftUI's Canvas
+                // fills a Path by winding and never had the problem, so this
+                // was a portable-app-only defect. The concave version handles
+                // convex input too, and the HUD fills one polygon per frame.
+                ImDrawList_AddConcavePolyFilled(
                     list,
                     buffer.baseAddress,
                     Int32(buffer.count),

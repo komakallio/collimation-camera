@@ -1,12 +1,24 @@
 # First session with hardware
 
-Everything in this repository has been verified against the simulator. Nothing
-has been verified against a camera, a mount, or a filter wheel — see
-`PLAN-MULTIPLATFORM.md` §14b for exactly what has and has not been run.
-
 This is the order to work through, Player One first and ZWO after, with the
 commands to run and what a pass looks like. Each step's output belongs in the
 log file, so a failure can be sent on rather than described.
+
+**Where this stands.** Steps 0 to 7 all pass on Player One — a Xena 585M, a
+Poseidon-M PRO, an EQDIR cable and a Phoenix wheel — including every unplug.
+What is left: the seven fixes those sessions produced re-tested, and all of
+ZWO. `PLAN-MULTIPLATFORM.md` §14c has the numbers and every defect found; §14b
+is what was verified without hardware.
+
+**Reading the log while the app is running.** Open it and read the bytes. A
+directory listing shows 0 and a stale timestamp for as long as the app holds
+the file, because Windows does not update the directory entry until the handle
+is flushed or closed. The log is not empty; the listing is lying.
+
+**The EQDIR is an FTDI FT232R** (VID 0403, PID 6001). Windows ships the driver;
+if the port does not appear, check Device Manager rather than looking for one.
+The app reads `HKLM\HARDWARE\DEVICEMAP\SERIALCOMM`, which lists FTDI ports —
+WMI's `Win32_SerialPort`, which many tools use, does not.
 
 Log file: `%LOCALAPPDATA%\Collimation Camera\collimation.log` on Windows,
 `~/Library/Logs/Collimation Camera/collimation.log` on macOS. The previous run
@@ -56,6 +68,10 @@ spread of a few milliseconds rather than tens. A mean interval near 15.6 ms or
 a multiple of it means something is sleeping on the default Windows timer.
 Compare the number against the same camera on the Mac.
 
+Which limit applies depends on the sensor, so measure before reading anything
+into it. A Xena 585M holds the app's 30 fps cap at both 512 and 2048; a
+Poseidon-M PRO reads out at 30.0, 22.8 and 11.6 fps at 512, 1024 and 2048.
+
 Repeat with `--roi 512` and with a short exposure. Also check the ADU range it
 reports: `clipped` means lower the exposure or the gain.
 
@@ -85,6 +101,12 @@ Pass, each time: the error dialog opens, the app keeps drawing (the fps label
 keeps updating; no stall longer than three seconds), and reconnecting works
 after the camera is plugged back in.
 
+Reconnecting means pressing **Connect** again, not replugging alone — the app
+does not poll for a camera that has gone. What it must not do is what it used
+to: freeze the picture, say nothing, and leave the button reading Disconnect.
+The error takes a couple of grab timeouts to arrive, so at a long exposure give
+it a few seconds.
+
 ## 6. The mount (§10.3)
 
 With an EQDIR or SynScan cable:
@@ -94,6 +116,10 @@ With an EQDIR or SynScan cable:
 - The log carries every exchange as `EQ6 TX` and `EQ6 RX` lines. Keep them.
 - **Calibrate**, then **Center** on an artificial star. Compare the calibration
   numbers with the macOS ones for the same mount.
+- From a centred star, run **Save Constellation**. The first tile must remain
+  at the sensor centre; then check all eight outer positions. The log records
+  the full-frame readout, measured centroid, target and each correction. A
+  changed detection during the readout switch must stop before a new slew.
 - Unplug the camera during Center: the mount work should end with the
   disconnect error rather than `noStar` four seconds later, the mount should
   stay connected, and Calibrate should work again after the camera reconnects.

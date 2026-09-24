@@ -85,7 +85,7 @@ struct SidebarView: View {
     }
 
     private var cameraSection: some View {
-        GroupBox("Camera") {
+        GroupBox(SidebarText.cameraSection) {
             VStack(alignment: .leading, spacing: 8) {
                 Picker("Device", selection: $engine.selectedDeviceID) {
                     ForEach(engine.devices) { device in
@@ -119,7 +119,7 @@ struct SidebarView: View {
 
                 HStack(alignment: .bottom, spacing: 8) {
                     CommitSlider(
-                        title: "Exposure",
+                        title: SidebarText.exposure,
                         value: logExposureBinding,
                         range: logExposureRange,
                         format: MetricText.exposureLabel(microseconds: engine.exposureMicroseconds),
@@ -128,7 +128,7 @@ struct SidebarView: View {
                     button(CommandCatalog.ID.cameraAutoExpose)
                 }
                 CommitSlider(
-                    title: "Gain",
+                    title: SidebarText.gain,
                     value: $engine.gain,
                     range: engine.gainRange,
                     format: MetricText.gain(engine.gain),
@@ -143,7 +143,7 @@ struct SidebarView: View {
     }
 
     private var filterWheelSection: some View {
-        GroupBox("Filter wheel") {
+        GroupBox(SidebarText.filterWheelSection) {
             VStack(alignment: .leading, spacing: 8) {
                 if engine.filterWheels.isEmpty {
                     Text(MetricText.filterWheelPlaceholder(sdkPresent: PhoenixWheel.sdkVersion != nil))
@@ -191,7 +191,7 @@ struct SidebarView: View {
     }
 
     private var mountSection: some View {
-        GroupBox("Mount") {
+        GroupBox(SidebarText.mountSection) {
             VStack(alignment: .leading, spacing: 8) {
                 if engine.serialPorts.isEmpty {
                     Text(MetricText.serialPortPlaceholder)
@@ -234,7 +234,7 @@ struct SidebarView: View {
     }
 
     private var roiSection: some View {
-        GroupBox("ROI & zoom") {
+        GroupBox(SidebarText.roiSection) {
             VStack(alignment: .leading, spacing: 8) {
                 Text(MetricText.roiExplanation)
                     .font(.caption)
@@ -246,7 +246,7 @@ struct SidebarView: View {
                 toggle(CommandCatalog.ID.cameraSearchFullFrame)
 
                 HStack {
-                    Text("Zoom")
+                    Text(SidebarText.zoom)
                     Slider(value: $engine.zoom, in: engine.zoomFloor...CollimationEngine.maxZoom)
                     Text(MetricText.zoomPercent(engine.zoom))
                         .font(.caption.monospacedDigit())
@@ -258,7 +258,7 @@ struct SidebarView: View {
     }
 
     private var stretchSection: some View {
-        GroupBox("Stretch") {
+        GroupBox(SidebarText.stretchSection) {
             VStack(alignment: .leading, spacing: 8) {
                 HistogramView(histogram: engine.histogram, stretch: engine.stretch)
                     .frame(height: 56)
@@ -269,13 +269,13 @@ struct SidebarView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                CommitSlider(title: "Black", value: $engine.stretch.black, range: StretchParams.blackRange, format: MetricText.percent(engine.stretch.black))
-                CommitSlider(title: "White", value: $engine.stretch.white, range: 0...1, format: MetricText.percent(engine.stretch.white))
+                CommitSlider(title: SidebarText.black, value: $engine.stretch.black, range: StretchParams.blackRange, format: MetricText.percent(engine.stretch.black))
+                CommitSlider(title: SidebarText.white, value: $engine.stretch.white, range: 0...1, format: MetricText.percent(engine.stretch.white))
                 if engine.stretch.curve == .mtf {
-                    CommitSlider(title: "Midtones", value: $engine.stretch.midtones, range: StretchParams.midtonesRange, format: MetricText.midtones(engine.stretch.midtones))
+                    CommitSlider(title: SidebarText.midtones, value: $engine.stretch.midtones, range: StretchParams.midtonesRange, format: MetricText.midtones(engine.stretch.midtones))
                 } else {
                     CommitSlider(
-                        title: "Factor",
+                        title: SidebarText.arcsinhFactor,
                         value: logArcsinhBinding,
                         range: logArcsinhRange,
                         format: MetricText.arcsinhFactor(engine.stretch.arcsinh)
@@ -288,16 +288,16 @@ struct SidebarView: View {
     }
 
     private var collimationSection: some View {
-        GroupBox("Collimation") {
+        GroupBox(SidebarText.collimationSection) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 4) {
-                        metric("Coma", value: comaText)
-                        metric("Direction", value: directionText)
-                        metric("Asymmetry", value: asymmetryText)
-                        metric("FWHM", value: fwhmText)
+                        metric(SidebarText.coma, value: comaText)
+                        metric(SidebarText.direction, value: directionText)
+                        metric(SidebarText.asymmetry, value: asymmetryText)
+                        metric(SidebarText.fwhm, value: fwhmText)
                             .help(HelpText.fwhm)
-                        metric("SNR", value: snrText)
+                        metric(SidebarText.snr, value: snrText)
                     }
                     Spacer()
                     CompassDial(degrees: engine.coma?.directionDegrees, magnitude: engine.coma?.magnitudeNormalized ?? 0)

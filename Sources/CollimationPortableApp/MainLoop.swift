@@ -48,9 +48,12 @@ final class MainLoop {
     }
 
     /// Non-zero only when `--snapshot` failed, so the caller can exit non-zero.
+    /// A widget ID conflict counts as a failure: it means two controls share
+    /// state and ImGui will put an error dialog over the app, and the snapshot
+    /// run is the only place that check can fail a build rather than a user.
     var exitStatus: Int32 {
         guard snapshotPath != nil else { return 0 }
-        return snapshotSucceeded ? 0 : 1
+        return snapshotSucceeded && !Diagnostics.sawIDConflict ? 0 : 1
     }
 
     func updatePointScale() {
@@ -97,13 +100,19 @@ final class MainLoop {
             if event.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED.rawValue {
                 updatePointScale()
             }
-            Input.handle(
+            let quit = Input.handle(
                 event: event,
                 engine: engine,
                 liveRect: liveRect(),
-                pointScale: pointScale,
-                shouldQuit: &running
+                pointScale: pointScale
             )
+            if quit {
+                running = false
+                // Nothing after a quit needs the rest of the queue, and
+                // leaving now means one fewer frame between the click and the
+                // window going away.
+                return
+            }
         }
     }
 
@@ -137,6 +146,7 @@ final class MainLoop {
 
         MenuBar.draw(engine: engine, host: host)
         Input.handleShortcuts(engine: engine, host: host)
+        if MenuBar.quitRequested { running = false }
 
         let live = liveRect()
         var windowHeight: Int32 = 0
@@ -159,6 +169,7 @@ final class MainLoop {
         Diagnostics.heartbeat(engine)
 
         igRender()
+        Diagnostics.checkIDConflicts()
 
         let drawImGui: (OpaquePointer, OpaquePointer) -> Void = { commandBuffer, pass in
             if let drawData = igGetDrawData() {

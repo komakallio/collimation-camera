@@ -59,6 +59,60 @@ everything a new curve has to touch.
 `igTextWrapped`, and `igSetItemTooltip` are all unavailable. `ImGuiText` in
 `HUDDrawList.swift` rebuilds each from its non-variadic parts.
 
+**ImGui identifies a widget by its label.** Two buttons that read `Connect` are
+one widget: clicking one can operate the other, and ImGui throws a modal
+"conflicting ID" dialog over the live view. Sidebar buttons carry `##` plus the
+command id for that reason — which also keeps a button's identity stable when
+its title flips between `Connect` and `Disconnect`. `--snapshot` exits non-zero
+if a conflict appears; nothing else catches it.
+
+**Nothing runs the portable app's quit path except `quit-win.ps1`.** That is
+how a quit that never quit survived: `--snapshot` sets the loop's flag itself
+and `run-win.ps1 -Seconds` kills the process, so the close button reached
+nothing that was ever exercised. If you touch the event loop, run it.
+
+**The engine is `@MainActor`, so a blocking device call in it freezes the
+window.** `haltMotions`, `disconnect`, and anything else that talks to a serial
+port can take seconds when the device has stopped answering, and Windows
+answers a stalled message pump by painting the ghost window and appending
+"(Not Responding)". Hop off the actor — `haltMotionsOffActor` is the pattern —
+and remember that `defer` cannot await, which is why `endMountWork` has a
+non-waiting twin.
+
+**One flag that disables several controls is a trap in waiting.**
+`isFilterWheelMoving` gated the filter picker, the wheel picker, Refresh *and*
+the Connect/Disconnect toggle, so any path that failed to clear it left the
+panel with no way out but quitting. Never gate the escape hatch on the same
+flag as the thing it escapes from: disconnect is always allowed.
+
+**An unplugged camera reports nothing.** Neither vendor SDK raises an error
+when the cable goes: the camera simply stops saying a frame is ready, which
+reads as a timeout and is indistinguishable from a slow one. `CaptureSession`
+therefore counts consecutive timeouts and calls `CameraDevice.isStillPresent()`
+— re-enumeration, the only thing that can tell them apart — rather than
+retrying for ever, which is what it used to do and what froze the live view
+with no message. Any new `CameraDevice` that can tell should implement it; the
+default answers true, which keeps a device that cannot tell from claiming its
+camera has gone.
+
+**ImGui item widths are pixels, not points.** `igSetNextItemWidth(90)` is 90
+device pixels, so on a 200% display it is half the size of everything laid out
+in points around it. Measure the content — `Sidebar.comboWidth(fitting:)` — or
+scale by `UIScale.pointScale`. A number written straight into one of these
+calls is a bug on some display.
+
+**A Swift closure handed to C must not be actor-isolated.** A closure written
+inside a `@MainActor` type inherits that isolation, and Swift emits an
+isolation check at the entry of an isolated closure reached through a C
+function pointer. That check is `dispatch_assert_queue` against the main
+queue; on any other thread it fails, and libdispatch answers a failed
+assertion with `ud2`. The process dies of `STATUS_ILLEGAL_INSTRUCTION`
+(0xC000001D) **before the first line of the body runs**, so there is no log
+line and nothing to go on but the Windows event log. Every Save TIFF died this
+way. Keep C callbacks at file scope, outside any isolated type — the SDL log
+callback in `Diagnostics` has always been fine for exactly that reason — and
+hop to the main actor through a `nonisolated` entry point.
+
 **Whole-module optimization loses SDL's texture-format constants** when
 `WinSDK.DirectX` is imported anywhere in the same module — release only, and
 the type still resolves while every `SDL_GPU_TEXTUREFORMAT_*` vanishes. The
@@ -90,11 +144,28 @@ scripts\build-win.ps1 build --product CollimationCamera
 scripts\run-win.ps1 CollimationCamera                  # stages runtime + SDL3 + Resources first
 scripts\package-win.ps1                                # dist zip
 scripts\window-stress-win.ps1                          # minimize/restore/resize
+scripts\quit-win.ps1                                   # close the window, time the exit
+scripts\save-dialog-win.ps1                            # Save TIFF through the real dialog
 ```
 
 `win.cmd` wraps `build-win.ps1` through cmd, because PowerShell 5.1 turns a
 native tool's stderr into a failure even on exit 0. All of them share the
-`.build-win` scratch path.
+`.build-win` scratch path. Every one of them prints
+`'vswhere.exe' is not recognized` first; it comes from `Enter-VsDevShell`
+shelling out through cmd, the developer shell is entered anyway, and it cannot
+be redirected away from inside PowerShell.
+
+`quit-win.ps1` and `save-dialog-win.ps1` cover the two paths the others cannot.
+`run-win.ps1 -Seconds` kills the process and `--snapshot` ends the loop by
+itself, so from the close button to a clean exit went untested for a long time
+and was broken; the save dialog is the only Swift code that runs on a thread
+SDL owns, and it was broken too. Both scripts drive the real keyboard, so they
+need an idle desktop — `save-dialog-win.ps1` exits 2 and says SKIPPED when
+Windows will not hand it the foreground, which is not a failure.
+
+Also note that PowerShell 5.1 reads a BOM-less `.ps1` as Windows-1252, and an
+em dash decodes to a character it accepts as a string delimiter. **Keep the
+scripts ASCII**, comments included, or a stray dash becomes a parse error.
 
 A build directory holds only the executable. Without the Swift runtime, SDL3,
 and `Resources/` beside it, Windows raises a loader box that suspends the
@@ -112,6 +183,11 @@ CollimationCamera.exe --snapshot shot.png --snapshot-after 8 --window-size 1280x
 capture-cli.exe --frames 100 --device poa-0 --roi 2048 --exposure 20
 ```
 
+Check `--snapshot`'s exit status, not just the PNG: it is non-zero on a widget
+id conflict. And run it through `run-win.ps1` or `Start-Process -Wait`, because
+the release build is a GUI subsystem image and PowerShell's `&` does not wait
+for one — it returns immediately and leaves `$LASTEXITCODE` empty.
+
 `--snapshot` renders through the same code the window uses, so the PNG is what
 the window would have shown. `--window-size` is in **points**, so the same
 argument lays both apps out identically — that is what the §9.8 HUD comparison
@@ -121,6 +197,14 @@ geometry is already pinned by the scene tests.
 The log carries a rate line once a minute. `%LOCALAPPDATA%\Collimation Camera\`
 on Windows, `~/Library/Logs/Collimation Camera/` on macOS, one generation of
 history beside it.
+
+**A running app's log reads as 0 bytes in a directory listing.** Windows does
+not update the directory entry until the handle is flushed or closed, so the
+size and the timestamp both lie while the app is up. Open the file and read it;
+the content is there. This cost an afternoon of chasing a log that was never
+missing — and worse, of concluding from `Get-ChildItem` that a user's session
+had written nothing. Every automated run of the app rotates the log, too, so
+running the app to investigate destroys the evidence you were looking for.
 
 ## Things that are not there
 
@@ -155,16 +239,32 @@ Worth knowing before you go looking:
    portable app.
 4. Wire it into **both** sidebars.
 5. Update `PARITY.md`, or say there why the apps differ.
+6. If it added a widget to the portable sidebar, run `--snapshot` once and
+   check the exit status. ImGui identifies a widget by its label, so two
+   controls that read the same word are the same widget — clicking one can
+   operate the other, and ImGui puts a modal error over the live view. The
+   snapshot run exits non-zero on that; nothing else catches it. Buttons built
+   from `CommandCatalog` are already keyed by command id, so this is about
+   anything hand-written.
 
 `.github/pull_request_template.md` is the checklist.
 
 ## What is not verified
 
-Everything has been run on Windows against the simulator. Nothing has been run
-with a camera, a mount, or a filter wheel, and the macOS side compiles in CI
-but has never been launched. `PLAN-MULTIPLATFORM.md` §14b is the honest list of
-what was actually checked and what was not. Do not read a ✅ in `PARITY.md` as
-"someone saw this work".
+Everything has been run on Windows against the simulator, and the camera side
+has now had one session with two Player One cameras. No mount, no filter wheel,
+no ZWO camera, and the macOS side compiles in CI but has never been launched.
+`PLAN-MULTIPLATFORM.md` §14b and §14c are the honest list of what was actually
+checked and what was not. Do not read a ✅ in `PARITY.md` as "someone saw this
+work".
+
+That session found six defects in a couple of hours: a camera that only opens
+after the bus has been scanned, a tool that reported failure as a stack trace,
+an acquisition path that believed a single noise peak, an ImGui fill that
+assumed convexity, three buttons sharing one widget id — and an app that could
+not be quit, because the close event set the loop's `running` flag to true
+instead of false and nothing had ever closed the window before. Expect the same
+ratio from the mount and the wheel.
 
 ## Conventions
 
