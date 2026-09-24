@@ -24,7 +24,7 @@ see Not yet verified at the end.
 | Zoom and fit | ✅ | ✅ | One factor per scroll event by sign, not per tick. |
 | Trackpad pinch to zoom | ✅ | macOS only | SDL sends `SDL_EVENT_PINCH_UPDATE` on macOS and Wayland only. Windows precision touchpads send Ctrl and wheel, which the wheel path already covers. |
 | ROI follows the star | ✅ | ✅ | Always. The 2048 window recenters as the star moves. Held during mount moves and stacking. |
-| Stabilize view | ✅ | ✅ | Always enabled. Both run the CPU `StabilizationController` once per new frame. |
+| Stabilize view | ✅ | ✅ | Own Image stabilization panel. Always enabled. Both run the CPU `StabilizationController` once per new frame. |
 | Full-frame search | ✅ | ✅ | Always. A lost star switches to a binned full-frame search until it is found. |
 | Collimation overlay and legend | ✅ | ✅ | Always enabled. `OverlayScene` and `LegendScene` primitives, drawn in SwiftUI on macOS and on an ImGui draw list in the portable app. |
 | ROI map | ✅ | ✅ | 140×94 max. |

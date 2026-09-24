@@ -153,7 +153,6 @@ private func renderedUIStrings() throws -> [String] {
     var strings: [String] = [
         MetricText.placeholder,
         MetricText.serialPortPlaceholder,
-        MetricText.roiExplanation,
         HelpText.stackCount,
         HelpText.stackedSave,
         HelpText.roiSection,

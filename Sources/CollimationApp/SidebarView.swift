@@ -75,6 +75,7 @@ struct SidebarView: View {
                 filterWheelSection
                 mountSection
                 roiSection
+                stabilizationSection
                 stretchSection
                 collimationSection
             }
@@ -236,13 +237,6 @@ struct SidebarView: View {
     private var roiSection: some View {
         GroupBox(SidebarText.roiSection) {
             VStack(alignment: .leading, spacing: 8) {
-                Text(MetricText.roiExplanation)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                toggle(CommandCatalog.ID.cameraStabilize)
-
                 HStack {
                     Text(SidebarText.zoom)
                     Slider(value: $engine.zoom, in: engine.zoomFloor...CollimationEngine.maxZoom)
@@ -252,6 +246,12 @@ struct SidebarView: View {
                 }
                 button(CommandCatalog.ID.viewFitToWindow)
             }
+        }
+    }
+
+    private var stabilizationSection: some View {
+        GroupBox(SidebarText.stabilizationSection) {
+            toggle(CommandCatalog.ID.cameraStabilize)
         }
     }
 

@@ -19,6 +19,7 @@ public enum SidebarText {
     public static let filterWheelSection = "Filter wheel"
     public static let mountSection = "Mount"
     public static let roiSection = "ROI & zoom"
+    public static let stabilizationSection = "Image stabilization"
     public static let stretchSection = "Stretch"
     public static let collimationSection = "Collimation"
 
@@ -28,6 +29,7 @@ public enum SidebarText {
         filterWheelSection,
         mountSection,
         roiSection,
+        stabilizationSection,
         stretchSection,
         collimationSection,
     ]

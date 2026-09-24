@@ -3,8 +3,8 @@ import CollimationCore
 import CollimationUI
 import Foundation
 
-/// The left-hand panel: Camera, Filter wheel, Mount, ROI & zoom, Stretch,
-/// Collimation.
+/// The left-hand panel: Camera, Filter wheel, Mount, ROI & zoom,
+/// Image stabilization, Stretch, Collimation.
 ///
 /// Section-for-section port of `SidebarView`. Every label comes from the
 /// command catalog, every predicate from the engine, and every string from
@@ -46,6 +46,7 @@ enum Sidebar {
         filterWheelSection(engine: engine, host: host)
         mountSection(engine: engine, host: host)
         roiSection(engine: engine, host: host)
+        stabilizationSection(engine: engine, host: host)
         stretchSection(engine: engine, host: host)
         collimationSection(engine: engine, host: host)
     }
@@ -174,9 +175,6 @@ enum Sidebar {
 
     private static func roiSection(engine: CollimationEngine, host: any UIHost) {
         guard header(SidebarText.roiSection) else { return }
-        secondary(MetricText.roiExplanation)
-
-        command(CommandCatalog.ID.cameraStabilize, engine: engine, host: host)
 
         slider(
             label: SidebarText.zoom,
@@ -187,6 +185,11 @@ enum Sidebar {
             onCommit: { engine.updateStabilization() }
         )
         command(CommandCatalog.ID.viewFitToWindow, engine: engine, host: host)
+    }
+
+    private static func stabilizationSection(engine: CollimationEngine, host: any UIHost) {
+        guard header(SidebarText.stabilizationSection) else { return }
+        command(CommandCatalog.ID.cameraStabilize, engine: engine, host: host)
     }
 
     private static func stretchSection(engine: CollimationEngine, host: any UIHost) {
