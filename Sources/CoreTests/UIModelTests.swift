@@ -62,7 +62,6 @@ func testCommandCatalogEnablement() throws {
         CommandCatalog.ID.cameraSaveConstellation,
         CommandCatalog.ID.mountCalibrate,
         CommandCatalog.ID.mountCenter,
-        CommandCatalog.ID.cameraSearchFullFrame,
         CommandCatalog.ID.mountConnect,
     ] {
         try expectUI(!(try enabled(id)), "\(id) should be disabled while disconnected")
@@ -73,14 +72,12 @@ func testCommandCatalogEnablement() throws {
     )
     try expectUI(CommandCatalog.filterCommands(engine).allSatisfy { !$0.isEnabled(engine) },
                  "filter slots disabled while the wheel is disconnected")
-    try expectUI(engine.canToggleAutoCenter, "auto-center is free while idle")
 
     // Connected to the simulator.
     engine.connect()
     try expectUI(engine.isConnected, "simulator connected")
     try expectUI(try enabled(CommandCatalog.ID.cameraAutoExpose), "auto exposure once connected")
     try expectUI(try enabled(CommandCatalog.ID.cameraSaveTIFF), "save TIFF once connected")
-    try expectUI(try enabled(CommandCatalog.ID.cameraSearchFullFrame), "search once connected")
     try expectUI(!(try enabled(CommandCatalog.ID.cameraRefreshDevices)), "refresh devices locked while connected")
     // tracking.state stays .idle until the first async publish, which this
     // runner never drains, so these two stay off.
@@ -89,21 +86,16 @@ func testCommandCatalogEnablement() throws {
 
     // While a stack is in flight the camera is being driven at its own rate
     // with a different ROI, so anything that would move the mount or change
-    // the readout has to be off. These three are the ones that could.
-    try expectUI(try enabled(CommandCatalog.ID.cameraSearchFullFrame), "search is on before stacking")
-    try expectUI(engine.canToggleAutoCenter, "auto-center is on before stacking")
+    // the readout has to be off.
     try expectUI(engine.canSelectStackCount, "the frame count is settable before stacking")
 
     engine.setStackingForTesting(true)
-    try expectUI(!(try enabled(CommandCatalog.ID.cameraSearchFullFrame)), "search off while stacking")
     try expectUI(!(try enabled(CommandCatalog.ID.mountCalibrate)), "calibrate off while stacking")
     try expectUI(!(try enabled(CommandCatalog.ID.mountCenter)), "center off while stacking")
     try expectUI(!(try enabled(CommandCatalog.ID.cameraAutoExpose)), "auto exposure off while stacking")
     try expectUI(!(try enabled(CommandCatalog.ID.cameraSaveTIFF)), "save TIFF off while stacking")
-    try expectUI(!engine.canToggleAutoCenter, "auto-center off while stacking")
     try expectUI(!engine.canSelectStackCount, "the frame count is locked while stacking")
     engine.setStackingForTesting(false)
-    try expectUI(try enabled(CommandCatalog.ID.cameraSearchFullFrame), "search back on afterwards")
 }
 
 @MainActor
@@ -172,7 +164,6 @@ func testShortcutUniqueness() throws {
     try expectUI(seen[.primary("e")] == CommandCatalog.ID.cameraAutoExpose, "⌘E auto exposure")
     try expectUI(seen[.primary("s")] == CommandCatalog.ID.cameraSaveTIFF, "⌘S save")
     try expectUI(seen[.primaryShift("s")] == CommandCatalog.ID.cameraSaveStacked, "⇧⌘S save stacked")
-    try expectUI(seen[.primary("f")] == CommandCatalog.ID.cameraSearchFullFrame, "⌘F search")
     try expectUI(seen[.primary("l")] == CommandCatalog.ID.cameraStabilize, "⌘L stabilize")
     try expectUI(seen[.primaryShift("g")] == CommandCatalog.ID.mountCalibrate, "⇧⌘G calibrate")
     try expectUI(seen[.primary("g")] == CommandCatalog.ID.mountCenter, "⌘G center")

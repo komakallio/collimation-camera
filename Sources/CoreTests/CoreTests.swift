@@ -786,8 +786,6 @@ private func testTrackerRecenter() throws {
     let status = tracker.process(
         frame: frame,
         detection: detection,
-        autoCenter: true,
-        autoSearch: false,
         trackingROISize: 128,
         sensorWidth: 6252,
         sensorHeight: 4176
@@ -809,14 +807,13 @@ private func testTrackerHoldWhenLost() throws {
         last = tracker.process(
             frame: frame,
             detection: nil,
-            autoCenter: true,
-            autoSearch: false,
+            holdROI: true,
             trackingROISize: 256,
             sensorWidth: 6252,
             sensorHeight: 4176
         )
     }
-    try expect(last.state == TrackingState.lost, "stay lost when auto-search is off")
+    try expect(last.state == TrackingState.lost, "stay lost while a mount move or a stack holds the ROI")
     try expect(last.requestedROI == nil, "do not switch to a search ROI")
 }
 
@@ -834,8 +831,6 @@ private func testTrackerAutoSearch() throws {
         last = tracker.process(
             frame: frame,
             detection: nil,
-            autoCenter: true,
-            autoSearch: true,
             trackingROISize: 256,
             sensorWidth: 6252,
             sensorHeight: 4176
@@ -872,8 +867,7 @@ private func testSearchRecovery() throws {
         status = tracker.process(
             frame: frame,
             detection: detection,
-            autoCenter: true,
-            autoSearch: true,
+            holdROI: false,
             trackingROISize: CaptureLayout.trackingHardwareSize,
             sensorWidth: 800,
             sensorHeight: 600
@@ -893,8 +887,7 @@ private func testSearchRecovery() throws {
         heldStatus = held.process(
             frame: frame,
             detection: detection,
-            autoCenter: false,
-            autoSearch: false,
+            holdROI: true,
             trackingROISize: CaptureLayout.trackingHardwareSize,
             sensorWidth: 800,
             sensorHeight: 600
@@ -930,8 +923,7 @@ private func testSearchIgnoresJumpingNoise() throws {
         status = tracker.process(
             frame: frame,
             detection: peak(at: Double(10 + index * 5), Double(60 - index * 2)),
-            autoCenter: true,
-            autoSearch: true,
+            holdROI: false,
             trackingROISize: CaptureLayout.trackingHardwareSize,
             sensorWidth: 800,
             sensorHeight: 600
@@ -946,8 +938,7 @@ private func testSearchIgnoresJumpingNoise() throws {
         status = tracker.process(
             frame: frame,
             detection: peak(at: 40, 40),
-            autoCenter: true,
-            autoSearch: true,
+            holdROI: false,
             trackingROISize: CaptureLayout.trackingHardwareSize,
             sensorWidth: 800,
             sensorHeight: 600

@@ -176,9 +176,7 @@ enum Sidebar {
         guard header(SidebarText.roiSection) else { return }
         secondary(MetricText.roiExplanation)
 
-        command(CommandCatalog.ID.cameraAutoCenter, engine: engine, host: host)
         command(CommandCatalog.ID.cameraStabilize, engine: engine, host: host)
-        command(CommandCatalog.ID.cameraSearchFullFrame, engine: engine, host: host)
 
         slider(
             label: SidebarText.zoom,

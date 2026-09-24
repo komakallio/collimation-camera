@@ -95,15 +95,6 @@ public final class CollimationEngine {
     public var exposureRange: ClosedRange<Double> = Double(ExposureControl.minMicroseconds)...Double(ExposureControl.maxMicroseconds)
     public var gainRange: ClosedRange<Double> = 0...400
 
-    public var autoCenter = true {
-        didSet { applyPipelineConfig() }
-    }
-    public var autoSearch = false {
-        didSet {
-            applyPipelineConfig()
-            handleAutoSearchChange(autoSearch)
-        }
-    }
     public var stabilize = false {
         didSet { updateStabilization() }
     }
@@ -135,10 +126,10 @@ public final class CollimationEngine {
     public private(set) var isStacking = false
 
     /// Test hook, and only that: `command catalog enablement` has to reach the
-    /// stacking branch of `canCalibrateMount`, `canCenterStar`, and
-    /// `canSearchFullFrame`, and the only other way in is to start a real
-    /// stack and wait for frames. App code must call `saveStacked` instead —
-    /// this sets the flag without any of the work that goes with it.
+    /// stacking branch of `canCalibrateMount` and `canCenterStar`, and the only
+    /// other way in is to start a real stack and wait for frames. App code must
+    /// call `saveStacked` instead — this sets the flag without any of the work
+    /// that goes with it.
     public func setStackingForTesting(_ value: Bool) {
         isStacking = value
     }
@@ -199,8 +190,6 @@ public final class CollimationEngine {
     }
     public var canCenterStar: Bool { canCalibrateMount && isMountCalibrated }
     public var canSaveConstellation: Bool { canCenterStar }
-    public var canToggleAutoCenter: Bool { !isMountBusy && !isStacking }
-    public var canSearchFullFrame: Bool { isConnected && !isMountBusy && !isStacking }
     public var canConnectMount: Bool { (isMountConnected || !serialPorts.isEmpty) && !isMountBusy }
     public var canSelectSerialPort: Bool { !isMountConnected && !isMountBusy }
     public var canRefreshSerialPorts: Bool { canSelectSerialPort }
@@ -789,37 +778,6 @@ public final class CollimationEngine {
                 alignment: roiAlignment
             )
         )
-    }
-
-    public func searchNow() {
-        guard isConnected, !isMountBusy, !isStacking else { return }
-        pipeline.markSearching()
-        coalescer.cancel()
-        softwareCrop.reset()
-        let roi = Alignment.fullFrameROI(
-            sensorWidth: sensorWidth,
-            sensorHeight: sensorHeight,
-            binning: searchBinning,
-            alignment: roiAlignment
-        )
-        session.requestROI(roi)
-        tracking.state = .searching
-        statusText = "Searching full frame…"
-        updateStabilization()
-    }
-
-    private func handleAutoSearchChange(_ enabled: Bool) {
-        guard isConnected, !isMountBusy, !isStacking else { return }
-        if enabled {
-            if tracking.state == .lost || tracking.state == .searching {
-                searchNow()
-            }
-        } else if tracking.state == .searching {
-            applyROISize()
-            tracking.state = .lost
-            statusText = "Star lost — holding ROI"
-            updateStabilization()
-        }
     }
 
     public func autoStretch() {
@@ -1575,8 +1533,6 @@ public final class CollimationEngine {
 
     private func applyPipelineConfig() {
         pipeline.configure(
-            autoCenter: autoCenter && !holdsROI,
-            autoSearch: autoSearch && !holdsROI,
             sensorWidth: sensorWidth,
             sensorHeight: sensorHeight,
             holdROI: holdsROI,

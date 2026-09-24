@@ -80,9 +80,8 @@ reports: `clipped` means lower the exposure or the gain.
 Start it, pick the camera, connect. Then, in order:
 
 - **Auto exposure**, then **Auto stretch**. The donut should be visible and not
-  clipped; clipped pixels paint red.
-- **Auto-center star**. The ROI should follow the star without the stream
-  restarting — the fps line in the log should not drop while it moves.
+  clipped; clipped pixels paint red. The camera window follows the star on its
+  own — the fps line in the log should not drop while it moves.
 - Move the star off the ROI by hand. The app should switch to a binned
   full-frame search and recenter itself.
 - **Stabilize view**, then **zoom** with the wheel. One zoom step per wheel

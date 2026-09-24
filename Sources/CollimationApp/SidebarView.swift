@@ -241,9 +241,7 @@ struct SidebarView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                toggle(CommandCatalog.ID.cameraAutoCenter)
                 toggle(CommandCatalog.ID.cameraStabilize)
-                toggle(CommandCatalog.ID.cameraSearchFullFrame)
 
                 HStack {
                     Text(SidebarText.zoom)

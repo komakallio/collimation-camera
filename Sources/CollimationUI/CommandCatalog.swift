@@ -65,9 +65,7 @@ public enum CommandCatalog {
         public static let cameraSaveTIFF = "camera.saveTIFF"
         public static let cameraSaveStacked = "camera.saveStacked"
         public static let cameraSaveConstellation = "camera.saveConstellation"
-        public static let cameraSearchFullFrame = "camera.searchFullFrame"
         public static let cameraStabilize = "camera.stabilize"
-        public static let cameraAutoCenter = "camera.autoCenter"
         public static let mountConnect = "mount.connect"
         public static let mountRefreshPorts = "mount.refreshPorts"
         public static let mountCalibrate = "mount.calibrate"
@@ -155,16 +153,6 @@ public enum CommandCatalog {
             }
         ),
         Command(
-            id: ID.cameraSearchFullFrame,
-            menu: .camera,
-            kind: .toggle(get: { $0.autoSearch }, set: { $0.autoSearch = $1 }),
-            title: "Search Full Frame",
-            shortTitle: "Search full frame",
-            help: "When on, a lost star starts a binned full-frame search. The live view shows that full frame until the star is found.",
-            shortcuts: [.primary("f")],
-            isEnabled: { $0.canSearchFullFrame }
-        ),
-        Command(
             id: ID.cameraStabilize,
             menu: .camera,
             kind: .toggle(get: { $0.stabilize }, set: { $0.stabilize = $1 }),
@@ -172,15 +160,6 @@ public enum CommandCatalog {
             shortTitle: "Stabilize view",
             help: "Nudge the live 512×512 crop so the detected centroid stays still. Off while the full sensor is shown (search or centering).",
             shortcuts: [.primary("l")]
-        ),
-        Command(
-            id: ID.cameraAutoCenter,
-            menu: nil,
-            kind: .toggle(get: { $0.autoCenter }, set: { $0.autoCenter = $1 }),
-            title: "Auto-center star",
-            shortTitle: "Auto-center star",
-            help: "Keep the 2048×2048 camera window on the star. The live view is a 512×512 software crop.",
-            isEnabled: { $0.canToggleAutoCenter }
         ),
         Command(
             id: ID.mountConnect,

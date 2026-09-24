@@ -18,8 +18,6 @@ final class FramePipeline: @unchecked Sendable {
     private let analyzer = ComaAnalyzer()
     private let fwhmEstimator = FWHMEstimator()
     private let profileSampler = StarProfileSampler()
-    private var autoCenter = true
-    private var autoSearch = false
     private var holdROI = false
     private var sensorWidth = CameraDescriptor.simulator.sensorWidth
     private var sensorHeight = CameraDescriptor.simulator.sensorHeight
@@ -29,8 +27,6 @@ final class FramePipeline: @unchecked Sendable {
     private var generation = 0
 
     func configure(
-        autoCenter: Bool,
-        autoSearch: Bool,
         sensorWidth: Int,
         sensorHeight: Int,
         holdROI: Bool = false,
@@ -39,15 +35,13 @@ final class FramePipeline: @unchecked Sendable {
         searchBinning: Int = 4
     ) {
         lock.lock()
-        self.autoCenter = autoCenter
-        self.autoSearch = autoSearch
         self.sensorWidth = sensorWidth
         self.sensorHeight = sensorHeight
         self.holdROI = holdROI
         self.optics = optics
         self.roiAlignment = roiAlignment
-        // The tracker's own auto-search path builds a full-frame ROI too, so it
-        // needs the same device-legal binning as searchNow().
+        // The tracker's own full-frame search builds a full-frame ROI too, so it
+        // needs the same device-legal binning.
         tracker.config.searchBinning = max(1, searchBinning)
         lock.unlock()
     }
@@ -64,13 +58,6 @@ final class FramePipeline: @unchecked Sendable {
     func dropInFlight() {
         lock.lock()
         generation &+= 1
-        lock.unlock()
-    }
-
-    func markSearching() {
-        lock.lock()
-        tracker.markSearching()
-        lastSensorCentroid = nil
         lock.unlock()
     }
 
@@ -114,8 +101,7 @@ final class FramePipeline: @unchecked Sendable {
         var next = tracker.process(
             frame: frame,
             detection: found?.offsetBy(origin),
-            autoCenter: self.autoCenter && !self.holdROI,
-            autoSearch: self.autoSearch && !self.holdROI,
+            holdROI: self.holdROI,
             trackingROISize: CaptureLayout.trackingHardwareSize,
             sensorWidth: sensorWidth,
             sensorHeight: sensorHeight,

@@ -23,9 +23,9 @@ see Not yet verified at the end.
 | MTF and arcsinh curves | ✅ | ✅ | Shader math must match `StretchParams.apply`; `stretch shader math` keeps the maths in step and `stretch shader copies` keeps the two MSL strings — `MetalRenderer.shaderSource` for this app, `ShaderSource.metal` for the portable one — from drifting apart. HLSL has no `asinh` and uses the log form. |
 | Zoom and fit | ✅ | ✅ | One factor per scroll event by sign, not per tick. |
 | Trackpad pinch to zoom | ✅ | macOS only | SDL sends `SDL_EVENT_PINCH_UPDATE` on macOS and Wayland only. Windows precision touchpads send Ctrl and wheel, which the wheel path already covers. |
-| Auto-center | ✅ | ✅ | `canToggleAutoCenter`. |
+| ROI follows the star | ✅ | ✅ | Always. The 2048 window recenters as the star moves. Held during mount moves and stacking. |
 | Stabilize view | ✅ | ✅ | Always enabled. Both run the CPU `StabilizationController` once per new frame. |
-| Search full frame | ✅ | ✅ | `canSearchFullFrame`. Tightened at milestone 2: the macOS menu item was ungated. |
+| Full-frame search | ✅ | ✅ | Always. A lost star switches to a binned full-frame search until it is found. |
 | Collimation overlay and legend | ✅ | ✅ | Always enabled. `OverlayScene` and `LegendScene` primitives, drawn in SwiftUI on macOS and on an ImGui draw list in the portable app. |
 | ROI map | ✅ | ✅ | 140×94 max. |
 | Star profile | ✅ | ✅ | 148×102. |
@@ -64,8 +64,8 @@ see Not yet verified at the end.
   shared strings use would render as "?". Text metrics therefore differ
   slightly between the two apps; HUD geometry does not.
 - Enablement is the engine's `can*` predicate on every surface. Milestone 2
-  rebuilt the macOS menus from `CommandCatalog`, which tightened four items —
-  Calibrate Mount, Center Star, Search Full Frame, and Connect Mount — because
+  rebuilt the macOS menus from `CommandCatalog`, which tightened three items —
+  Calibrate Mount, Center Star, and Connect Mount — because
   the pre-port menu was looser than both the sidebar and the engine's own
   early returns.
 

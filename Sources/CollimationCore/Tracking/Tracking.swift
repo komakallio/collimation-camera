@@ -99,8 +99,7 @@ public struct Tracker: Sendable {
     public mutating func process(
         frame: Frame,
         detection: StarDetection?,
-        autoCenter: Bool,
-        autoSearch: Bool,
+        holdROI: Bool = false,
         trackingROISize: Int,
         sensorWidth: Int,
         sensorHeight: Int,
@@ -137,19 +136,14 @@ public struct Tracker: Sendable {
                 candidate = nil
                 candidateFrames = 0
 
-                let roi: ROI?
-                if autoCenter || autoSearch {
-                    roi = Alignment.centeredROI(
-                        around: sensor,
-                        size: trackingROISize,
-                        sensorWidth: sensorWidth,
-                        sensorHeight: sensorHeight,
-                        binning: 1,
-                        alignment: alignment
-                    )
-                } else {
-                    roi = nil
-                }
+                let roi: ROI? = holdROI ? nil : Alignment.centeredROI(
+                    around: sensor,
+                    size: trackingROISize,
+                    sensorWidth: sensorWidth,
+                    sensorHeight: sensorHeight,
+                    binning: 1,
+                    alignment: alignment
+                )
                 state = .tracking
                 lastMove = now
                 return TrackingStatus(
@@ -163,7 +157,7 @@ public struct Tracker: Sendable {
 
             state = .tracking
             var requested: ROI?
-            if autoCenter, trackingROISize < min(sensorWidth, sensorHeight) {
+            if !holdROI, trackingROISize < min(sensorWidth, sensorHeight) {
                 requested = recenterIfNeeded(
                     detection: detection,
                     frame: frame,
@@ -186,7 +180,7 @@ public struct Tracker: Sendable {
 
         lostFrames += 1
         if state == .searching {
-            if !autoSearch {
+            if holdROI {
                 state = .lost
                 return TrackingStatus(
                     state: .lost,
@@ -196,7 +190,7 @@ public struct Tracker: Sendable {
             }
             return TrackingStatus(state: .searching, lostFrames: lostFrames)
         }
-        if autoSearch, lostFrames >= config.lostFrameLimit {
+        if !holdROI, lostFrames >= config.lostFrameLimit {
             state = .searching
             let search = Alignment.fullFrameROI(
                 sensorWidth: sensorWidth,

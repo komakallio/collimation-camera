@@ -148,7 +148,7 @@ Without the filter-wheel library, the sidebar Filter wheel section stays disconn
 
 1. Point at the artificial star and defocus until the secondary shadow is a clear hole.
 2. Connect the camera (or simulator), set exposure/gain so the donut is not clipped.
-3. Click **Auto stretch**, then enable **Auto-center star**.
+3. Click **Auto stretch**. The camera window follows the star, and a lost star starts a binned full-frame search.
 4. Read **Coma** (normalized fraction of the annulus width) and **Direction** (0° = right, 90° = down on the image).
 5. Adjust the collimation screws to drive the normalized coma toward zero. The overlay arrow and the dial match that direction.
 
