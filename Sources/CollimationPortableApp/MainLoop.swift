@@ -1,0 +1,216 @@
+import CImGui
+import CSDL3
+import CollimationCore
+import CollimationUI
+import Foundation
+
+/// One frame of the portable app, in the order §9.5 fixes.
+@MainActor
+final class MainLoop {
+    private let window: OpaquePointer
+    private let device: OpaquePointer
+    private let engine: CollimationEngine
+    private let host: PortableUIHost
+    private let renderer: GPULiveRenderer
+    private var running = true
+
+    /// Set by `--snapshot`: after `settleSeconds` the next frame goes to this
+    /// file instead of the window, and the app exits.
+    private let snapshotPath: String?
+    private let snapshotAfter: Double
+    private let swapchainFormat: SDL_GPUTextureFormat
+    private let startedAt = Date()
+    private var snapshotSucceeded = false
+
+    /// Window points per window coordinate. 2.0 on Windows at 200% (window
+    /// coordinates are pixels there), 1.0 on a Retina Mac (they are points).
+    private var pointScale: Double = 1
+
+    init(
+        window: OpaquePointer,
+        device: OpaquePointer,
+        engine: CollimationEngine,
+        host: PortableUIHost,
+        renderer: GPULiveRenderer,
+        swapchainFormat: SDL_GPUTextureFormat,
+        snapshotPath: String? = nil,
+        snapshotAfter: Double = 0
+    ) {
+        self.window = window
+        self.device = device
+        self.engine = engine
+        self.host = host
+        self.renderer = renderer
+        self.swapchainFormat = swapchainFormat
+        self.snapshotPath = snapshotPath
+        self.snapshotAfter = snapshotAfter
+        updatePointScale()
+    }
+
+    /// Non-zero only when `--snapshot` failed, so the caller can exit non-zero.
+    /// A widget ID conflict counts as a failure: it means two controls share
+    /// state and ImGui will put an error dialog over the app, and the snapshot
+    /// run is the only place that check can fail a build rather than a user.
+    var exitStatus: Int32 {
+        guard snapshotPath != nil else { return 0 }
+        return snapshotSucceeded && !Diagnostics.sawIDConflict ? 0 : 1
+    }
+
+    func updatePointScale() {
+        let displayScale = Double(SDL_GetWindowDisplayScale(window))
+        let pixelDensity = Double(SDL_GetWindowPixelDensity(window))
+        pointScale = pixelDensity > 0 ? displayScale / pixelDensity : 1
+        UIScale.pointScale = pointScale
+
+        // The SDL3 ImGui backend does not handle content scale itself, so the
+        // style is rebuilt from scratch on every change.
+        if let style = igGetStyle() {
+            igStyleColorsDark(style)
+            ImGuiStyle_ScaleAllSizes(style, Float(pointScale))
+            style.pointee.FontSizeBase = Fonts.baseSize
+            style.pointee.FontScaleDpi = Float(pointScale)
+        }
+        Log.info("point scale \(pointScale) (display \(displayScale), density \(pixelDensity))")
+    }
+
+    func run() {
+        while running {
+            pumpEvents()
+            // On Windows, @MainActor jobs land on the libdispatch main queue
+            // and nothing drains it unless the main thread runs the run loop.
+            // One non-blocking pass per frame bounds main-actor latency to a
+            // frame, which the engine's polling loops tolerate.
+            _ = RunLoop.main.limitDate(forMode: .default)
+            host.pumpDialogResult()
+
+            let flags = SDL_GetWindowFlags(window)
+            if flags & SDL_WINDOW_MINIMIZED != 0 {
+                SDL_Delay(16)
+                continue
+            }
+
+            drawFrame()
+        }
+    }
+
+    private func pumpEvents() {
+        var event = SDL_Event()
+        while SDL_PollEvent(&event) {
+            _ = ImGui_ImplSDL3_ProcessEvent(&event)
+            if event.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED.rawValue {
+                updatePointScale()
+            }
+            let quit = Input.handle(
+                event: event,
+                engine: engine,
+                liveRect: liveRect(),
+                pointScale: pointScale
+            )
+            if quit {
+                running = false
+                // Nothing after a quit needs the rest of the queue, and
+                // leaving now means one fewer frame between the click and the
+                // window going away.
+                return
+            }
+        }
+    }
+
+    /// The area right of the sidebar and below the menu bar, in view points.
+    private func liveRect() -> (origin: SIMD2<Double>, size: SIMD2<Double>) {
+        var width: Int32 = 0
+        var height: Int32 = 0
+        SDL_GetWindowSize(window, &width, &height)
+        let windowPoints = SIMD2(Double(width) / pointScale, Double(height) / pointScale)
+        let top = MenuBar.height / pointScale
+        return (
+            origin: SIMD2(Sidebar.width, top),
+            size: SIMD2(
+                max(windowPoints.x - Sidebar.width, 1),
+                max(windowPoints.y - top, 1)
+            )
+        )
+    }
+
+    private func windowSizeInPoints() -> SIMD2<Double> {
+        var width: Int32 = 0
+        var height: Int32 = 0
+        SDL_GetWindowSize(window, &width, &height)
+        return SIMD2(Double(width) / pointScale, Double(height) / pointScale)
+    }
+
+    private func drawFrame() {
+        cimgui_sdlgpu3_new_frame()
+        ImGui_ImplSDL3_NewFrame()
+        igNewFrame()
+
+        MenuBar.draw(engine: engine, host: host)
+        Input.handleShortcuts(engine: engine, host: host)
+        if MenuBar.quitRequested { running = false }
+
+        let live = liveRect()
+        var windowHeight: Int32 = 0
+        var windowWidth: Int32 = 0
+        SDL_GetWindowSize(window, &windowWidth, &windowHeight)
+        Sidebar.draw(
+            engine: engine,
+            host: host,
+            topOffset: MenuBar.height,
+            height: Double(windowHeight) - MenuBar.height,
+            pointScale: pointScale
+        )
+        LiveChrome.draw(engine: engine, liveRect: live, pointScale: pointScale)
+        ErrorDialog.draw(engine: engine)
+
+        // The engine lays out in view points, like the macOS app.
+        engine.viewWidth = live.size.x
+        engine.viewHeight = live.size.y
+        engine.updateStabilization()
+        Diagnostics.heartbeat(engine)
+
+        igRender()
+        Diagnostics.checkIDConflicts()
+
+        let drawImGui: (OpaquePointer, OpaquePointer) -> Void = { commandBuffer, pass in
+            if let drawData = igGetDrawData() {
+                cimgui_sdlgpu3_render_draw_data(drawData, commandBuffer, pass)
+            }
+        }
+        let prepareImGui: (OpaquePointer) -> Void = { commandBuffer in
+            if let drawData = igGetDrawData() {
+                cimgui_sdlgpu3_prepare_draw_data(drawData, commandBuffer)
+            }
+        }
+
+        // `--snapshot`: one offscreen frame to a file, then quit. Taken here
+        // rather than after the loop because the ImGui draw data is only valid
+        // between igRender and the next igNewFrame.
+        if let snapshotPath, Date().timeIntervalSince(startedAt) >= snapshotAfter {
+            snapshotSucceeded = Snapshot.write(
+                to: snapshotPath,
+                device: device,
+                window: window,
+                format: swapchainFormat,
+                renderer: renderer,
+                engine: engine,
+                liveRect: live,
+                windowSize: windowSizeInPoints(),
+                drawImGui: drawImGui,
+                prepareImGui: prepareImGui
+            )
+            running = false
+            return
+        }
+
+        renderer.draw(
+            frames: engine.frameSlot,
+            renderState: engine.renderStateSlot,
+            stabilization: engine.stabilization,
+            window: window,
+            liveRect: live,
+            windowSize: windowSizeInPoints(),
+            drawImGui: drawImGui,
+            prepareImGui: prepareImGui
+        )
+    }
+}

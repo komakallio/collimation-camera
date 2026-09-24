@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 
 /// In-focus star with a circular-aperture Airy pattern: \(I \propto [2 J_1(x)/x]^2\).
@@ -66,7 +65,7 @@ public struct AiryRenderer: Sendable {
         let scale = scene.firstMinimumPixels
         let x = AiryScene.j1FirstZero * r / scale
         if abs(x) < 1e-6 { return 1 }
-        let a = 2 * j1(x) / x
+        let a = 2 * besselJ1(x) / x
         return a * a
     }
 

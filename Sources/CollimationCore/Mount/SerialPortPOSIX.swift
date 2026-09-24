@@ -1,62 +1,61 @@
+#if canImport(Darwin) || canImport(Glibc)
+#if canImport(Darwin)
 import Darwin
+#else
+import Glibc
+#endif
 import Foundation
 
-enum SerialPortError: Error {
-    case openFailed
-    case configureFailed
-    case closed
-    case timeout
-    case ioFailed
-}
-
-/// POSIX 8N1 serial port used to talk to an EQ6 SynScan handset or EQDIR adapter.
-final class SerialPort: @unchecked Sendable {
+/// POSIX 8N1 serial port. Non-blocking file descriptor plus `poll`.
+public final class POSIXSerialPort: SerialPortDriver, @unchecked Sendable {
     private var fd: Int32 = -1
     private let lock = NSLock()
 
-    var isOpen: Bool {
+    public init() {}
+
+    public var isOpen: Bool {
         lock.lock()
         defer { lock.unlock() }
         return fd >= 0
     }
 
-    func open(path: String, baud: speed_t = speed_t(B9600)) throws {
+    public func open(path: String, baud: Int) throws {
         lock.lock()
         defer { lock.unlock() }
         if fd >= 0 {
-            Darwin.close(fd)
+            closeDescriptor(fd)
             fd = -1
         }
-        let opened = Darwin.open(path, O_RDWR | O_NOCTTY | O_NONBLOCK)
+        let opened = openDescriptor(path)
         guard opened >= 0 else { throw SerialPortError.openFailed }
         fd = opened
 
         do {
-            try configureLocked(baud: baud)
+            try configureLocked(baud: Self.speed(for: baud))
         } catch {
-            Darwin.close(fd)
+            closeDescriptor(fd)
             fd = -1
             throw error
         }
     }
 
-    func close() {
+    public func close() {
         lock.lock()
         defer { lock.unlock() }
         if fd >= 0 {
-            Darwin.close(fd)
+            closeDescriptor(fd)
             fd = -1
         }
     }
 
-    func flush() {
+    public func flush() {
         lock.lock()
         defer { lock.unlock() }
         guard fd >= 0 else { return }
         tcflush(fd, TCIOFLUSH)
     }
 
-    func write(_ data: Data) throws {
+    public func write(_ data: Data) throws {
         lock.lock()
         defer { lock.unlock() }
         guard fd >= 0 else { throw SerialPortError.closed }
@@ -64,7 +63,7 @@ final class SerialPort: @unchecked Sendable {
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return }
             var written = 0
             while written < raw.count {
-                let n = Darwin.write(fd, base + written, raw.count - written)
+                let n = writeDescriptor(fd, base + written, raw.count - written)
                 if n > 0 {
                     written += n
                     continue
@@ -76,15 +75,10 @@ final class SerialPort: @unchecked Sendable {
                 throw SerialPortError.ioFailed
             }
         }
-        Self.log("TX", data)
+        SerialLog.log("TX", data)
     }
 
-    func writeASCII(_ text: String) throws {
-        guard let data = text.data(using: .ascii) else { throw SerialPortError.ioFailed }
-        try write(data)
-    }
-
-    func readUntil(terminator: UInt8, timeout: TimeInterval, maxBytes: Int = 256) throws -> Data {
+    public func readUntil(terminator: UInt8, timeout: TimeInterval, maxBytes: Int = 256) throws -> Data {
         lock.lock()
         defer { lock.unlock() }
         guard fd >= 0 else { throw SerialPortError.closed }
@@ -99,11 +93,11 @@ final class SerialPort: @unchecked Sendable {
             } catch SerialPortError.timeout {
                 continue
             }
-            let n = Darwin.read(fd, &byte, 1)
+            let n = readDescriptor(fd, &byte, 1)
             if n == 1 {
                 data.append(byte)
                 if byte == terminator {
-                    Self.log("RX", data)
+                    SerialLog.log("RX", data)
                     return data
                 }
                 if data.count >= maxBytes { throw SerialPortError.ioFailed }
@@ -113,12 +107,50 @@ final class SerialPort: @unchecked Sendable {
             if errno == EAGAIN || errno == EWOULDBLOCK { continue }
             throw SerialPortError.ioFailed
         }
-        Self.log("RX timeout", data)
+        SerialLog.log("RX timeout", data)
         throw SerialPortError.timeout
     }
 
+    private static func speed(for baud: Int) -> speed_t {
+        baud == 115_200 ? speed_t(B115200) : speed_t(B9600)
+    }
+
+    private func openDescriptor(_ path: String) -> Int32 {
+#if canImport(Darwin)
+        Darwin.open(path, O_RDWR | O_NOCTTY | O_NONBLOCK)
+#else
+        Glibc.open(path, O_RDWR | O_NOCTTY | O_NONBLOCK)
+#endif
+    }
+
+    private func closeDescriptor(_ descriptor: Int32) {
+#if canImport(Darwin)
+        _ = Darwin.close(descriptor)
+#else
+        _ = Glibc.close(descriptor)
+#endif
+    }
+
+    private func writeDescriptor(_ descriptor: Int32, _ buffer: UnsafePointer<UInt8>, _ count: Int) -> Int {
+#if canImport(Darwin)
+        Darwin.write(descriptor, buffer, count)
+#else
+        Glibc.write(descriptor, buffer, count)
+#endif
+    }
+
+    private func readDescriptor(_ descriptor: Int32, _ buffer: UnsafeMutablePointer<UInt8>, _ count: Int) -> Int {
+#if canImport(Darwin)
+        Darwin.read(descriptor, buffer, count)
+#else
+        Glibc.read(descriptor, buffer, count)
+#endif
+    }
+
     private func configureLocked(baud: speed_t) throws {
+#if canImport(Darwin)
         _ = ioctl(fd, TIOCEXCL)
+#endif
         var flags = fcntl(fd, F_GETFL)
         guard flags >= 0 else { throw SerialPortError.configureFailed }
         flags |= O_NONBLOCK
@@ -131,16 +163,27 @@ final class SerialPort: @unchecked Sendable {
         settings.c_cflag |= tcflag_t(CLOCAL | CREAD | CS8)
         settings.c_cflag &= ~tcflag_t(PARENB)
         settings.c_cflag &= ~tcflag_t(CSTOPB)
+#if canImport(Darwin)
         settings.c_cflag &= ~tcflag_t(CRTSCTS)
+#endif
         settings.c_iflag = 0
         settings.c_oflag = 0
         settings.c_lflag = 0
+        // VMIN and VTIME. `c_cc` imports as a tuple, and the indices differ:
+        // Darwin puts them at 16 and 17, Linux at 6 and 5.
+#if canImport(Darwin)
         settings.c_cc.16 = 0
         settings.c_cc.17 = 0
+#else
+        settings.c_cc.6 = 0
+        settings.c_cc.5 = 0
+#endif
         guard tcsetattr(fd, TCSANOW, &settings) == 0 else { throw SerialPortError.configureFailed }
 
         var bits: Int32 = TIOCM_DTR | TIOCM_RTS
-        _ = ioctl(fd, TIOCMBIS, &bits)
+        // `ioctl` takes an unsigned request on both platforms, but Linux
+        // imports TIOCMBIS as Int32 where Darwin already gives UInt.
+        _ = ioctl(fd, UInt(bitPattern: Int(TIOCMBIS)), &bits)
         tcflush(fd, TCIOFLUSH)
     }
 
@@ -154,32 +197,11 @@ final class SerialPort: @unchecked Sendable {
             throw SerialPortError.ioFailed
         }
     }
-
-    private static func log(_ direction: String, _ data: Data) {
-        if data.isEmpty {
-            print("EQ6 \(direction)")
-        } else {
-            print("EQ6 \(direction) \(describe(data))")
-        }
-        fflush(stdout)
-    }
-
-    private static func describe(_ data: Data) -> String {
-        if let text = String(data: data, encoding: .ascii),
-           text.unicodeScalars.allSatisfy({ scalar in
-               scalar.isASCII && (scalar.value >= 32 || scalar == "\r" || scalar == "\n")
-           })
-        {
-            return text
-                .replacingOccurrences(of: "\r", with: "\\r")
-                .replacingOccurrences(of: "\n", with: "\\n")
-        }
-        return data.map { String(format: "%02X", $0) }.joined(separator: " ")
-    }
 }
 
-enum SerialPortScanner {
-    static func availablePaths() -> [String] {
+public enum SerialPortScanner {
+    /// macOS callout devices, minus the Bluetooth and debug pseudo-ports.
+    public static func availablePaths() -> [String] {
         let skip = ["Bluetooth", "debug-console", "wlan-debug", "Bluetooth-Incoming"]
         let names = (try? FileManager.default.contentsOfDirectory(atPath: "/dev")) ?? []
         return names
@@ -189,3 +211,4 @@ enum SerialPortScanner {
             .map { "/dev/\($0)" }
     }
 }
+#endif

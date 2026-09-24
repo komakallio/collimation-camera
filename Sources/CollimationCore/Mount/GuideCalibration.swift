@@ -85,9 +85,20 @@ public struct GuideCalibration: Equatable, Sendable, Codable {
     }
 
     public var isValid: Bool {
-        abs(determinant) > 1e-8
+        eastX.isFinite && eastY.isFinite && northX.isFinite && northY.isFinite
+            && raBacklashPixels.isFinite && decBacklashPixels.isFinite
+            && abs(determinant) > 1e-8
             && hypot(eastX, eastY) > 1e-5
             && hypot(northX, northY) > 1e-5
+            && axisSeparationSine >= 0.25
+    }
+
+    /// A nonzero determinant alone accepts almost parallel measurements and
+    /// amplifies a small image error into large, opposing motor commands.
+    public var axisSeparationSine: Double {
+        let scale = hypot(eastX, eastY) * hypot(northX, northY)
+        guard scale.isFinite, scale > 0 else { return 0 }
+        return abs(determinant) / scale
     }
 
     /// Sidereal (rate 1) speed of this axis in sensor pixels per millisecond.
@@ -102,7 +113,7 @@ public struct GuideCalibration: Equatable, Sendable, Codable {
     /// Negative East time means West; negative North time means South.
     public func pulses(toMoveStarBy delta: SIMD2<Double>) -> (eastMs: Double, northMs: Double)? {
         let det = determinant
-        guard abs(det) > 1e-8 else { return nil }
+        guard isValid else { return nil }
         let eastMs = (delta.x * northY - northX * delta.y) / det
         let northMs = (eastX * delta.y - delta.x * eastY) / det
         guard eastMs.isFinite, northMs.isFinite else { return nil }
@@ -217,12 +228,14 @@ public struct AxisDirectionMemory: Equatable, Sendable {
     }
 }
 
-/// Simultaneous RA/Dec centering. Each iteration covers 90% of the remaining
-/// error on every axis that is still out, in about one second.
+/// Simultaneous RA/Dec centering. Normal corrections cover 90% of the remaining
+/// error; a correction after crossing the target covers 45% without take-up.
 public enum AxisCentering {
     /// Fraction of remaining on-axis error to command in one slew. Leaves a
     /// margin so a slightly fast mount does not overshoot the target.
     public static let iterationFraction = 0.9
+    /// After this many simultaneous RA/Dec moves, leave the star where it is.
+    public static let maxSlews = 5
 
     public struct Plan: Equatable, Sendable {
         public var axis: MountAxis
@@ -328,7 +341,12 @@ public enum AxisCentering {
         guard !isAxisCentered(remainingPixels),
               let direction = Self.direction(axis: axis, remainingPixels: remainingPixels)
         else { return nil }
-        let commanded = commandedPixels(remaining: remainingPixels, travel: travelPixels ?? abs(remainingPixels))
+        let didOvershoot = Self.overshot(remaining: remainingPixels, previousSign: lastSign)
+        // Crossing the target is evidence that the last command moved too far.
+        // Do not add the same uncertain backlash estimate on the return move.
+        let commanded = didOvershoot
+            ? iterationFraction / 2 * abs(remainingPixels)
+            : commandedPixels(remaining: remainingPixels, travel: travelPixels ?? abs(remainingPixels))
         let speed = MountGuide.slewSpeed(
             remainingPixels: commanded,
             pixelsPerMsAt1x: pixelsPerMsAt1x
@@ -338,12 +356,12 @@ public enum AxisCentering {
             direction: direction,
             siderealMultiple: speed.siderealMultiple,
             durationMs: speed.durationMs,
-            overshot: Self.overshot(remaining: remainingPixels, previousSign: lastSign)
+            overshot: didOvershoot
         )
     }
 
-    /// Command both axes that still have remaining error, each at the speed that
-    /// covers 90% of its own leftover (plus backlash take-up) in about 1 s.
+    /// Command both axes that still have remaining error, with bounded backlash
+    /// take-up and a reduced correction after an overshoot.
     public static func plan(
         calibration: GuideCalibration,
         movingStarBy delta: SIMD2<Double>,
@@ -379,7 +397,9 @@ public enum AxisCentering {
     }
 
     public static func commandedPixels(remaining: Double, travel: Double) -> Double {
-        let takeup = max(0, travel - abs(remaining))
+        // Take up large backlash over measured iterations rather than allowing
+        // a dubious return measurement to dominate a small correction.
+        let takeup = min(max(0, travel - abs(remaining)), abs(remaining) / 2)
         return iterationFraction * abs(remaining) + takeup
     }
 }

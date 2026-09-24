@@ -49,11 +49,22 @@ public struct TelescopeOptics: Equatable, Sendable {
         poseidon.arcseconds(framePixels: framePixels, binning: binning)
     }
 
-    public static func forCameraName(_ name: String) -> TelescopeOptics {
+    /// Only the Barlow is inferred from the model name: a Xena sits behind a
+    /// 4× Barlow, everything else is at native focal length.
+    public static func barlow(forCameraName name: String) -> Double {
         let folded = name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-        if folded.contains("xena") { return .xena585M }
-        if folded.contains("poseidon") { return .poseidon }
-        return .poseidon
+        return folded.contains("xena") ? 4 : 1
+    }
+
+    /// Plate scale for a connected camera. The pixel size comes from the SDK,
+    /// so any Player One or ZWO model is sampled correctly without a table.
+    public static func forCamera(_ descriptor: CameraDescriptor) -> TelescopeOptics {
+        TelescopeOptics(
+            pixelSizeMicrons: descriptor.pixelSizeMicrons > 0
+                ? descriptor.pixelSizeMicrons
+                : poseidon.pixelSizeMicrons,
+            barlow: barlow(forCameraName: descriptor.name)
+        )
     }
 }
 

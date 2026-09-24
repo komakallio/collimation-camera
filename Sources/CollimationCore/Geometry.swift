@@ -86,7 +86,15 @@ public enum CaptureLayout {
         return longest - shortest <= hardwareSizeSlack * 8
     }
 
-    /// 512×512 around the last centroid when the frame is larger than the crop.
+    /// Digital stabilization is for the 512 live crop. A full-sensor search or
+    /// centering preview must not pan.
+    public static func shouldStabilize(width: Int, height: Int) -> Bool {
+        min(width, height) <= displayCropSize
+    }
+
+    public static func shouldStabilize(_ frame: Frame) -> Bool {
+        shouldStabilize(width: frame.width, height: frame.height)
+    }
     /// Binned full-frame search (no seed) stays full so the whole sensor can be
     /// scanned. Unbinned mount-centering still gets a local crop so detection
     /// stays fast while the live view shows the full sensor.
@@ -198,6 +206,77 @@ public struct ImageLayout: Equatable, Sendable {
         )
     }
 
+    /// The image quad in normalized device coordinates.
+    ///
+    /// `imageRect` has a top-left origin; NDC puts -1,-1 at the bottom left, so
+    /// the vertical axis flips. Both renderers call this so the quad is built
+    /// the same way on Metal and on SDL3 GPU.
+    public func ndcRect(
+        viewWidth: Double? = nil,
+        viewHeight: Double? = nil
+    ) -> (x0: Double, y0: Double, x1: Double, y1: Double) {
+        Self.ndcRect(
+            imageRect,
+            inViewOfWidth: viewWidth ?? self.viewWidth,
+            height: viewHeight ?? self.viewHeight
+        )
+    }
+
+    /// Same conversion for a rect that has already been placed somewhere other
+    /// than the whole view — the portable app lays the image out inside its
+    /// live region and then draws into the full window.
+    public static func ndcRect(
+        _ rect: (x: Double, y: Double, width: Double, height: Double),
+        inViewOfWidth width: Double,
+        height: Double
+    ) -> (x0: Double, y0: Double, x1: Double, y1: Double) {
+        guard width > 0, height > 0 else { return (-1, -1, 1, 1) }
+        return (
+            x0: 2 * rect.x / width - 1,
+            y0: 1 - 2 * (rect.y + rect.height) / height,
+            x1: 2 * (rect.x + rect.width) / width - 1,
+            y1: 1 - 2 * rect.y / height
+        )
+    }
+
+    /// The live region in target pixels, for a scissor rectangle.
+    ///
+    /// The image quad is laid out in view points inside the live region but
+    /// converted to NDC against the whole window, and `imageRect.x` goes
+    /// negative as soon as the image is wider than the region — so a zoomed
+    /// image reaches left of the sidebar unless it is clipped. Points and
+    /// pixels differ by the display scale on Windows and by the pixel density
+    /// on a Retina Mac, so the ratio is taken from the sizes rather than
+    /// assumed, and the result is clamped to the target: an empty or
+    /// out-of-bounds scissor is undefined behaviour in a graphics API, not a
+    /// no-op.
+    public static func scissorRect(
+        liveOrigin: SIMD2<Double>,
+        liveSize: SIMD2<Double>,
+        windowSize: SIMD2<Double>,
+        targetPixels: SIMD2<Double>
+    ) -> (x: Int, y: Int, width: Int, height: Int) {
+        let whole = (
+            x: 0,
+            y: 0,
+            width: Int(max(0, targetPixels.x.rounded())),
+            height: Int(max(0, targetPixels.y.rounded()))
+        )
+        guard windowSize.x > 0, windowSize.y > 0, targetPixels.x > 0, targetPixels.y > 0 else {
+            return whole
+        }
+        let scaleX = targetPixels.x / windowSize.x
+        let scaleY = targetPixels.y / windowSize.y
+        let x = min(max(0, Int((liveOrigin.x * scaleX).rounded(.down))), whole.width)
+        let y = min(max(0, Int((liveOrigin.y * scaleY).rounded(.down))), whole.height)
+        let width = min(max(0, Int((liveSize.x * scaleX).rounded())), whole.width - x)
+        let height = min(max(0, Int((liveSize.y * scaleY).rounded())), whole.height - y)
+        // A zero-sized scissor would clip everything away; better to draw the
+        // whole thing than to leave a blank window with no explanation.
+        guard width > 0, height > 0 else { return whole }
+        return (x: x, y: y, width: width, height: height)
+    }
+
     public func viewPoint(image: SIMD2<Double>) -> SIMD2<Double> {
         let r = imageRect
         return SIMD2(r.x + image.x * zoom, r.y + image.y * zoom)
@@ -240,22 +319,51 @@ public struct ImageLayout: Equatable, Sendable {
     }
 }
 
+/// Camera makers the app talks to. Both SDKs load at run time.
+public enum CameraVendor: String, Equatable, Sendable, CaseIterable {
+    case playerOne
+    case zwo
+
+    public var displayName: String {
+        switch self {
+        case .playerOne: return "Player One"
+        case .zwo: return "ZWO"
+        }
+    }
+
+    /// File name of the SDK library on this platform.
+    public var libraryFileName: String {
+        switch self {
+        case .playerOne: return VendorLibrary.playerOneCamera
+        case .zwo: return VendorLibrary.zwoCamera
+        }
+    }
+
+    /// Folder under `Vendor/` the SDK library is expected in.
+    public var vendorFolder: String {
+        switch self {
+        case .playerOne: return VendorLibrary.playerOneFolder
+        case .zwo: return VendorLibrary.zwoFolder
+        }
+    }
+}
+
 public enum CameraError: Error, LocalizedError, Sendable {
-    case sdkNotFound
+    case sdkNotFound(vendor: CameraVendor)
     case sdkSymbolMissing(String)
     case notConnected
     case timeout
     case disconnected
     case invalidROI
-    case poa(code: Int32, message: String)
+    case sdk(vendor: CameraVendor, code: Int32, message: String)
     case unsupported(String)
 
     public var errorDescription: String? {
         switch self {
-        case .sdkNotFound:
-            return "Player One Camera SDK library was not found. Place libPlayerOneCamera.dylib in Vendor/PlayerOne or the app Frameworks folder."
+        case .sdkNotFound(let vendor):
+            return "\(vendor.displayName) camera SDK library was not found. Place \(vendor.libraryFileName) in Vendor/\(vendor.vendorFolder) or next to the executable."
         case .sdkSymbolMissing(let name):
-            return "Player One SDK is missing symbol \(name)."
+            return "The camera SDK is missing symbol \(name)."
         case .notConnected:
             return "No camera is connected."
         case .timeout:
@@ -264,11 +372,94 @@ public enum CameraError: Error, LocalizedError, Sendable {
             return "The camera was disconnected."
         case .invalidROI:
             return "The requested ROI is not valid for this sensor."
-        case .poa(_, let message):
+        case .sdk(_, _, let message):
             return message
         case .unsupported(let detail):
             return detail
         }
+    }
+}
+
+/// ROI granularity a camera accepts. Player One wants width and x on 4 and
+/// height and y on 2; ZWO wants width on 8 and height on 2 and places no
+/// constraint on the origin. Sizes are post-binning on both.
+public struct ROIAlignment: Equatable, Sendable {
+    public var widthMultiple: Int
+    public var heightMultiple: Int
+    public var originXMultiple: Int
+    public var originYMultiple: Int
+    /// Extra rule for the ASI120 family: `width * height` must be a multiple of
+    /// this. 1 means no such rule.
+    public var blockPixels: Int
+
+    public init(
+        widthMultiple: Int,
+        heightMultiple: Int,
+        originXMultiple: Int,
+        originYMultiple: Int,
+        blockPixels: Int = 1
+    ) {
+        self.widthMultiple = max(1, widthMultiple)
+        self.heightMultiple = max(1, heightMultiple)
+        self.originXMultiple = max(1, originXMultiple)
+        self.originYMultiple = max(1, originYMultiple)
+        self.blockPixels = max(1, blockPixels)
+    }
+
+    public static let playerOne = ROIAlignment(
+        widthMultiple: 4,
+        heightMultiple: 2,
+        originXMultiple: 4,
+        originYMultiple: 2
+    )
+
+    public static let zwo = ROIAlignment(
+        widthMultiple: 8,
+        heightMultiple: 2,
+        originXMultiple: 1,
+        originYMultiple: 1
+    )
+
+    /// `width * height % 1024 == 0` for the ASI120 family.
+    public static let zwoASI120 = ROIAlignment(
+        widthMultiple: 8,
+        heightMultiple: 2,
+        originXMultiple: 1,
+        originYMultiple: 1,
+        blockPixels: 1024
+    )
+
+    /// ZWO alignment for a camera model. Only the ASI120 family carries the
+    /// extra 1024-pixel block rule.
+    public static func forZWOCamera(named name: String) -> ROIAlignment {
+        name.contains("120") ? .zwoASI120 : .zwo
+    }
+
+    /// Height granularity once the block rule is folded in, given the width
+    /// that was already chosen.
+    ///
+    /// Forcing the height onto a fixed multiple would satisfy the block rule
+    /// but throw away sensor rows: on a 1280×960 ASI120 a fixed 128 would cut
+    /// the binned search window to 320×128, half the sensor. Deriving the step
+    /// from the width keeps the full 320×240.
+    public func heightMultiple(forWidth width: Int) -> Int {
+        guard blockPixels > 1, width > 0 else { return heightMultiple }
+        let needed = blockPixels / Self.greatestCommonDivisor(width, blockPixels)
+        return Self.leastCommonMultiple(heightMultiple, needed)
+    }
+
+    static func greatestCommonDivisor(_ a: Int, _ b: Int) -> Int {
+        var x = abs(a)
+        var y = abs(b)
+        while y != 0 {
+            (x, y) = (y, x % y)
+        }
+        return x == 0 ? 1 : x
+    }
+
+    static func leastCommonMultiple(_ a: Int, _ b: Int) -> Int {
+        let divisor = greatestCommonDivisor(a, b)
+        return divisor == 0 ? max(a, b) : (a / divisor) * b
     }
 }
 
@@ -289,32 +480,45 @@ public enum Alignment {
         size: Int,
         sensorWidth: Int,
         sensorHeight: Int,
-        binning: Int = 1
+        binning: Int = 1,
+        alignment: ROIAlignment = .playerOne
     ) -> ROI {
         let bin = max(1, binning)
+        let widthStep = alignment.widthMultiple
         let requested = max(8, size)
-        var width = down(requested / bin, to: 4)
-        var height = down(requested / bin, to: 2)
-        width = max(width, 8)
-        height = max(height, 8)
-        width = min(width, down(sensorWidth / bin, to: 4))
-        height = min(height, down(sensorHeight / bin, to: 2))
+        // Smallest legal ROI: 8 pixels, rounded up to the camera's granularity.
+        var width = down(requested / bin, to: widthStep)
+        width = max(width, up(8, to: widthStep))
+        width = min(width, down(sensorWidth / bin, to: widthStep))
+
+        // The height step can depend on the width (the ASI120 block rule).
+        let heightStep = alignment.heightMultiple(forWidth: width)
+        var height = down(requested / bin, to: heightStep)
+        height = max(height, up(8, to: heightStep))
+        height = min(height, down(sensorHeight / bin, to: heightStep))
 
         var x = Int(sensorPoint.x.rounded()) - (width * bin) / 2
         var y = Int(sensorPoint.y.rounded()) - (height * bin) / 2
-        x = down(max(0, x), to: 4)
-        y = down(max(0, y), to: 2)
+        x = down(max(0, x), to: alignment.originXMultiple)
+        y = down(max(0, y), to: alignment.originYMultiple)
         x = min(x, max(0, sensorWidth - width * bin))
         y = min(y, max(0, sensorHeight - height * bin))
-        x = down(x, to: 4)
-        y = down(y, to: 2)
+        x = down(x, to: alignment.originXMultiple)
+        y = down(y, to: alignment.originYMultiple)
         return ROI(x: x, y: y, width: width, height: height, binning: bin)
     }
 
-    public static func fullFrameROI(sensorWidth: Int, sensorHeight: Int, binning: Int) -> ROI {
+    public static func fullFrameROI(
+        sensorWidth: Int,
+        sensorHeight: Int,
+        binning: Int,
+        alignment: ROIAlignment = .playerOne
+    ) -> ROI {
         let bin = max(1, binning)
-        let width = down(sensorWidth / bin, to: 4)
-        let height = down(sensorHeight / bin, to: 2)
-        return ROI(x: 0, y: 0, width: max(width, 8), height: max(height, 8), binning: bin)
+        let widthStep = alignment.widthMultiple
+        let width = max(down(sensorWidth / bin, to: widthStep), up(8, to: widthStep))
+        let heightStep = alignment.heightMultiple(forWidth: width)
+        let height = max(down(sensorHeight / bin, to: heightStep), up(8, to: heightStep))
+        return ROI(x: 0, y: 0, width: width, height: height, binning: bin)
     }
 }

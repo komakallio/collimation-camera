@@ -3,6 +3,9 @@ import Foundation
 
 @main
 struct CoreTests {
+    // MainActor so tests can build a CollimationEngine, which is main-actor
+    // isolated. Nonisolated test bodies still convert to the closure type.
+    @MainActor
     static func main() {
         var failures = 0
         failures += run("histogram percentiles", testHistogramPercentiles)
@@ -11,7 +14,9 @@ struct CoreTests {
         failures += run("arcsinh stretch", testArcsinhStretch)
         failures += run("star detection", testStarDetection)
         failures += run("large donut detection", testLargeDonutDetection)
+        failures += run("crop-filling donut detection", testCropFillingDonutDetection)
         failures += run("moment centroid", testMomentCentroid)
+        failures += run("faint star moment centroid", testFaintStarMomentCentroid)
         failures += run("empty sky", testEmptySky)
         failures += run("star fwhm", testStarFWHM)
         failures += run("telescope optics from camera name", testTelescopeOpticsFromCameraName)
@@ -30,10 +35,15 @@ struct CoreTests {
         failures += run("tracker hold when lost", testTrackerHoldWhenLost)
         failures += run("tracker auto search", testTrackerAutoSearch)
         failures += run("search recovery", testSearchRecovery)
+        failures += run("search ignores jumping noise", testSearchIgnoresJumpingNoise)
+        failures += run("unplug raises disconnected", testUnplugRaisesDisconnected)
+        failures += run("slow camera is not unplugged", testSlowCameraIsNotDeclaredUnplugged)
         failures += run("software crop", testSoftwareCrop)
         failures += run("readout fps cap", testReadoutFPSCap)
         failures += run("stack capture buffer", testStackCaptureBuffer)
+        failures += run("constellation stack crops at sensor edges", testConstellationStackCrops)
         failures += run("constellation layout", testConstellationLayout)
+        failures += run("mount frame switch gate", testMountFrameGate)
         failures += run("sensor center overlay", testSensorCenterOverlay)
         failures += run("auto exposure", testAutoExposure)
         failures += run("star quality from peak", testStarQuality)
@@ -46,9 +56,12 @@ struct CoreTests {
         failures += run("digital stabilize process frame", testDigitalStabilizeProcessFrame)
         failures += run("digital stabilize lost ignores noise", testDigitalStabilizeLostIgnoresNoise)
         failures += run("digital stabilize search then crop", testDigitalStabilizeSearchThenCrop)
+        failures += run("digital stabilize skips full frame", testDigitalStabilizeSkipsFullFrame)
+        failures += run("stale analysis keeps newer frame", testStaleAnalysisKeepsNewerFrame)
         failures += run("guide solve orthogonal", testGuideSolveOrthogonal)
         failures += run("guide solve rotated", testGuideSolveRotated)
         failures += run("guide solve singular", testGuideSolveSingular)
+        failures += run("guide rejects recorded degenerate calibration", testRecordedDegenerateCalibration)
         failures += run("guide pulse planner", testGuidePulsePlanner)
         failures += run("guide center threshold", testGuideCenterThreshold)
         failures += run("lx200 pulse command", testLX200PulseCommand)
@@ -64,6 +77,43 @@ struct CoreTests {
         failures += run("axis centering", testAxisCentering)
         failures += run("filter slot display name", testFilterSlotDisplayName)
         failures += run("filter wheel error text", testFilterWheelErrorText)
+        failures += run("bessel j1", testBesselJ1)
+        failures += run("roi alignment zwo", testROIAlignmentZWO)
+        failures += run("device vendor from id", testDeviceVendorFromID)
+        failures += run("camera error text", testCameraErrorText)
+        failures += run("asi error mapping", testASIErrorMapping)
+        failures += run("remembered serial port", testRememberedSerialPort)
+        failures += run("filter wheel always disconnectable", testFilterWheelAlwaysDisconnectable)
+        failures += run("mount failure means disconnected", testMountFailureMeansDisconnected)
+        failures += run("command catalog enablement", testCommandCatalogEnablement)
+        failures += run("command catalog coverage", testCommandCatalogCoverage)
+        failures += run("command reachability", testCommandReachability)
+        failures += run("shortcut uniqueness", testShortcutUniqueness)
+        failures += run("metric text", testMetricText)
+        failures += run("status chip", testStatusChip)
+        failures += run("hud color", testHUDColor)
+        failures += run("log slider", testLogSlider)
+        failures += run("overlay scene sensor center", testOverlaySceneSensorCenter)
+        failures += run("overlay scene ring shift", testOverlaySceneRingShift)
+        failures += run("roi map scene", testROIMapScene)
+        failures += run("histogram scene", testHistogramScene)
+        failures += run("compass dial scene", testCompassDialScene)
+        failures += run("star profile scene", testStarProfileScene)
+        failures += run("hud stroke widths", testHUDStrokeWidths)
+        failures += run("image layout ndc rect", testImageLayoutNDCRect)
+        failures += run("live region scissor", testLiveRegionScissor)
+        failures += run("stretch shader math", testStretchShaderMath)
+        failures += run("stretch shader copies", testStretchShaderCopies)
+        failures += run("ui glyph coverage", testUIGlyphCoverage)
+        failures += run("log file", testLogFile)
+        failures += run("eq6 probe order", testEQ6ProbeOrder)
+        failures += run("eq6 unrecognized mount", testEQ6UnrecognizedMount)
+        failures += run("eq6 open failure", testEQ6OpenFailure)
+        failures += run("eq6 pulse commands", testEQ6PulseCommands)
+        failures += run("lx200 silent mount", testLX200SilentMountConnectsAndPulses)
+#if os(Windows)
+        failures += run("windows com scanner parsing", testWindowsCOMScannerParsing)
+#endif
         failures += run("mono tiff 16-bit", testMonoTIFF)
         failures += run("mono tiff 32-bit float", testMonoTIFFFloat32)
         failures += run("frame stacker", testFrameStacker)
@@ -77,7 +127,8 @@ struct CoreTests {
         }
     }
 
-    private static func run(_ name: String, _ body: () throws -> Void) -> Int {
+    @MainActor
+    private static func run(_ name: String, _ body: @MainActor () throws -> Void) -> Int {
         do {
             try body()
             print("ok  \(name)")
@@ -212,6 +263,50 @@ private func testLargeDonutDetection() throws {
     try expect(abs(seeded.centroid.x - center.x) < 20, "seeded x \(seeded.centroid.x)")
 }
 
+private func testCropFillingDonutDetection() throws {
+    // A well-exposed donut that fills the live 512 crop used to exceed
+    // maxAreaFraction (0.6) and drop tracking, which stops stabilization.
+    let size = CaptureLayout.displayCropSize
+    let center = SIMD2(Double(size) / 2, Double(size) / 2)
+    let scene = DonutScene(
+        sensorWidth: size,
+        sensorHeight: size,
+        starPosition: center,
+        outerRadius: 240,
+        innerRadius: 40,
+        comaOffset: .zero,
+        intensityAsymmetry: 0,
+        peakADU: 42_000,
+        backgroundADU: 900,
+        noiseSigma: 12,
+        seeingJitter: 0
+    )
+    var rng = RNG(seed: 13)
+    let frame = DonutRenderer(scene: scene).render(
+        roi: ROI(x: 0, y: 0, width: size, height: size),
+        jitter: .zero,
+        rng: &rng
+    )
+    guard let detection = StarDetector().detect(in: frame) else {
+        throw Expectation(description: "expected crop-filling donut")
+    }
+    try expect(abs(detection.centroid.x - center.x) < 25, "x \(detection.centroid.x)")
+    try expect(abs(detection.centroid.y - center.y) < 25, "y \(detection.centroid.y)")
+    try expect(detection.area > Int(Double(size * size) * 0.6), "area \(detection.area) should exceed the old 60% cap")
+
+    let controller = StabilizationController()
+    controller.configure(
+        enabled: true,
+        tracking: .tracking,
+        viewWidth: Double(size),
+        viewHeight: Double(size),
+        zoom: 1
+    )
+    let pose = controller.process(frame)
+    try expect(pose.centroid != nil, "stabilize a crop-filling donut")
+    try expect(pose.lockNormalized != nil, "keep a lock on a crop-filling donut")
+}
+
 private func testMomentCentroid() throws {
     let scene = DonutScene(
         sensorWidth: 256,
@@ -248,6 +343,52 @@ private func testMomentCentroid() throws {
     }
     try expect(abs(next.x - 188) < 6, "moved x \(next.x)")
     try expect(abs(next.y - 90) < 6, "moved y \(next.y)")
+}
+
+private func testFaintStarMomentCentroid() throws {
+    // A faint star on a bright sky. Weighting by raw ADU pulls the centroid
+    // toward the window centre because the pedestal outweighs the star.
+    let width = 160
+    let height = 160
+    let star = SIMD2(112.0, 38.0)
+    let background = 8_000.0
+    let excess = 600.0
+    let sigma = 2.4
+    var pixels = [UInt16](repeating: 0, count: width * height)
+    var rng = RNG(seed: 19)
+    for y in 0..<height {
+        for x in 0..<width {
+            let dx = Double(x) - star.x
+            let dy = Double(y) - star.y
+            let signal = excess * exp(-(dx * dx + dy * dy) / (2 * sigma * sigma))
+            let noisy = background + signal + rng.gaussian() * 18
+            pixels[y * width + x] = UInt16(min(65535, max(0, noisy.rounded())))
+        }
+    }
+    let frame = Frame(
+        width: width,
+        height: height,
+        pixels: pixels,
+        roi: ROI(x: 0, y: 0, width: width, height: height)
+    )
+    guard let centroid = StarDetector().momentCentroid(in: frame, around: nil) else {
+        throw Expectation(description: "expected a faint-star centroid")
+    }
+    let error = hypot(centroid.x - star.x, centroid.y - star.y)
+    let centre = SIMD2(Double(width) / 2, Double(height) / 2)
+    try expect(error < 2.5, "faint star error \(error) at \(centroid)")
+    try expect(
+        hypot(centroid.x - centre.x, centroid.y - centre.y) > 20,
+        "centroid must not fall back to the window centre"
+    )
+
+    let flat = Frame(
+        width: width,
+        height: height,
+        pixels: [UInt16](repeating: 8_000, count: width * height),
+        roi: ROI(x: 0, y: 0, width: width, height: height)
+    )
+    try expect(StarDetector().momentCentroid(in: flat, around: nil) == nil, "flat sky is not a star")
 }
 
 private func testEmptySky() throws {
@@ -313,12 +454,33 @@ private func testStarFWHM() throws {
 }
 
 private func testTelescopeOpticsFromCameraName() throws {
-    try expect(TelescopeOptics.forCameraName("Xena-M") == .xena585M, "Xena-M")
-    try expect(TelescopeOptics.forCameraName("Player One Xena") == .xena585M, "Xena substring")
-    try expect(TelescopeOptics.forCameraName("xena 585m") == .xena585M, "case")
-    try expect(TelescopeOptics.forCameraName("Poseidon-M") == .poseidon, "Poseidon-M")
-    try expect(TelescopeOptics.forCameraName("POSEIDON") == .poseidon, "POSEIDON")
-    try expect(TelescopeOptics.forCameraName("Simulator (Airy)") == .poseidon, "simulator default")
+    func optics(_ name: String, pixelSizeMicrons: Double) -> TelescopeOptics {
+        TelescopeOptics.forCamera(
+            CameraDescriptor(
+                id: "test",
+                name: name,
+                sensorWidth: 1024,
+                sensorHeight: 1024,
+                pixelSizeMicrons: pixelSizeMicrons,
+                isSimulator: false
+            )
+        )
+    }
+
+    try expect(TelescopeOptics.barlow(forCameraName: "Xena-M") == 4, "Xena-M")
+    try expect(TelescopeOptics.barlow(forCameraName: "Player One Xena") == 4, "Xena substring")
+    try expect(TelescopeOptics.barlow(forCameraName: "xena 585m") == 4, "case")
+    try expect(TelescopeOptics.barlow(forCameraName: "Poseidon-M") == 1, "Poseidon-M")
+    try expect(TelescopeOptics.barlow(forCameraName: "POSEIDON") == 1, "POSEIDON")
+    try expect(TelescopeOptics.barlow(forCameraName: "ASI585MM") == 1, "ZWO default")
+
+    // The pixel size now comes from the SDK descriptor, not a model table.
+    try expect(optics("Xena-M", pixelSizeMicrons: 2.9) == .xena585M, "Xena from descriptor")
+    try expect(optics("Poseidon-M", pixelSizeMicrons: 3.76) == .poseidon, "Poseidon from descriptor")
+    try expect(optics("ASI585MM Pro", pixelSizeMicrons: 2.9).pixelSizeMicrons == 2.9, "ZWO pixel size")
+    try expect(optics("ASI585MM Pro", pixelSizeMicrons: 2.9).barlow == 1, "ZWO no Barlow")
+    // A descriptor with no pixel size falls back to the Poseidon scale.
+    try expect(optics("Simulator (Airy)", pixelSizeMicrons: 0) == .poseidon, "simulator default")
     try expect(TelescopeOptics.xena585M.pixelSizeMicrons == 2.9, "2.9 µm")
     try expect(TelescopeOptics.xena585M.barlow == 4, "4× Barlow")
     try expect(TelescopeOptics.poseidon.pixelSizeMicrons == 3.76, "3.76 µm")
@@ -703,15 +865,20 @@ private func testSearchRecovery() throws {
         background: 900,
         sigma: 15
     )
-    let status = tracker.process(
-        frame: frame,
-        detection: detection,
-        autoCenter: true,
-        autoSearch: true,
-        trackingROISize: CaptureLayout.trackingHardwareSize,
-        sensorWidth: 800,
-        sensorHeight: 600
-    )
+    // Acquisition is debounced, so the same star has to show up
+    // `foundFrameLimit` times before the camera is moved onto it.
+    var status = TrackingStatus()
+    for _ in 0..<TrackingConfig().foundFrameLimit {
+        status = tracker.process(
+            frame: frame,
+            detection: detection,
+            autoCenter: true,
+            autoSearch: true,
+            trackingROISize: CaptureLayout.trackingHardwareSize,
+            sensorWidth: 800,
+            sensorHeight: 600
+        )
+    }
     try expect(status.state == TrackingState.tracking, "state")
     try expect(status.requestedROI?.binning == 1, "bin")
     try expect(
@@ -721,17 +888,77 @@ private func testSearchRecovery() throws {
 
     var held = Tracker()
     held.markSearching()
-    let heldStatus = held.process(
-        frame: frame,
-        detection: detection,
-        autoCenter: false,
-        autoSearch: false,
-        trackingROISize: CaptureLayout.trackingHardwareSize,
-        sensorWidth: 800,
-        sensorHeight: 600
-    )
+    var heldStatus = TrackingStatus()
+    for _ in 0..<TrackingConfig().foundFrameLimit {
+        heldStatus = held.process(
+            frame: frame,
+            detection: detection,
+            autoCenter: false,
+            autoSearch: false,
+            trackingROISize: CaptureLayout.trackingHardwareSize,
+            sensorWidth: 800,
+            sensorHeight: 600
+        )
+    }
     try expect(heldStatus.state == TrackingState.tracking, "still tracking")
     try expect(heldStatus.requestedROI == nil, "mount hold must not snap back to 2048")
+}
+
+/// A camera with no optics on it sees noise, and a full-frame search finds a
+/// different bright pixel every frame. Undebounced, each one promoted the
+/// tracker to `.tracking` and moved the camera to a 2048 window, which then
+/// held nothing, so eight frames later it went back to searching: at 30 fps
+/// the view flickered between the crop and the full frame about three times a
+/// second. A detection that moves must never leave the search.
+private func testSearchIgnoresJumpingNoise() throws {
+    var tracker = Tracker()
+    tracker.markSearching()
+    let roi = Alignment.fullFrameROI(sensorWidth: 800, sensorHeight: 600, binning: 4)
+    let frame = Frame(
+        width: roi.width,
+        height: roi.height,
+        pixels: [UInt16](repeating: 900, count: roi.width * roi.height),
+        roi: roi
+    )
+    func peak(at x: Double, _ y: Double) -> StarDetection {
+        StarDetection(centroid: SIMD2(x, y), peak: 40_000, flux: 40_000, area: 50, background: 900, sigma: 15)
+    }
+
+    // Twenty frames of noise, never twice in the same place.
+    var status = TrackingStatus()
+    for index in 0..<20 {
+        status = tracker.process(
+            frame: frame,
+            detection: peak(at: Double(10 + index * 5), Double(60 - index * 2)),
+            autoCenter: true,
+            autoSearch: true,
+            trackingROISize: CaptureLayout.trackingHardwareSize,
+            sensorWidth: 800,
+            sensorHeight: 600
+        )
+        try expect(status.state == TrackingState.searching, "frame \(index) left the search")
+        try expect(status.requestedROI == nil, "frame \(index) moved the camera")
+    }
+
+    // A star that stays put is acquired, and on the frame after the limit,
+    // not later.
+    for index in 0..<TrackingConfig().foundFrameLimit {
+        status = tracker.process(
+            frame: frame,
+            detection: peak(at: 40, 40),
+            autoCenter: true,
+            autoSearch: true,
+            trackingROISize: CaptureLayout.trackingHardwareSize,
+            sensorWidth: 800,
+            sensorHeight: 600
+        )
+        let last = index == TrackingConfig().foundFrameLimit - 1
+        try expect(
+            status.state == (last ? TrackingState.tracking : TrackingState.searching),
+            "frame \(index) state \(status.state)"
+        )
+    }
+    try expect(status.requestedROI != nil, "acquired without moving the camera")
 }
 
 private func testSoftwareCrop() throws {
@@ -784,6 +1011,8 @@ private func testSoftwareCrop() throws {
     try expect(!CaptureLayout.isTrackingCapture(search), "full-frame search is not a tracking window")
     let shown = CaptureLayout.displayFrame(from: search, tracking: .searching, centroid: SIMD2(10, 10))
     try expect(shown.width == search.width, "search shows the full frame")
+    try expect(!CaptureLayout.shouldStabilize(search), "do not stabilize a full-frame search")
+    try expect(CaptureLayout.shouldStabilize(display), "stabilize the 512 crop")
 
     var fullPixels = [UInt16](repeating: 0, count: 2000 * 1500)
     fullPixels[800 * 2000 + 1000] = 40000
@@ -799,6 +1028,7 @@ private func testSoftwareCrop() throws {
     try expect(local.pixel(x: 256, y: 256) == 40000, "star centered in the centering crop")
     let shownFull = CaptureLayout.displayFrame(from: centering, tracking: .tracking, centroid: SIMD2(1000, 800))
     try expect(shownFull.width == centering.width, "centering preview stays full frame")
+    try expect(!CaptureLayout.shouldStabilize(shownFull), "do not stabilize a centering preview")
     let scan = CaptureLayout.analysisFrame(from: centering, seed: nil)
     try expect(scan.width == centering.width, "search without a seed stays full")
 
@@ -1285,6 +1515,41 @@ private func testDigitalStabilizeSearchThenCrop() throws {
     try expect(abs(layout.pan.x) < 1 && abs(layout.pan.y) < 1, "crop frame is not panned with the search lock")
 }
 
+private func testStaleAnalysisKeepsNewerFrame() throws {
+    let slot = FrameSlot()
+    let roi = ROI(x: 0, y: 0, width: 2, height: 1)
+    let older = Frame(width: 2, height: 1, pixels: [1, 0], roi: roi)
+    let newer = Frame(width: 2, height: 1, pixels: [9, 0], roi: roi)
+    let oldEpoch = slot.store(older)
+    let newEpoch = slot.store(newer)
+    try expect(oldEpoch != newEpoch, "each grab has its own epoch")
+    try expect(!slot.replaceIfCurrent(older, epoch: oldEpoch), "slow detect must not cover a newer grab")
+    try expect(slot.peek()?.frame.pixel(x: 0, y: 0) == 9, "newer grab stays on screen")
+    let sequence = slot.peek()?.sequence
+    try expect(slot.replaceIfCurrent(newer, epoch: newEpoch), "detect of the frame on screen may refresh it")
+    try expect(slot.peek()?.sequence != sequence, "a refresh is a new upload")
+    slot.clear()
+    try expect(!slot.replaceIfCurrent(newer, epoch: newEpoch), "a cleared slot does not come back")
+    try expect(slot.peek() == nil, "cleared")
+}
+
+private func testDigitalStabilizeSkipsFullFrame() throws {
+    let controller = StabilizationController()
+    controller.configure(
+        enabled: true,
+        tracking: .tracking,
+        viewWidth: 800,
+        viewHeight: 600,
+        zoom: 1
+    )
+    let crop = controller.process(starBlobFrame(at: SIMD2(80, 80)))
+    try expect(crop.lockNormalized != nil, "lock on the 512-or-smaller crop")
+
+    let full = controller.process(starBlobFrame(at: SIMD2(400, 300), width: 800, height: 600))
+    try expect(full.lockNormalized == nil && full.centroid == nil, "no pan on a full-sensor frame")
+    try expect(controller.pose().lockNormalized == nil, "drop the crop lock while full frame is shown")
+}
+
 private func starBlobFrame(at center: SIMD2<Double>, width: Int = 128, height: Int = 128) -> Frame {
     var pixels = [UInt16](repeating: 800, count: width * height)
     let cx = Int(center.x.rounded())
@@ -1304,6 +1569,56 @@ private func starBlobFrame(at center: SIMD2<Double>, width: Int = 128, height: I
         pixels: pixels,
         roi: ROI(x: 0, y: 0, width: width, height: height)
     )
+}
+
+private func testRecordedDegenerateCalibration() throws {
+    // Actual failed run: the star was only 51 px from centre, but the nearly
+    // parallel axes and ~1087 px return residuals produced repeated reversals.
+    let recorded = GuideCalibration(
+        eastRate: SIMD2(0.03223055677803442, -0.36301122945310543),
+        northRate: SIMD2(-0.006955926241831852, -0.36268507554454543),
+        sampleDurationMs: 3000,
+        raBacklashPixels: 1086.573817856865,
+        decBacklashPixels: 1087.8881621433718
+    )
+    try expect(!recorded.isValid, "reject the recorded nearly parallel axes")
+    try expect(recorded.pulses(toMoveStarBy: SIMD2(-50.809, 4.165)) == nil,
+               "bad calibration must not produce motor commands")
+    let restored = try JSONDecoder().decode(GuideCalibration.self, from: JSONEncoder().encode(recorded))
+    try expect(!restored.isValid, "saved bad calibration remains unusable after restart")
+
+    let calibration = GuideCalibration(
+        eastRate: SIMD2(0.072, -0.007), northRate: SIMD2(-0.007, -0.071),
+        sampleDurationMs: 3000, raBacklashPixels: 1087, decBacklashPixels: 1087
+    )
+    try expect(calibration.isValid, "earlier well-separated measured axes remain usable")
+    // With an overestimated backlash, follow the actual measured position at
+    // every iteration. Repeated compensation used to sustain an oscillation.
+    var position = SIMD2<Double>(51, 60)
+    var directions = AxisDirectionMemory(ra: .east, dec: .south)
+    var raSign: Double?
+    var decSign: Double?
+    var count = 0
+    while !MountGuide.isCentered(errorPixels: position), count < 10 {
+        guard let plan = AxisCentering.plan(calibration: calibration, movingStarBy: -position,
+                                           lastDirections: directions, lastRASign: raSign, lastDecSign: decSign),
+              let axes = calibration.signedAxisPixels(toMoveStarBy: -position) else { break }
+        raSign = axes.ra
+        decSign = axes.dec
+        if let ra = plan.ra {
+            let sign = ra.direction == .east ? 1.0 : -1.0
+            position += calibration.eastRate * (sign * ra.siderealMultiple * Double(ra.durationMs) * 1.15)
+            directions.record(ra.direction)
+        }
+        if let dec = plan.dec {
+            let sign = dec.direction == .north ? 1.0 : -1.0
+            position += calibration.northRate * (sign * dec.siderealMultiple * Double(dec.durationMs) * 1.15)
+            directions.record(dec.direction)
+        }
+        try expect(MountGuide.errorLength(position) < 200, "small correction must stay near the target")
+        count += 1
+    }
+    try expect(MountGuide.isCentered(errorPixels: position), "overestimated backlash must converge, got \(position)")
 }
 
 private func testGuideSolveOrthogonal() throws {
@@ -1606,14 +1921,15 @@ private func testAxisCentering() throws {
     try expect(first?.nudge.ra == .east && first?.nudge.dec == nil, "single-axis ra nudge")
     let reverse = AxisCentering.plan(axis: .ra, remainingPixels: -90, pixelsPerMsAt1x: 0.01, lastSign: 800)
     try expect(reverse?.direction == .west && reverse?.overshot == true, "overshoot reverse")
-    try expect(abs((reverse?.siderealMultiple ?? 0) - 8.1) < 1e-9, "90% of 90 px")
+    try expect(abs((reverse?.siderealMultiple ?? 0) - 4.05) < 1e-9, "overshoot halves the correction")
     try expect(reverse?.nudge.dec == nil, "still only ra")
     let decPlan = AxisCentering.plan(axis: .dec, remainingPixels: 200, pixelsPerMsAt1x: 0.01)
     try expect(decPlan?.direction == .north && decPlan?.nudge.ra == nil, "single-axis dec")
     try expect(abs((decPlan?.siderealMultiple ?? 0) - 18) < 1e-9, "90% of 200 px")
     try expect(AxisCentering.plan(axis: .ra, remainingPixels: 10, pixelsPerMsAt1x: 0.01) == nil, "axis done")
 
-    try expect(abs(AxisCentering.commandedPixels(remaining: 87, travel: 87) - 78.3) < 1e-9, "90% of remaining")
+    try expect(AxisCentering.maxSlews == 5, "five slews then stop")
+    try expect(abs(AxisCentering.iterationFraction - 0.9) < 1e-12, "90% per slew")
     try expect(abs(AxisCentering.commandedPixels(remaining: 87, travel: 99) - 90.3) < 1e-9, "90% plus takeup")
 
     let both = AxisCentering.plan(calibration: calibration, movingStarBy: SIMD2(87, 50))
@@ -1638,11 +1954,217 @@ private func testFilterSlotDisplayName() throws {
     try expect(FilterSlot(position: 4, alias: "IR-cut").displayName == "5 · IR-cut", "instance")
 }
 
+private func testBesselJ1() throws {
+    try expect(abs(besselJ1(0.1) - 0.049937526036242) < 1e-7, "j1(0.1) = \(besselJ1(0.1))")
+    try expect(abs(besselJ1(1.0) - 0.440050585744934) < 1e-7, "j1(1) = \(besselJ1(1.0))")
+    try expect(abs(besselJ1(AiryScene.j1FirstZero)) < 1e-7, "first zero \(besselJ1(AiryScene.j1FirstZero))")
+    try expect(besselJ1(0) == 0, "odd function at zero")
+    try expect(abs(besselJ1(-1.0) + besselJ1(1.0)) < 1e-15, "odd function")
+    // Across the 8.0 branch cut the two approximations must still agree.
+    try expect(abs(besselJ1(7.999) - besselJ1(8.001)) < 1e-3, "branch continuity")
+    try expect(abs(besselJ1(10.0) - 0.043472746168844) < 1e-7, "j1(10) = \(besselJ1(10.0))")
+}
+
+private func testROIAlignmentZWO() throws {
+    let tracking = Alignment.centeredROI(
+        around: SIMD2(1000.5, 700.5),
+        size: 2048,
+        sensorWidth: 3856,
+        sensorHeight: 2180,
+        binning: 1,
+        alignment: .zwo
+    )
+    try expect(tracking.width % 8 == 0, "width \(tracking.width) is a multiple of 8")
+    try expect(tracking.height % 2 == 0, "height \(tracking.height) is a multiple of 2")
+    try expect(tracking.x >= 0 && tracking.y >= 0, "origin \(tracking.x),\(tracking.y)")
+    try expect(tracking.x + tracking.width <= 3856, "fits the sensor width")
+    try expect(tracking.y + tracking.height <= 2180, "fits the sensor height")
+
+    let search = Alignment.fullFrameROI(
+        sensorWidth: 3856,
+        sensorHeight: 2180,
+        binning: 4,
+        alignment: .zwo
+    )
+    try expect(search.width % 8 == 0, "binned search width \(search.width)")
+
+    // ASI120: width * height must be a multiple of 1024. The height step is
+    // derived from the chosen width, so the rule costs no sensor rows.
+    let asi120 = Alignment.centeredROI(
+        around: SIMD2(600, 400),
+        size: 512,
+        sensorWidth: 1280,
+        sensorHeight: 960,
+        binning: 1,
+        alignment: .zwoASI120
+    )
+    try expect(asi120.width % 8 == 0, "asi120 width \(asi120.width)")
+    try expect(asi120.height % 2 == 0, "asi120 height \(asi120.height)")
+    try expect((asi120.width * asi120.height) % 1024 == 0, "asi120 1024-pixel block")
+
+    let asi120Search = Alignment.fullFrameROI(
+        sensorWidth: 1280,
+        sensorHeight: 960,
+        binning: 4,
+        alignment: .zwoASI120
+    )
+    try expect(
+        asi120Search.width == 320 && asi120Search.height == 240,
+        "asi120 binned search covers the sensor, got \(asi120Search.width)x\(asi120Search.height)"
+    )
+    try expect((asi120Search.width * asi120Search.height) % 1024 == 0, "asi120 search block")
+
+    let asi120Full = Alignment.fullFrameROI(
+        sensorWidth: 1280,
+        sensorHeight: 960,
+        binning: 1,
+        alignment: .zwoASI120
+    )
+    try expect(
+        asi120Full.width == 1280 && asi120Full.height == 960,
+        "asi120 full frame is the whole sensor, got \(asi120Full.width)x\(asi120Full.height)"
+    )
+    try expect((asi120Full.width * asi120Full.height) % 1024 == 0, "asi120 full block")
+
+    try expect(ROIAlignment.forZWOCamera(named: "ZWO ASI120MM Mini") == .zwoASI120, "asi120 by name")
+    try expect(ROIAlignment.forZWOCamera(named: "ZWO ASI585MM") == .zwo, "other zwo by name")
+
+    // Player One keeps its own rules.
+    let poa = Alignment.centeredROI(
+        around: SIMD2(1000.5, 700.5),
+        size: 2048,
+        sensorWidth: 6252,
+        sensorHeight: 4176
+    )
+    try expect(poa.width % 4 == 0 && poa.x % 4 == 0, "player one width and x")
+    try expect(poa.height % 2 == 0 && poa.y % 2 == 0, "player one height and y")
+    try expect(poa.width == 2048 && poa.height == 2048, "player one tracking window \(poa.width)x\(poa.height)")
+
+    // Pre-port values on the Poseidon sensor. The alignment parameter must not
+    // have changed the Player One path.
+    let poaSearch = Alignment.fullFrameROI(sensorWidth: 6252, sensorHeight: 4176, binning: 4)
+    try expect(
+        poaSearch.width == 1560 && poaSearch.height == 1044,
+        "player one binned search \(poaSearch.width)x\(poaSearch.height)"
+    )
+    let poaFull = Alignment.fullFrameROI(sensorWidth: 6252, sensorHeight: 4176, binning: 1)
+    try expect(
+        poaFull.width == 6252 && poaFull.height == 4176,
+        "player one full frame \(poaFull.width)x\(poaFull.height)"
+    )
+    let poaCentered = Alignment.centeredROI(
+        around: SIMD2(3126, 2088),
+        size: 512,
+        sensorWidth: 6252,
+        sensorHeight: 4176
+    )
+    try expect(
+        poaCentered.x == 2868 && poaCentered.y == 1832
+            && poaCentered.width == 512 && poaCentered.height == 512,
+        "player one centered 512 at \(poaCentered.x),\(poaCentered.y)"
+    )
+}
+
+private func testDeviceVendorFromID() throws {
+    try expect(DeviceCatalog.vendor(forID: "poa-0") == .playerOne, "poa-0")
+    try expect(DeviceCatalog.vendor(forID: "asi-0") == .zwo, "asi-0")
+    try expect(DeviceCatalog.vendor(forID: "asi-12") == .zwo, "asi-12")
+    try expect(DeviceCatalog.vendor(forID: CameraDescriptor.simulator.id) == nil, "simulator")
+    try expect(DeviceCatalog.vendor(forID: CameraDescriptor.airySimulator.id) == nil, "airy simulator")
+    try expect(DeviceCatalog.vendor(forID: "asi-") == nil, "empty hardware id")
+    try expect(DeviceCatalog.vendor(forID: "asi-x") == nil, "non-numeric hardware id")
+    try expect(DeviceCatalog.vendor(forID: "nonsense") == nil, "junk")
+
+    // The simulators never need an SDK.
+    _ = try DeviceCatalog.makeDevice(id: CameraDescriptor.simulator.id)
+    _ = try DeviceCatalog.makeDevice(id: CameraDescriptor.airySimulator.id)
+
+    do {
+        _ = try DeviceCatalog.makeDevice(id: "nonsense")
+        throw Expectation(description: "an unknown id should throw")
+    } catch CameraError.unsupported {
+    }
+
+    // On a machine with the SDK present these ids reach the vendor library
+    // instead, so the assertion only applies when it is missing.
+    if DeviceCatalog.zwoSDKVersion == nil {
+        do {
+            _ = try DeviceCatalog.makeDevice(id: "asi-0")
+            throw Expectation(description: "asi-0 should throw without the ZWO SDK")
+        } catch CameraError.sdkNotFound(let vendor) {
+            try expect(vendor == .zwo, "zwo vendor")
+        }
+    }
+    if DeviceCatalog.playerOneSDKVersion == nil {
+        do {
+            _ = try DeviceCatalog.makeDevice(id: "poa-0")
+            throw Expectation(description: "poa-0 should throw without the Player One SDK")
+        } catch CameraError.sdkNotFound(let vendor) {
+            try expect(vendor == .playerOne, "player one vendor")
+        }
+    }
+}
+
+private func testCameraErrorText() throws {
+    let zwo = CameraError.sdkNotFound(vendor: .zwo).localizedDescription
+    try expect(zwo.contains(VendorLibrary.zwoCamera), "zwo library name in \(zwo)")
+    try expect(zwo.contains("ZWO"), "zwo display name")
+    let poa = CameraError.sdkNotFound(vendor: .playerOne).localizedDescription
+    try expect(poa.contains(VendorLibrary.playerOneCamera), "player one library name in \(poa)")
+    try expect(poa.contains("Player One"), "player one display name")
+    try expect(
+        CameraError.sdk(vendor: .zwo, code: 5, message: "removed").localizedDescription == "removed",
+        "sdk message passes through"
+    )
+#if os(Windows)
+    try expect(VendorLibrary.zwoCamera == "ASICamera2.dll", "windows zwo library")
+    try expect(VendorLibrary.playerOneCamera == "PlayerOneCamera.dll", "windows player one library")
+#elseif os(macOS)
+    try expect(VendorLibrary.zwoCamera == "libASICamera2.dylib", "macos zwo library")
+    try expect(VendorLibrary.playerOneCamera == "libPlayerOneCamera.dylib", "macos player one library")
+#endif
+}
+
+@MainActor
+private func testRememberedSerialPort() throws {
+    let suiteName = "collimation-camera.tests.serial"
+    guard let defaults = UserDefaults(suiteName: suiteName) else {
+        throw Expectation(description: "could not open the test defaults suite")
+    }
+    defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+    let key = "mount.serialPort"
+    let ports: () -> [String] = { ["/dev/cu.a", "/dev/cu.b"] }
+
+    defaults.set("/dev/cu.b", forKey: key)
+    let remembered = CollimationEngine(defaults: defaults, serialPortPaths: ports)
+    try expect(remembered.selectedSerialPort == "/dev/cu.b", "remembered \(remembered.selectedSerialPort)")
+    try expect(defaults.string(forKey: key) == "/dev/cu.b", "key kept \(defaults.string(forKey: key) ?? "nil")")
+    remembered.shutdown()
+
+    defaults.removeObject(forKey: key)
+    let fresh = CollimationEngine(defaults: defaults, serialPortPaths: ports)
+    try expect(fresh.selectedSerialPort == "/dev/cu.a", "first port \(fresh.selectedSerialPort)")
+    fresh.shutdown()
+
+    // A remembered port that is not plugged in stays selected and listed.
+    defaults.set("/dev/cu.z", forKey: key)
+    let unplugged = CollimationEngine(defaults: defaults, serialPortPaths: ports)
+    try expect(unplugged.selectedSerialPort == "/dev/cu.z", "kept \(unplugged.selectedSerialPort)")
+    try expect(unplugged.serialPorts.first == "/dev/cu.z", "listed first")
+    try expect(unplugged.serialPorts.count == 3, "scanned ports kept \(unplugged.serialPorts)")
+    unplugged.shutdown()
+}
+
 private func testFilterWheelErrorText() throws {
     try expect(
-        FilterWheelError.sdkNotFound.localizedDescription.contains("libPlayerOnePW.dylib"),
+        FilterWheelError.sdkNotFound.localizedDescription.contains(VendorLibrary.playerOneFilterWheel),
         "sdk path"
     )
+#if os(Windows)
+    try expect(VendorLibrary.playerOneFilterWheel == "PlayerOnePW.dll", "windows wheel library")
+#elseif os(macOS)
+    try expect(VendorLibrary.playerOneFilterWheel == "libPlayerOnePW.dylib", "macos wheel library")
+#endif
     try expect(
         FilterWheelError.noWheelSelected.localizedDescription.contains("Phoenix"),
         "select wheel"
@@ -1772,6 +2294,50 @@ private func testFrameStacker() throws {
     }
 }
 
+private func testConstellationStackCrops() throws {
+    let positions = ConstellationCapture.positions(sensorWidth: 3856, sensorHeight: 2180)
+    var tiles: [(row: Int, column: Int, image: StackedImage)] = []
+    for position in positions {
+        let roi = Alignment.centeredROI(around: position.sensorPoint, size: 2048,
+                                        sensorWidth: 3856, sensorHeight: 2180)
+        let point = roi.framePixel(fromSensorPoint: position.sensorPoint)
+        let x = Int(point.x.rounded()), y = Int(point.y.rounded())
+        var pixels = [UInt16](repeating: 200, count: roi.width * roi.height)
+        for sy in (y - 4)...(y + 4) {
+            for sx in (x - 4)...(x + 4) { pixels[sy * roi.width + sx] = 30_000 }
+        }
+        let frame = Frame(width: roi.width, height: roi.height, pixels: pixels, roi: roi)
+        if position.row == 2 {
+            try expect(CaptureLayout.stackingFrame(from: frame).pixels.max() == 200,
+                       "fixture reproduces a blank centre crop for \(position.label)")
+        }
+        let capture = StackCaptureBuffer()
+        capture.begin(target: 1, sensorCentroid: position.sensorPoint, expectedROI: roi)
+        let stale = Frame(width: 1, height: 1, pixels: [200],
+                          roi: ROI(x: 0, y: 0, width: 1, height: 1, binning: 4))
+        try expect(capture.offer(stale) == 0, "ignore old readout for \(position.label)")
+        capture.offer(frame)
+        guard let frames = capture.takeIfComplete(), let crop = frames.first else {
+            try expect(false, "missing capture for \(position.label)")
+            return
+        }
+        try expect(crop.width == 256 && crop.height == 256, "fixed tile dimensions")
+        let center = crop.roi.framePixel(fromSensorPoint: position.sensorPoint)
+        try expect(abs(center.x - 128) <= 1 && abs(center.y - 128) <= 1,
+                   "star centred even when hardware ROI is clamped: \(position.label) \(center)")
+        let stack = try FrameStacker.average(frames, seed: CaptureLayout.stackingSeed())
+        try expect(stack.pixels.max() == 30_000, "star preserved in \(position.label)")
+        tiles.append((position.row, position.column, stack))
+    }
+    let mosaic = try ConstellationCapture.mosaic(tiles)
+    for row in 0..<3 {
+        for column in 0..<3 {
+            let center = (row * 256 + 128) * mosaic.width + column * 256 + 128
+            try expect(mosaic.pixels[center] == 30_000, "star in mosaic tile \(row),\(column)")
+        }
+    }
+}
+
 private func testStackCaptureBuffer() throws {
     let buffer = StackCaptureBuffer()
     try expect(!buffer.isCapturing, "idle")
@@ -1829,6 +2395,46 @@ private func tiffShortValue(_ data: Data, ifdOffset: Int, entry: Int) -> UInt16 
     return UInt16(data[o]) | UInt16(data[o + 1]) << 8
 }
 
+private func testMountFrameGate() throws {
+    let full = ROI(x: 0, y: 0, width: 3856, height: 2180)
+    let reference = SIMD2<Double>(1947, 1098)
+    let detection = StarDetection(centroid: reference, peak: 50_000, flux: 50_000,
+                                  area: 40, background: 800, sigma: 20)
+    var status = TrackingStatus(state: .tracking, detection: detection, centroidOnSensor: reference)
+    var gate = MountFrameGate(expectedROI: full, reference: reference)
+    // Two published frames are insufficient when they still use the old crop.
+    let crop = ROI(x: 1691, y: 842, width: 512, height: 512)
+    for _ in 0..<3 {
+        let result = try gate.observe(roi: crop, tracking: status)
+        try expect(result == nil, "old crop must not authorise a slew")
+    }
+    let first = try gate.observe(roi: full, tracking: status)
+    try expect(first == nil, "wait for another full-frame detection")
+    status.detection = nil
+    let stale = try gate.observe(roi: full, tracking: status)
+    try expect(stale == nil, "cached centroid without a detection must not authorise a slew")
+    status.detection = detection
+    let restarted = try gate.observe(roi: full, tracking: status)
+    try expect(restarted == nil, "missing detection resets the count")
+    let ready = try gate.observe(roi: full, tracking: status)
+    try expect(ready == reference, "same star in two fresh full frames is ready")
+
+    var wrongStar = MountFrameGate(expectedROI: full, reference: reference)
+    status.centroidOnSensor = reference / 4
+    do {
+        _ = try wrongStar.observe(roi: full, tracking: status)
+        try expect(false, "a binning-scale position jump must stop before motion")
+    } catch MountError.starChangedDuringFrameSwitch {}
+
+    var invalid = MountFrameGate(expectedROI: full, reference: nil)
+    status.centroidOnSensor = SIMD2(.nan, 100)
+    let nonFinite = try invalid.observe(roi: full, tracking: status)
+    try expect(nonFinite == nil, "reject non-finite centroid")
+    status.centroidOnSensor = SIMD2(4000, 100)
+    let outside = try invalid.observe(roi: full, tracking: status)
+    try expect(outside == nil, "reject centroid outside the capture")
+}
+
 private func testConstellationLayout() throws {
     let width = 6252
     let height = 4176
@@ -1869,4 +2475,129 @@ private func testConstellationLayout() throws {
     try expect(mosaic.pixels[6] == 3 && mosaic.pixels[7] == 4, "NW row1")
     try expect(mosaic.pixels[2 * 6 + 2] == 9, "center tile origin")
     try expect(mosaic.pixels[5] == 0, "empty NE")
+}
+
+/// A camera that accepts everything and never delivers a frame, the way an
+/// unplugged one behaves: the SDK keeps saying "not ready yet" rather than
+/// reporting an error.
+private final class StubUnpluggedCamera: CameraDevice, @unchecked Sendable {
+    let descriptor = CameraDescriptor(
+        id: "stub-0",
+        name: "Stub",
+        sensorWidth: 1024,
+        sensorHeight: 1024,
+        pixelSizeMicrons: 3.76,
+        isSimulator: false,
+        hardwareID: 0
+    )
+    var controls = CameraControls()
+    var currentROI = ROI(x: 0, y: 0, width: 512, height: 512)
+    var supportedBins: [Int] = [1]
+    var roiAlignment = ROIAlignment.playerOne
+    /// Whether the camera is still enumerated. False is "unplugged".
+    var present: Bool
+
+    init(present: Bool) { self.present = present }
+
+    func open() throws {}
+    func close() {}
+    func applyExposure(_ microseconds: Int) throws {}
+    func applyGain(_ gain: Int) throws {}
+    func applyROI(_ roi: ROI) throws {}
+    func startVideo() throws {}
+    func stopVideo() {}
+    func grabFrame(timeoutMs: Int) throws -> Frame { throw CameraError.timeout }
+    func isStillPresent() -> Bool { present }
+}
+
+/// Pulling the cable during live view used to do nothing at all. The camera
+/// stops saying a frame is ready and never reports an error, the capture loop
+/// swallowed every timeout and retried for ever, and so the picture froze with
+/// no message, the buttons still said Disconnect, and replugging changed
+/// nothing because the app had not noticed.
+private func testUnplugRaisesDisconnected() throws {
+    let session = CaptureSession()
+    let received = Box<Error?>(nil)
+    let done = DispatchSemaphore(value: 0)
+    session.onError = { error in
+        received.value = error
+        done.signal()
+    }
+    session.start(device: StubUnpluggedCamera(present: false))
+    let answered = done.wait(timeout: .now() + 5) == .success
+    session.stop()
+    try expect(answered, "the loop never reported the unplug")
+    guard case .some(CameraError.disconnected) = received.value as? CameraError else {
+        throw Expectation(description: "reported \(String(describing: received.value)), not disconnected")
+    }
+}
+
+/// The other half of it: a camera that is still on the bus but slow must not
+/// be declared gone on the first timeout, or an ROI change that misses a frame
+/// would disconnect the camera under the user.
+private func testSlowCameraIsNotDeclaredUnplugged() throws {
+    let session = CaptureSession()
+    let received = Box<Error?>(nil)
+    let done = DispatchSemaphore(value: 0)
+    session.onError = { error in
+        received.value = error
+        done.signal()
+    }
+    session.start(device: StubUnpluggedCamera(present: true))
+    // It gives up eventually, but only after the presence check has said the
+    // camera is there several times over.
+    let answered = done.wait(timeout: .now() + 5) == .success
+    session.stop()
+    try expect(answered, "a camera that never delivers must not hang the loop for ever either")
+}
+
+/// Minimal box so a callback on the capture thread can hand a value back.
+private final class Box<T>: @unchecked Sendable {
+    var value: T
+    init(_ value: T) { self.value = value }
+}
+
+/// The live image is laid out inside the live region but drawn against the
+/// whole window, so a zoomed image reaches under the sidebar unless it is
+/// clipped. The sidebar happened to be drawn over it afterwards, which is why
+/// nobody saw it; "happened to" is not a guarantee.
+private func testLiveRegionScissor() throws {
+    // Windows at 200%: window coordinates are pixels, so points are half.
+    let win = ImageLayout.scissorRect(
+        liveOrigin: SIMD2(300, 20),
+        liveSize: SIMD2(980, 800),
+        windowSize: SIMD2(1280, 820),
+        targetPixels: SIMD2(2560, 1640)
+    )
+    try expect(win.x == 600 && win.y == 40, "origin doubled: \(win)")
+    try expect(win.width == 1960 && win.height == 1600, "size doubled: \(win)")
+
+    // A 1:1 display leaves the numbers alone.
+    let plain = ImageLayout.scissorRect(
+        liveOrigin: SIMD2(300, 20),
+        liveSize: SIMD2(980, 800),
+        windowSize: SIMD2(1280, 820),
+        targetPixels: SIMD2(1280, 820)
+    )
+    try expect(plain.x == 300 && plain.width == 980, "unscaled: \(plain)")
+
+    // Never past the edge of the target, whatever the caller passes.
+    let clamped = ImageLayout.scissorRect(
+        liveOrigin: SIMD2(300, 20),
+        liveSize: SIMD2(5000, 5000),
+        windowSize: SIMD2(1280, 820),
+        targetPixels: SIMD2(1280, 820)
+    )
+    try expect(clamped.x + clamped.width <= 1280, "width clamped: \(clamped)")
+    try expect(clamped.y + clamped.height <= 820, "height clamped: \(clamped)")
+
+    // A degenerate window must not produce a scissor that clips everything
+    // away and leaves a blank live region with no explanation.
+    let degenerate = ImageLayout.scissorRect(
+        liveOrigin: SIMD2(0, 0),
+        liveSize: SIMD2(0, 0),
+        windowSize: SIMD2(0, 0),
+        targetPixels: SIMD2(1280, 820)
+    )
+    try expect(degenerate.width == 1280 && degenerate.height == 820, "falls back to the whole target: \(degenerate)")
 }

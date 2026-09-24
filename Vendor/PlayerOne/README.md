@@ -1,26 +1,43 @@
 # Player One SDKs
 
-This app loads Player One dylibs at runtime (no link-time dependency):
+The app loads the Player One libraries at run time; there is no link-time
+dependency.
 
-- `libPlayerOneCamera.dylib` — cameras (Poseidon-M and other SDK cameras)
-- `libPlayerOnePW.dylib` — Phoenix filter wheel (PW5 / PW7 / PW8)
+- macOS: `libPlayerOneCamera.dylib` (cameras) and `libPlayerOnePW.dylib`
+  (Phoenix filter wheel, PW5 / PW7 / PW8)
+- Windows: `PlayerOneCamera.dll` and `PlayerOnePW.dll`
 
 ## Official SDK
 
-Download the macOS Camera SDK and Filter Wheel SDK from:
+Download the Camera SDK and Filter Wheel SDK for your platform from:
 
 https://www.player-one-astronomy.com/service/software/
 
-Copy the dylibs into this folder.
+Copy the libraries into this folder. On Windows they are under `lib\x64\` in
+each package.
 
 ## Convenience fetch
 
-From the repo root:
+From the repository root:
 
 ```bash
 scripts/fetch-sdk.sh
 ```
 
-The fetch script uses the macOS binaries redistributed with INDI when official zip URLs are not set. Prefer the official SDKs for production use.
+```powershell
+scripts\fetch-sdk.ps1
+```
 
-The dylibs are gitignored. The simulator camera works without them; filter-wheel controls stay disconnected until `libPlayerOnePW.dylib` is present and a Phoenix wheel is plugged in.
+The macOS script uses the binaries redistributed with INDI when the official
+zip URLs are not set. Prefer the official SDKs for production use.
+
+## Notes
+
+- Windows needs the Player One camera driver installed separately
+  (`Player_One_Camera_Driver_V1.6.x` from the same page). macOS needs no
+  driver.
+- The macOS dylibs reference `@rpath/libusb-1.0.0.dylib`. `fetch-sdk.sh` puts
+  one copy of libusb next to them, shared with the ZWO library.
+- The binaries are gitignored. The simulator camera works without them, and
+  the filter-wheel controls stay disconnected until the wheel library is
+  present and a Phoenix wheel is plugged in.

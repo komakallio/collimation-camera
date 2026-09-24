@@ -1,5 +1,5 @@
-import Combine
 import Foundation
+import Observation
 
 public struct OverlayModel: Equatable, Sendable {
     public var imageWidth: Int
@@ -74,65 +74,166 @@ public enum StackWork: Equatable, Sendable {
     case constellationCombining
 }
 
+@Observable
 @MainActor
-public final class CollimationEngine: ObservableObject {
+public final class CollimationEngine {
     nonisolated public let frameSlot = FrameSlot()
     nonisolated public let renderStateSlot = RenderStateSlot()
-    public var viewWidth = 800.0
-    public var viewHeight = 700.0
+    /// Live-view size in points. Fed by the app's resize hook, not by a view
+    /// body, so it is not observed.
+    @ObservationIgnored public var viewWidth = 800.0
+    @ObservationIgnored public var viewHeight = 700.0
 
-    @Published public private(set) var devices: [CameraDescriptor] = []
-    @Published public var selectedDeviceID: String = CameraDescriptor.simulator.id
-    @Published public private(set) var isConnected = false
-    @Published public var statusText = "Disconnected"
-    @Published public var errorMessage: String?
+    public private(set) var devices: [CameraDescriptor] = []
+    public var selectedDeviceID: String = CameraDescriptor.simulator.id
+    public private(set) var isConnected = false
+    public var statusText = "Disconnected"
+    public var errorMessage: String?
 
-    @Published public var exposureMicroseconds: Double = 50_000
-    @Published public var gain: Double = 0
-    @Published public var exposureRange: ClosedRange<Double> = Double(ExposureControl.minMicroseconds)...Double(ExposureControl.maxMicroseconds)
-    @Published public var gainRange: ClosedRange<Double> = 0...400
+    public var exposureMicroseconds: Double = 50_000
+    public var gain: Double = 0
+    public var exposureRange: ClosedRange<Double> = Double(ExposureControl.minMicroseconds)...Double(ExposureControl.maxMicroseconds)
+    public var gainRange: ClosedRange<Double> = 0...400
 
-    @Published public var autoCenter = true
-    @Published public var autoSearch = false
-    @Published public var stabilize = false
-    @Published public var showOverlay = true
-    @Published public var zoom: Double = 1
-    @Published public var stretch = StretchParams.default
-    @Published public var histogram = Histogram()
-    @Published public var tracking = TrackingStatus()
-    @Published public var coma: ComaResult?
-    @Published public var fwhm: FWHMResult?
-    @Published public var starProfile: StarIntensityProfile?
-    @Published public var overlay = OverlayModel()
-    @Published public var frameSequence: UInt64 = 0
-    @Published public var fps: Double = 0
+    public var autoCenter = true {
+        didSet { applyPipelineConfig() }
+    }
+    public var autoSearch = false {
+        didSet {
+            applyPipelineConfig()
+            handleAutoSearchChange(autoSearch)
+        }
+    }
+    public var stabilize = false {
+        didSet { updateStabilization() }
+    }
+    public var showOverlay = true
+    public var zoom: Double = 1 {
+        didSet { updateStabilization() }
+    }
+    public var stretch = StretchParams.default {
+        didSet { updateStabilization() }
+    }
+    public var histogram = Histogram()
+    public var tracking = TrackingStatus()
+    public var coma: ComaResult?
+    public var fwhm: FWHMResult?
+    public var starProfile: StarIntensityProfile?
+    public var overlay = OverlayModel()
+    public var frameSequence: UInt64 = 0
+    @ObservationIgnored private var captureROI: ROI?
+    public var fps: Double = 0
 
-    @Published public var serialPorts: [String] = []
-    @Published public var selectedSerialPort = ""
-    @Published public private(set) var isMountConnected = false
-    @Published public private(set) var isMountBusy = false
-    @Published public private(set) var showingFullFramePreview = false
-    @Published public private(set) var mountWork: MountWork?
-    @Published public private(set) var isStacking = false
-    @Published public var stackFrameCount = FrameStacker.defaultSubframeCount
-    @Published public private(set) var stackWork: StackWork?
-    @Published public private(set) var isAutoExposing = false
-    @Published public var mountStatus = "No mount"
-    @Published public private(set) var guideCalibration: GuideCalibration?
+    public var serialPorts: [String] = []
+    public var selectedSerialPort = "" {
+        didSet { defaults.set(selectedSerialPort, forKey: Self.serialPortDefaultsKey) }
+    }
+    public private(set) var isMountConnected = false
+    public private(set) var isMountBusy = false
+    public private(set) var showingFullFramePreview = false
+    public private(set) var mountWork: MountWork?
+    public private(set) var isStacking = false
 
-    @Published public private(set) var filterWheels: [FilterWheelDescriptor] = []
-    @Published public var selectedFilterWheelID = ""
-    @Published public private(set) var isFilterWheelConnected = false
-    @Published public private(set) var isFilterWheelMoving = false
-    @Published public var filterWheelStatus = "No filter wheel"
-    @Published public private(set) var filterSlots: [FilterSlot] = []
-    @Published public var selectedFilterPosition = 0
+    /// Test hook, and only that: `command catalog enablement` has to reach the
+    /// stacking branch of `canCalibrateMount`, `canCenterStar`, and
+    /// `canSearchFullFrame`, and the only other way in is to start a real
+    /// stack and wait for frames. App code must call `saveStacked` instead —
+    /// this sets the flag without any of the work that goes with it.
+    public func setStackingForTesting(_ value: Bool) {
+        isStacking = value
+    }
+
+    public var stackFrameCount = FrameStacker.defaultSubframeCount
+    public private(set) var stackWork: StackWork?
+    public private(set) var isAutoExposing = false
+    public var mountStatus = "No mount"
+    public private(set) var guideCalibration: GuideCalibration?
+
+    public private(set) var filterWheels: [FilterWheelDescriptor] = []
+    public var selectedFilterWheelID = "" {
+        didSet {
+            if !selectedFilterWheelID.isEmpty {
+                defaults.set(selectedFilterWheelID, forKey: Self.filterWheelDefaultsKey)
+            }
+        }
+    }
+    public private(set) var isFilterWheelConnected = false
+    public private(set) var isFilterWheelMoving = false
+    public var filterWheelStatus = "No filter wheel"
+    public private(set) var filterSlots: [FilterSlot] = []
+    public var selectedFilterPosition = 0
+
+    /// Folder the last snapshot was written to. Both apps remember it here so
+    /// the save panel and the portable app's dialog agree.
+    public var snapshotDirectory: URL? {
+        didSet {
+            if let path = snapshotDirectory?.path {
+                defaults.set(path, forKey: Self.snapshotDirectoryDefaultsKey)
+            }
+        }
+    }
 
     public static let minZoom = 0.25
     /// Below `minZoom` so an unbinned full sensor can fit in a typical window.
     public static let minFullFrameZoom = 0.05
     public static let maxZoom = 8.0
     public var isMountCalibrated: Bool { guideCalibration?.isValid == true }
+
+    // MARK: - Enablement
+    //
+    // Every control that either surface disables reads its predicate here, so
+    // the menu, the sidebar, and the portable app cannot drift. Controls with
+    // no predicate are always enabled: camera Connect and Disconnect, Auto
+    // Stretch, Stabilize View, Collimation Overlay, Fit to window.
+
+    public var canRefreshDevices: Bool { !isConnected }
+    public var canSelectDevice: Bool { !isConnected }
+    public var canAutoExpose: Bool { isConnected && !isAutoExposing && !isStacking && !isMountBusy }
+    public var canSaveSnapshot: Bool { isConnected && !isStacking }
+    public var canSaveStacked: Bool {
+        isConnected && !isStacking && !isMountBusy && tracking.state == .tracking
+    }
+    public var canSelectStackCount: Bool { !isStacking }
+    public var canCalibrateMount: Bool {
+        isMountConnected && isConnected && !isMountBusy && !isStacking && tracking.state == .tracking
+    }
+    public var canCenterStar: Bool { canCalibrateMount && isMountCalibrated }
+    public var canSaveConstellation: Bool { canCenterStar }
+    public var canToggleAutoCenter: Bool { !isMountBusy && !isStacking }
+    public var canSearchFullFrame: Bool { isConnected && !isMountBusy && !isStacking }
+    public var canConnectMount: Bool { (isMountConnected || !serialPorts.isEmpty) && !isMountBusy }
+    public var canSelectSerialPort: Bool { !isMountConnected && !isMountBusy }
+    public var canRefreshSerialPorts: Bool { canSelectSerialPort }
+    /// Disconnect is always allowed; only connecting waits for a move to end.
+    ///
+    /// This is one toggle, so gating both halves on `!isFilterWheelMoving` left
+    /// no way out of a move that never finished: the picker, Refresh and this
+    /// button were all disabled together and quitting was the only recovery.
+    /// Pulling the wheel out from under a move is the user's business.
+    ///
+    /// A free function so the rule can be tested for every combination without
+    /// forcing the engine into a state it will not enter on its own — which is
+    /// the point, since the states that matter here are the ones a bug leaves
+    /// behind.
+    public static func canConnectFilterWheel(
+        isConnected: Bool,
+        hasWheels: Bool,
+        isMoving: Bool
+    ) -> Bool {
+        if isConnected { return true }
+        return hasWheels && !isMoving
+    }
+
+    public var canConnectFilterWheel: Bool {
+        Self.canConnectFilterWheel(
+            isConnected: isFilterWheelConnected,
+            hasWheels: !filterWheels.isEmpty,
+            isMoving: isFilterWheelMoving
+        )
+    }
+    public var canSelectFilterWheel: Bool { !isFilterWheelConnected && !isFilterWheelMoving }
+    public var canRefreshFilterWheels: Bool { canSelectFilterWheel }
+    public var canSelectFilter: Bool { isFilterWheelConnected && !isFilterWheelMoving }
 
     /// Lower zoom bound. Full-frame centering/constellation slews must go
     /// below `minZoom` or the live view still clips stars near the edges.
@@ -146,44 +247,61 @@ public final class CollimationEngine: ObservableObject {
     nonisolated private let fpsMeter = FPSMeter()
     nonisolated private let mount = EQ6Mount()
     nonisolated private let filterWheel = PhoenixWheel()
-    private var device: CameraDevice?
-    private var applyingControls = false
-    private var lastSentExposure: Int?
-    private var lastSentGain: Int?
-    private var sensorWidth = CameraDescriptor.simulator.sensorWidth
-    private var sensorHeight = CameraDescriptor.simulator.sensorHeight
-    private var optics = TelescopeOptics.poseidon
+    @ObservationIgnored private var device: CameraDevice?
+    @ObservationIgnored private var applyingControls = false
+    @ObservationIgnored private var lastSentExposure: Int?
+    @ObservationIgnored private var lastSentGain: Int?
+    @ObservationIgnored private var sensorWidth = CameraDescriptor.simulator.sensorWidth
+    @ObservationIgnored private var sensorHeight = CameraDescriptor.simulator.sensorHeight
+    @ObservationIgnored private var optics = TelescopeOptics.poseidon
+    @ObservationIgnored private var roiAlignment = ROIAlignment.playerOne
+    /// Binning for the full-frame search. Player One cameras take 4; most ZWO
+    /// cameras, the ASI120 family included, report only 1 and 2, and asking for
+    /// 4 fails the ROI and drops the connection.
+    @ObservationIgnored private var searchBinning = CollimationEngine.defaultSearchBinning
     nonisolated public let stabilization = StabilizationController()
     nonisolated private let softwareCrop = SoftwareCropController()
     nonisolated private let stackCapture = StackCaptureBuffer()
-    private var cancellables = Set<AnyCancellable>()
-    private var mountTask: Task<Void, Never>?
-    private var stackTask: Task<Void, Never>?
-    private var autoExposeTask: Task<Void, Never>?
-    private var filterWheelTask: Task<Void, Never>?
-    private var mountHoldsROI = false
-    private var zoomBeforeFullFrame: Double?
-    private var axisDirections = AxisDirectionMemory()
-    private var hardwareFilterPosition: Int?
+    @ObservationIgnored private var mountTask: Task<Void, Never>?
+    @ObservationIgnored private var stackTask: Task<Void, Never>?
+    @ObservationIgnored private var autoExposeTask: Task<Void, Never>?
+    @ObservationIgnored private var filterWheelTask: Task<Void, Never>?
+    @ObservationIgnored private var mountHoldsROI = false
+    @ObservationIgnored private var zoomBeforeFullFrame: Double?
+    @ObservationIgnored private var axisDirections = AxisDirectionMemory()
+    @ObservationIgnored private var hardwareFilterPosition: Int?
+    /// Injected so tests get their own suite and a scripted port list.
+    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let serialPortPaths: () -> [String]
+    /// Search binning before a camera is connected, and the ceiling once one is.
+    public static let defaultSearchBinning = 4
     private static let serialPortDefaultsKey = "mount.serialPort"
     private static let filterWheelDefaultsKey = "filterWheel.id"
+    private static let snapshotDirectoryDefaultsKey = "snapshot.directory"
 
-    public init() {
+    public init(
+        defaults: UserDefaults = .standard,
+        serialPortPaths: @escaping () -> [String] = SerialPortScanner.availablePaths
+    ) {
+        self.defaults = defaults
+        self.serialPortPaths = serialPortPaths
         refreshDevices()
         selectedDeviceID = DeviceCatalog.preferredDeviceID(in: devices)
-        refreshSerialPorts()
-        if let saved = UserDefaults.standard.string(forKey: Self.serialPortDefaultsKey), !saved.isEmpty {
+        // The remembered port is read before refreshSerialPorts() so the
+        // property observer cannot overwrite the key with a scanned port.
+        if let saved = defaults.string(forKey: Self.serialPortDefaultsKey), !saved.isEmpty {
             selectedSerialPort = saved
-            if !serialPorts.contains(saved) {
-                serialPorts.insert(saved, at: 0)
-            }
+        }
+        refreshSerialPorts()
+        if let path = defaults.string(forKey: Self.snapshotDirectoryDefaultsKey), !path.isEmpty {
+            snapshotDirectory = URL(fileURLWithPath: path, isDirectory: true)
         }
         if let calibration = GuideCalibrationStore.load(), calibration.isValid {
             guideCalibration = calibration
             mountStatus = "Calibrated — connect the mount to center"
         }
-        coalescer.handler = { [weak self] frame in
-            self?.analyze(frame)
+        coalescer.handler = { [weak self] frame, epoch in
+            self?.analyze(frame, epoch: epoch)
         }
         session.onFrame = { [weak self] frame in
             self?.ingest(frame)
@@ -193,41 +311,17 @@ public final class CollimationEngine: ObservableObject {
                 self?.handleError(error)
             }
         }
-        $stretch
-            .combineLatest($zoom, $stabilize)
-            .sink { [weak self] _, _, _ in
-                self?.updateStabilization()
-            }
-            .store(in: &cancellables)
-        $autoCenter
-            .combineLatest($autoSearch)
-            .sink { [weak self] _, _ in
-                self?.applyPipelineConfig()
-            }
-            .store(in: &cancellables)
-        $autoSearch
-            .sink { [weak self] enabled in
-                self?.handleAutoSearchChange(enabled)
-            }
-            .store(in: &cancellables)
-        $selectedSerialPort
-            .sink { path in
-                UserDefaults.standard.set(path, forKey: Self.serialPortDefaultsKey)
-            }
-            .store(in: &cancellables)
         refreshFilterWheels()
-        if let saved = UserDefaults.standard.string(forKey: Self.filterWheelDefaultsKey),
+        if let saved = defaults.string(forKey: Self.filterWheelDefaultsKey),
            filterWheels.contains(where: { $0.id == saved })
         {
             selectedFilterWheelID = saved
         }
-        $selectedFilterWheelID
-            .sink { id in
-                if !id.isEmpty {
-                    UserDefaults.standard.set(id, forKey: Self.filterWheelDefaultsKey)
-                }
-            }
-            .store(in: &cancellables)
+        // The Combine sinks these observers replace also fired once on
+        // subscription; keep that so the render state and the pipeline are
+        // configured before the first frame.
+        updateStabilization()
+        applyPipelineConfig()
     }
 
     deinit {
@@ -257,7 +351,7 @@ public final class CollimationEngine: ObservableObject {
         if devices.contains(where: { $0.id == selectedDeviceID }) == false {
             selectedDeviceID = DeviceCatalog.preferredDeviceID(in: devices)
         }
-        if let sdk = DeviceCatalog.playerOneSDKVersion, !isConnected {
+        if let sdk = DeviceCatalog.sdkVersionSummary, !isConnected {
             statusText = "SDK \(sdk) — disconnected"
         }
     }
@@ -270,7 +364,11 @@ public final class CollimationEngine: ObservableObject {
             device = newDevice
             sensorWidth = newDevice.descriptor.sensorWidth
             sensorHeight = newDevice.descriptor.sensorHeight
-            optics = TelescopeOptics.forCameraName(newDevice.descriptor.name)
+            optics = TelescopeOptics.forCamera(newDevice.descriptor)
+            roiAlignment = newDevice.roiAlignment
+            searchBinning = newDevice.supportedBins
+                .filter { $0 >= 1 && $0 <= Self.defaultSearchBinning }
+                .max() ?? 1
             exposureRange = Double(ExposureControl.minMicroseconds)...Double(ExposureControl.maxMicroseconds)
             gainRange = Double(newDevice.controls.gainRange.lowerBound)...Double(newDevice.controls.gainRange.upperBound)
             let clampedExposure = ExposureControl.clamp(newDevice.controls.exposureMicroseconds)
@@ -398,11 +496,11 @@ public final class CollimationEngine: ObservableObject {
             finishStacking()
             if startedMount {
                 if statusText.hasPrefix("Saved") {
-                    endMountWork("Constellation saved")
+                    endMountWorkWithoutWaiting("Constellation saved")
                 } else if statusText.contains("cancelled") {
-                    endMountWork("Constellation cancelled")
+                    endMountWorkWithoutWaiting("Constellation cancelled")
                 } else {
-                    endMountWork("Constellation stopped")
+                    endMountWorkWithoutWaiting("Constellation stopped")
                 }
             } else {
                 restoreTrackingDisplay()
@@ -419,7 +517,6 @@ public final class CollimationEngine: ObservableObject {
             try beginMountWork(
                 "Constellation 1/\(steps)…",
                 holdROI: true,
-                useFullFrame: true,
                 work: .centering
             )
             startedMount = true
@@ -434,12 +531,13 @@ public final class CollimationEngine: ObservableObject {
                 statusText = "Constellation \(step)/\(steps) — moving to \(position.label)…"
                 mountStatus = statusText
 
-                if index == 0 {
-                    _ = try await waitForCentroid(minNewFrames: 2, timeout: 12)
-                } else {
-                    try await enterFullFrame()
-                }
+                try await enterFullFrame()
+                Log.info("constellation \(step)/\(steps) \(position.label): target \(position.sensorPoint), sensor \(sensorWidth)x\(sensorHeight)")
                 try await moveStar(to: position.sensorPoint, calibration: calibration)
+                guard let reached = tracking.centroidOnSensor,
+                      MountGuide.isCentered(errorPixels: reached - position.sensorPoint) else {
+                    throw MountError.targetNotReached
+                }
                 let around = tracking.centroidOnSensor ?? position.sensorPoint
                 try await prepareStackWindow(around: around)
 
@@ -471,6 +569,9 @@ public final class CollimationEngine: ObservableObject {
         } catch is CancellationError {
             statusText = "Constellation cancelled"
         } catch {
+            // The constellation reaches the mount through `moveStar`, so it can
+            // fail on a pulled cable exactly as calibration and centering can.
+            noteMountFailure(error)
             presentError(error)
             statusText = "Constellation failed"
         }
@@ -489,8 +590,13 @@ public final class CollimationEngine: ObservableObject {
         frameCount: Int,
         onProgress: @escaping (Int, Int) -> Void
     ) async throws -> StackedImage {
+        guard tracking.state == .tracking, let sensor = tracking.centroidOnSensor,
+              let roi = captureROI, roi.contains(sensorPoint: sensor) else {
+            throw MountError.noStar
+        }
         coalescer.cancel()
-        stackCapture.begin(target: frameCount)
+        Log.info("stack capture: star \(sensor), camera ROI \(roi), frames \(frameCount)")
+        stackCapture.begin(target: frameCount, sensorCentroid: sensor, expectedROI: roi)
         session.requestFrameLimit(CaptureLayout.unlimitedReadoutFPS)
         defer {
             stackCapture.cancel()
@@ -499,6 +605,9 @@ public final class CollimationEngine: ObservableObject {
         onProgress(0, frameCount)
         let frames = try await collectStackedFrames(target: frameCount, onProgress: onProgress)
         try Task.checkCancellation()
+        if let first = frames.first {
+            Log.info("stack crop: \(first.roi), star pixel \(first.roi.framePixel(fromSensorPoint: sensor))")
+        }
         session.requestFrameLimit(CaptureLayout.maxReadoutFPS)
         let seed = CaptureLayout.stackingSeed()
         return try await Task.detached(priority: .userInitiated) {
@@ -541,6 +650,10 @@ public final class CollimationEngine: ObservableObject {
         autoExposeTask?.cancel()
         autoExposeTask = nil
         isAutoExposing = false
+        // Without this an unplug during Center ends 4 s later with
+        // MountError.noStar, which replaces the disconnect message.
+        mountTask?.cancel()
+        mountTask = nil
         stopCapture()
         device = nil
         isConnected = false
@@ -555,6 +668,8 @@ public final class CollimationEngine: ObservableObject {
         showingFullFramePreview = false
         zoomBeforeFullFrame = nil
         optics = .poseidon
+        roiAlignment = .playerOne
+        searchBinning = Self.defaultSearchBinning
         updateStabilization()
         statusText = "Disconnected"
     }
@@ -669,7 +784,9 @@ public final class CollimationEngine: ObservableObject {
                 around: center,
                 size: CaptureLayout.trackingHardwareSize,
                 sensorWidth: sensorWidth,
-                sensorHeight: sensorHeight
+                sensorHeight: sensorHeight,
+                binning: 1,
+                alignment: roiAlignment
             )
         )
     }
@@ -679,7 +796,12 @@ public final class CollimationEngine: ObservableObject {
         pipeline.markSearching()
         coalescer.cancel()
         softwareCrop.reset()
-        let roi = Alignment.fullFrameROI(sensorWidth: sensorWidth, sensorHeight: sensorHeight, binning: 4)
+        let roi = Alignment.fullFrameROI(
+            sensorWidth: sensorWidth,
+            sensorHeight: sensorHeight,
+            binning: searchBinning,
+            alignment: roiAlignment
+        )
         session.requestROI(roi)
         tracking.state = .searching
         statusText = "Searching full frame…"
@@ -727,7 +849,7 @@ public final class CollimationEngine: ObservableObject {
 
     public func updateStabilization() {
         stabilization.configure(
-            enabled: stabilize,
+            enabled: stabilize && !showingFullFramePreview,
             tracking: tracking.state,
             viewWidth: viewWidth,
             viewHeight: viewHeight,
@@ -753,23 +875,28 @@ public final class CollimationEngine: ObservableObject {
             if !stabilize || tracking.state == .searching || showingFullFramePreview {
                 state.stabilizeLock = nil
                 state.stabilizeCentroid = nil
+                // The ROI belongs to the centroid. Leaving the crop in place
+                // made the sensor map add the full-frame star to the old origin.
+                state.roi = nil
+                state.imageWidth = 0
+                state.imageHeight = 0
             }
         }
     }
 
     private nonisolated func ingest(_ frame: Frame) {
         let displayed = softwareCrop.apply(frame)
-        frameSlot.store(displayed)
+        let epoch = frameSlot.store(displayed)
         _ = fpsMeter.tick()
         if stackCapture.isCapturing {
-            stackCapture.offer(CaptureLayout.stackingFrame(from: displayed))
+            stackCapture.offer(frame)
         }
         if !stackCapture.isCapturing {
-            coalescer.submit(frame)
+            coalescer.submit(frame, epoch: epoch)
         }
     }
 
-    private nonisolated func analyze(_ frame: Frame) {
+    private nonisolated func analyze(_ frame: Frame, epoch: UInt64) {
         guard let processed = pipeline.process(frame) else { return }
         if let roi = processed.tracking.requestedROI {
             session.requestTrackerROI(roi)
@@ -778,14 +905,25 @@ public final class CollimationEngine: ObservableObject {
             enabled: CaptureLayout.isTrackingCapture(frame),
             sensorCentroid: processed.tracking.centroidOnSensor
         )
-        frameSlot.store(processed.displayFrame)
+        // The grab loop already showed this frame, and may have shown a newer
+        // one while a full-sensor search was running. Putting this exposure
+        // back would make the star jump backwards during a centering slew.
+        frameSlot.replaceIfCurrent(processed.displayFrame, epoch: epoch)
         Task { @MainActor in
             self.publish(processed)
         }
     }
 
     private func publish(_ processed: ProcessedFrame) {
+        // A frame that was already in the analysis pipeline when the camera
+        // went away lands here after `disconnect()` has cleared everything, and
+        // puts the star, the overlay, the tracking state and a live fps reading
+        // back on screen for a camera that is not there. The hop to the main
+        // actor is unstructured, so there is nothing to cancel; the check has
+        // to be here.
+        guard isConnected else { return }
         frameSequence &+= 1
+        captureROI = processed.captureROI
         fps = fpsMeter.current
         histogram = processed.histogram
         tracking = processed.tracking
@@ -808,14 +946,14 @@ public final class CollimationEngine: ObservableObject {
     }
 
     public func refreshSerialPorts() {
-        var ports = SerialPortScanner.availablePaths()
-        let saved = UserDefaults.standard.string(forKey: Self.serialPortDefaultsKey) ?? selectedSerialPort
+        var ports = serialPortPaths()
+        let saved = defaults.string(forKey: Self.serialPortDefaultsKey) ?? selectedSerialPort
         if !saved.isEmpty, !ports.contains(saved) {
             ports.insert(saved, at: 0)
         }
         serialPorts = ports
         if selectedSerialPort.isEmpty {
-            selectedSerialPort = ports.first ?? saved
+            selectedSerialPort = saved.isEmpty ? (ports.first ?? "") : saved
         } else if !ports.contains(selectedSerialPort), !saved.isEmpty {
             selectedSerialPort = saved
         }
@@ -858,7 +996,12 @@ public final class CollimationEngine: ObservableObject {
     public func disconnectMount() {
         mountTask?.cancel()
         mountTask = nil
-        mount.disconnect()
+        // Off the actor for the same reason as `haltMotionsOffActor`: closing
+        // stops the nudges first, and that is a serial conversation which a
+        // mount that has gone will not answer. The UI state below is what the
+        // user sees, and it must not wait four seconds for a dead cable.
+        let mount = self.mount
+        Task.detached { mount.disconnect() }
         isMountConnected = false
         isMountBusy = false
         mountWork = nil
@@ -874,7 +1017,7 @@ public final class CollimationEngine: ObservableObject {
 
     public func refreshFilterWheels() {
         filterWheels = filterWheel.enumerate()
-        let saved = UserDefaults.standard.string(forKey: Self.filterWheelDefaultsKey) ?? selectedFilterWheelID
+        let saved = defaults.string(forKey: Self.filterWheelDefaultsKey) ?? selectedFilterWheelID
         if let match = filterWheels.first(where: { $0.id == selectedFilterWheelID || $0.id == saved }) {
             selectedFilterWheelID = match.id
         } else if let first = filterWheels.first {
@@ -882,7 +1025,7 @@ public final class CollimationEngine: ObservableObject {
         }
         if !isFilterWheelConnected {
             if PhoenixWheel.sdkVersion == nil {
-                filterWheelStatus = "SDK not found — place libPlayerOnePW.dylib in Vendor/PlayerOne"
+                filterWheelStatus = "SDK not found — place \(VendorLibrary.playerOneFilterWheel) in Vendor/\(VendorLibrary.playerOneFolder)"
             } else if filterWheels.isEmpty {
                 filterWheelStatus = "No Phoenix filter wheel"
             } else {
@@ -915,6 +1058,12 @@ public final class CollimationEngine: ObservableObject {
                     return try wheel.snapshot()
                 }.value
                 try Task.checkCancellation()
+                // Clear the flag before the guard, not after. It gates the
+                // filter picker, Refresh, and the wheel picker, so a return
+                // that leaves it set kills the whole panel until the app is
+                // quit — see `canConnectFilterWheel`, which now always allows
+                // a disconnect for the same reason.
+                isFilterWheelMoving = false
                 guard wheel.isConnected else { return }
                 applyFilterSnapshot(snapshot)
             } catch is CancellationError {
@@ -962,6 +1111,9 @@ public final class CollimationEngine: ObservableObject {
                     return try wheel.snapshot()
                 }.value
                 try Task.checkCancellation()
+                // As in `connectFilterWheel`: clearing this after the guard
+                // meant a wheel that went away mid-move left the panel dead.
+                isFilterWheelMoving = false
                 guard wheel.isConnected else { return }
                 applyFilterSnapshot(snapshot)
             } catch is CancellationError {
@@ -1017,10 +1169,15 @@ public final class CollimationEngine: ObservableObject {
     private func runCalibration() async {
         do {
             try beginMountWork("Calibrating — measuring east…", holdROI: true, work: .calibrating)
+            // A calibration pulse can leave the 512 analysis crop too. Use the
+            // same verified full-sensor capture as a centering move.
+            guideCalibration = nil
+            try await enterFullFrame()
             let duration = MountGuide.calibrationPulseMs
             let beforeEast = try await waitForCentroid()
             try await sendPulse(.east, milliseconds: duration)
             let afterEast = try await waitForSettledCentroid()
+            Log.info("calibration east: before \(beforeEast), after \(afterEast), duration \(duration) ms")
             let eastRate = MountGuide.rate(before: beforeEast, after: afterEast, durationMs: Double(duration))
             if hypot(eastRate.x, eastRate.y) * Double(duration) < MountGuide.minCalibrationMovePixels {
                 throw MountError.calibrationTooSmall("east")
@@ -1029,6 +1186,7 @@ public final class CollimationEngine: ObservableObject {
             mountStatus = "Calibrating — returning from east…"
             try await sendPulse(.west, milliseconds: duration)
             let afterWest = try await waitForSettledCentroid()
+            Log.info("calibration west return: \(afterWest)")
             let raBacklash = MountGuide.backlashPixels(
                 start: beforeEast,
                 afterOutbound: afterEast,
@@ -1039,6 +1197,7 @@ public final class CollimationEngine: ObservableObject {
             let beforeNorth = try await waitForCentroid()
             try await sendPulse(.north, milliseconds: duration)
             let afterNorth = try await waitForSettledCentroid()
+            Log.info("calibration north: before \(beforeNorth), after \(afterNorth), duration \(duration) ms")
             let northRate = MountGuide.rate(before: beforeNorth, after: afterNorth, durationMs: Double(duration))
             if hypot(northRate.x, northRate.y) * Double(duration) < MountGuide.minCalibrationMovePixels {
                 throw MountError.calibrationTooSmall("north")
@@ -1047,6 +1206,7 @@ public final class CollimationEngine: ObservableObject {
             mountStatus = "Calibrating — returning from north…"
             try await sendPulse(.south, milliseconds: duration)
             let afterSouth = try await waitForSettledCentroid()
+            Log.info("calibration south return: \(afterSouth)")
             let decBacklash = MountGuide.backlashPixels(
                 start: beforeNorth,
                 afterOutbound: afterNorth,
@@ -1060,14 +1220,16 @@ public final class CollimationEngine: ObservableObject {
                 raBacklashPixels: raBacklash,
                 decBacklashPixels: decBacklash
             )
-            guard calibration.isValid else { throw MountError.calibrationTooSmall("mount axes") }
+            Log.info("calibration result: east \(eastRate), north \(northRate), axis separation sine \(calibration.axisSeparationSine), backlash RA \(raBacklash) Dec \(decBacklash)")
+            guard calibration.isValid else { throw MountError.calibrationAxesUnreliable }
             try GuideCalibrationStore.save(calibration)
             guideCalibration = calibration
-            endMountWork(Self.calibratedStatus(calibration))
+            await endMountWork(Self.calibratedStatus(calibration))
         } catch is CancellationError {
-            endMountWork("Calibration cancelled")
+            await endMountWork("Calibration cancelled")
         } catch {
-            endMountWork("Calibration failed")
+            await endMountWork("Calibration failed")
+            noteMountFailure(error)
             presentError(error)
         }
     }
@@ -1077,24 +1239,26 @@ public final class CollimationEngine: ObservableObject {
             guard let calibration = guideCalibration, calibration.isValid else {
                 throw MountError.notCalibrated
             }
-            try beginMountWork("Centering on sensor…", holdROI: true, useFullFrame: true, work: .centering)
+            try beginMountWork("Centering on sensor…", holdROI: true, work: .centering)
+            try await enterFullFrame()
             try await moveStar(to: sensorCenter(), calibration: calibration)
             let centroid = try await waitForCentroid()
             let lastError = MountGuide.errorLength(centroid - sensorCenter())
             if MountGuide.isCentered(errorPixels: centroid - sensorCenter()) {
-                endMountWork(String(format: "Centered — %.1f px from sensor center", lastError))
+                await endMountWork(String(format: "Centered — %.1f px from sensor center", lastError))
             } else {
-                endMountWork(String(format: "Stopped — %.1f px from sensor center", lastError))
+                await endMountWork(String(format: "Stopped — %.1f px from sensor center", lastError))
             }
         } catch is CancellationError {
-            endMountWork("Centering cancelled")
+            await endMountWork("Centering cancelled")
         } catch {
-            endMountWork("Centering failed")
+            await endMountWork("Centering failed")
+            noteMountFailure(error)
             presentError(error)
         }
     }
 
-    private func beginMountWork(_ status: String, holdROI: Bool, useFullFrame: Bool = false, work: MountWork) throws {
+    private func beginMountWork(_ status: String, holdROI: Bool, work: MountWork) throws {
         guard isMountConnected else { throw MountError.notConnected }
         guard isConnected else { throw CameraError.notConnected }
         isMountBusy = true
@@ -1102,13 +1266,87 @@ public final class CollimationEngine: ObservableObject {
         mountStatus = status
         mountHoldsROI = holdROI
         applyPipelineConfig()
-        if useFullFrame {
-            showFullFramePreview()
+    }
+
+    /// Drops the mount when a failed command was the cable rather than the
+    /// command.
+    ///
+    /// The camera defect, one subsystem over. Nothing reported that the mount
+    /// had gone: `isMountConnected` was written only by connect and disconnect,
+    /// so after an EQDIR unplug the button went on saying Disconnect, Calibrate
+    /// and Center stayed enabled, and each one failed a few seconds later with
+    /// a timeout. `EQ6Mount.isConnected` is no help — it is `proto != nil &&
+    /// port.isOpen`, and a Windows COM handle stays valid after the device is
+    /// removed — so, as with the camera, re-enumerating is the only thing that
+    /// can tell a vanished mount from a slow one.
+    /// Whether a failed mount command was the cable rather than the command.
+    ///
+    /// Free so it can be tested without a mount. A star that was not found, a
+    /// calibration that came out too small and a cancellation all say nothing
+    /// about the cable; a timeout or a protocol failure might, and the port
+    /// list is what settles it.
+    /// `SerialPortError` counts as well as `MountError`, and that is the whole
+    /// point rather than belt and braces. Only `readHashLocked` maps a serial
+    /// failure to a `MountError`, and only the SynScan and LX200 paths use it:
+    /// `skyCommandLocked` calls `port.readUntil` directly, so an EQDIR cable —
+    /// the one this project actually has — throws a raw `SerialPortError` and
+    /// the first version of this check ignored exactly the case it was written
+    /// for.
+    public static func mountFailureMeansDisconnected(
+        _ error: Error,
+        port: String,
+        availablePorts: [String]
+    ) -> Bool {
+        switch error {
+        case MountError.timeout, MountError.protocolFailure, MountError.notConnected,
+             SerialPortError.timeout, SerialPortError.ioFailed, SerialPortError.closed:
+            return !availablePorts.contains(port)
+        default:
+            return false
         }
     }
 
-    private func endMountWork(_ status: String) {
-        mount.haltMotions()
+    private func noteMountFailure(_ error: Error) {
+        guard isMountConnected else { return }
+        guard Self.mountFailureMeansDisconnected(
+            error,
+            port: selectedSerialPort,
+            availablePorts: serialPortPaths()
+        ) else { return }
+        Log.info("mount port \(selectedSerialPort) is gone; disconnecting")
+        disconnectMount()
+        mountStatus = "Mount disconnected — check the cable"
+    }
+
+    /// Stops the motors without freezing the window.
+    ///
+    /// `haltMotions` is a blocking serial conversation, and the engine is
+    /// main-actor isolated, so calling it directly stalled the UI at the end of
+    /// every calibration and every centering: a few tens of milliseconds with a
+    /// mount that answers, but 0.8 s on SynScan and up to 4 s on SkyWatcher
+    /// when it has stopped answering — long enough for Windows to paint the
+    /// ghost window and add "(Not Responding)". `mount` is nonisolated and
+    /// Sendable, so it costs nothing to do this off the actor.
+    private func haltMotionsOffActor() async {
+        let mount = self.mount
+        await Task.detached { mount.haltMotions() }.value
+    }
+
+    private func endMountWork(_ status: String) async {
+        await haltMotionsOffActor()
+        finishMountWork(status)
+    }
+
+    /// For `defer`, which cannot await. The halt still leaves the actor; it is
+    /// simply not waited for, and nothing below depends on the motors having
+    /// already stopped.
+    private func endMountWorkWithoutWaiting(_ status: String) {
+        let mount = self.mount
+        Task.detached { mount.haltMotions() }
+        finishMountWork(status)
+    }
+
+    private func finishMountWork(_ status: String) {
         restoreTrackingDisplay()
         mountHoldsROI = false
         applyPipelineConfig()
@@ -1126,24 +1364,28 @@ public final class CollimationEngine: ObservableObject {
         applyTrackingWindow(around: center)
     }
 
-    private func applyTrackingWindow(around sensor: SIMD2<Double>) {
+    @discardableResult
+    private func applyTrackingWindow(around sensor: SIMD2<Double>) -> ROI {
         showingFullFramePreview = false
         restoreZoomAfterFullFrame()
         coalescer.cancel()
         pipeline.dropInFlight()
         softwareCrop.setHoldDisabled(false)
         softwareCrop.update(enabled: true, sensorCentroid: sensor)
-        session.requestROI(
-            Alignment.centeredROI(
-                around: sensor,
-                size: CaptureLayout.trackingHardwareSize,
-                sensorWidth: sensorWidth,
-                sensorHeight: sensorHeight
-            )
+        let roi = Alignment.centeredROI(
+            around: sensor,
+            size: CaptureLayout.trackingHardwareSize,
+            sensorWidth: sensorWidth,
+            sensorHeight: sensorHeight,
+            binning: 1,
+            alignment: roiAlignment
         )
+        session.requestROI(roi)
+        return roi
     }
 
-    private func showFullFramePreview() {
+    @discardableResult
+    private func showFullFramePreview() -> ROI {
         coalescer.cancel()
         pipeline.dropInFlight()
         softwareCrop.setHoldDisabled(true)
@@ -1151,9 +1393,13 @@ public final class CollimationEngine: ObservableObject {
         if zoomBeforeFullFrame == nil {
             zoomBeforeFullFrame = zoom
         }
-        session.requestROI(
-            Alignment.fullFrameROI(sensorWidth: sensorWidth, sensorHeight: sensorHeight, binning: 1)
+        let roi = Alignment.fullFrameROI(
+            sensorWidth: sensorWidth,
+            sensorHeight: sensorHeight,
+            binning: 1,
+            alignment: roiAlignment
         )
+        session.requestROI(roi)
         zoom = clampedZoom(ImageLayout.fitZoom(
             imageWidth: sensorWidth,
             imageHeight: sensorHeight,
@@ -1161,6 +1407,7 @@ public final class CollimationEngine: ObservableObject {
             viewHeight: viewHeight
         ))
         updateStabilization()
+        return roi
     }
 
     private func restoreZoomAfterFullFrame() {
@@ -1171,24 +1418,51 @@ public final class CollimationEngine: ObservableObject {
     }
 
     private func enterFullFrame() async throws {
-        showFullFramePreview()
-        _ = try await waitForCentroid(minNewFrames: 2, timeout: 12)
+        let reference = tracking.state == .tracking ? tracking.centroidOnSensor : nil
+        let expected = showFullFramePreview()
+        try await waitForCaptureWindow(expected, reference: reference)
+    }
+
+    private func waitForCaptureWindow(_ expected: ROI, reference: SIMD2<Double>?) async throws {
+        var gate = MountFrameGate(expectedROI: expected, reference: reference)
+        var sequence = frameSequence
+        let deadline = Date().addingTimeInterval(12)
+        Log.info("mount capture request \(expected), previous centroid \(String(describing: reference))")
+        while Date() < deadline {
+            try Task.checkCancellation()
+            if frameSequence != sequence, let roi = captureROI {
+                sequence = frameSequence
+                do {
+                    if let centroid = try gate.observe(roi: roi, tracking: tracking) {
+                        Log.info("mount capture ready: centroid \(centroid), ROI \(roi)")
+                        return
+                    }
+                } catch {
+                    Log.info("mount frame switch rejected: centroid \(String(describing: tracking.centroidOnSensor)), ROI \(roi)")
+                    throw error
+                }
+            }
+            try await Task.sleep(nanoseconds: 40_000_000)
+        }
+        throw MountError.noStar
     }
 
     private func prepareStackWindow(around sensor: SIMD2<Double>) async throws {
-        applyTrackingWindow(around: sensor)
-        _ = try await waitForCentroid(minNewFrames: 2, timeout: 12)
+        let roi = applyTrackingWindow(around: sensor)
+        try await waitForCaptureWindow(roi, reference: sensor)
     }
 
     private func moveStar(to target: SIMD2<Double>, calibration: GuideCalibration) async throws {
         var centroid = try await waitForSettledCentroid()
+        Log.info("mount move: centroid \(centroid), target \(target), east \(calibration.eastRate), north \(calibration.northRate), backlash RA \(calibration.raBacklashPixels) Dec \(calibration.decBacklashPixels)")
         if MountGuide.isCentered(errorPixels: centroid - target) { return }
 
         let deadline = Date().addingTimeInterval(90)
         var lastRASign: Double?
         var lastDecSign: Double?
+        var slews = 0
         do {
-            while Date() < deadline {
+            while slews < AxisCentering.maxSlews, Date() < deadline {
                 try Task.checkCancellation()
                 if MountGuide.isCentered(errorPixels: centroid - target) { break }
 
@@ -1205,6 +1479,8 @@ public final class CollimationEngine: ObservableObject {
                     lastDecSign = pixels.dec
                 }
                 mountStatus = Self.centeringStatus(plan)
+                slews += 1
+                Log.info("mount correction: centroid \(centroid), target \(target), RA \(String(describing: plan.ra)), Dec \(String(describing: plan.dec))")
                 try await mount.applyNudge(plan.nudge)
                 if let direction = plan.nudge.ra { axisDirections.record(direction) }
                 if let direction = plan.nudge.dec { axisDirections.record(direction) }
@@ -1221,7 +1497,7 @@ public final class CollimationEngine: ObservableObject {
             }
             try await mount.applyNudge(nil)
         } catch {
-            mount.haltMotions()
+            await haltMotionsOffActor()
             throw error
         }
     }
@@ -1276,6 +1552,7 @@ public final class CollimationEngine: ObservableObject {
             try Task.checkCancellation()
             if frameSequence >= startSeq + UInt64(minNewFrames),
                tracking.state == .tracking,
+               tracking.detection != nil,
                let centroid = tracking.centroidOnSensor
             {
                 return centroid
@@ -1303,7 +1580,9 @@ public final class CollimationEngine: ObservableObject {
             sensorWidth: sensorWidth,
             sensorHeight: sensorHeight,
             holdROI: holdsROI,
-            optics: optics
+            optics: optics,
+            roiAlignment: roiAlignment,
+            searchBinning: searchBinning
         )
         session.setHoldROI(holdsROI)
     }
@@ -1313,10 +1592,12 @@ public final class CollimationEngine: ObservableObject {
     private func presentError(_ error: Error) {
         if error is CancellationError { return }
         errorMessage = error.localizedDescription
+        Log.info("Error: \(error.localizedDescription)")
     }
 
     private func handleError(_ error: Error) {
         errorMessage = error.localizedDescription
+        Log.info("Error: \(error.localizedDescription)")
         disconnect()
         statusText = "Error"
     }

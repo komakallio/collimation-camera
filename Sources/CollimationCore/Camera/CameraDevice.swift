@@ -70,6 +70,8 @@ public protocol CameraDevice: AnyObject {
     var controls: CameraControls { get }
     var currentROI: ROI { get }
     var supportedBins: [Int] { get }
+    /// ROI granularity this camera accepts. Player One and ZWO differ (§7.5).
+    var roiAlignment: ROIAlignment { get }
 
     func open() throws
     func close()
@@ -82,21 +84,60 @@ public protocol CameraDevice: AnyObject {
     func cancelGrab()
     /// Soft frame-rate cap. `0` means unlimited where the camera supports it.
     func applyFrameLimit(_ fps: Int)
+    /// Whether the camera is still on the bus.
+    ///
+    /// An unplugged camera does not report an error: it simply stops saying a
+    /// frame is ready, which is indistinguishable from a slow one. Asking the
+    /// SDK to enumerate is what tells the two apart, so the capture loop calls
+    /// this after a run of timeouts rather than guessing. Only called when
+    /// something already looks wrong, since enumerating mid-stream is not free.
+    func isStillPresent() -> Bool
 }
 
 extension CameraDevice {
     public func cancelGrab() {}
     public func applyFrameLimit(_ fps: Int) {}
+    public var roiAlignment: ROIAlignment { .playerOne }
+    /// The simulator cannot be unplugged, and a device that cannot tell should
+    /// not claim its camera has gone.
+    public func isStillPresent() -> Bool { true }
 }
 
 public enum DeviceCatalog {
+    /// Device-id prefix per vendor. Ids are `poa-<cameraID>` and `asi-<CameraID>`.
+    static func idPrefix(_ vendor: CameraVendor) -> String {
+        switch vendor {
+        case .playerOne: return "poa-"
+        case .zwo: return "asi-"
+        }
+    }
+
     public static var playerOneSDKVersion: String? {
         POANative.shared?.sdkVersion
+    }
+
+    public static var zwoSDKVersion: String? {
+        ASINative.shared?.sdkVersion
+    }
+
+    /// Both SDK versions, in vendor order, for the disconnected status line.
+    public static var sdkVersionSummary: String? {
+        var parts: [String] = []
+        if let version = playerOneSDKVersion {
+            parts.append("POA \(version)")
+        }
+        if let version = zwoSDKVersion {
+            parts.append("ASI \(version)")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: ", ")
     }
 
     public static func list() -> [CameraDescriptor] {
         var devices: [CameraDescriptor] = []
         if let native = POANative.shared {
+            devices.append(contentsOf: native.enumerate())
+        }
+        if let native = ASINative.shared {
             devices.append(contentsOf: native.enumerate())
         }
         devices.append(.simulator)
@@ -108,6 +149,17 @@ public enum DeviceCatalog {
         devices.first(where: { !$0.isSimulator })?.id ?? CameraDescriptor.simulator.id
     }
 
+    /// The vendor a hardware device id belongs to, or nil for the simulators
+    /// and for ids that match no vendor.
+    public static func vendor(forID id: String) -> CameraVendor? {
+        for vendor in CameraVendor.allCases where id.hasPrefix(idPrefix(vendor)) {
+            let suffix = id.dropFirst(idPrefix(vendor).count)
+            guard !suffix.isEmpty, Int32(suffix) != nil else { return nil }
+            return vendor
+        }
+        return nil
+    }
+
     public static func makeDevice(id: String) throws -> CameraDevice {
         if id == CameraDescriptor.simulator.id {
             return SimulatorCamera(pattern: .defocusedDonut)
@@ -115,9 +167,23 @@ public enum DeviceCatalog {
         if id == CameraDescriptor.airySimulator.id {
             return SimulatorCamera(pattern: .airy)
         }
-        guard let native = POANative.shared else { throw CameraError.sdkNotFound }
-        let hardwareID = Int32(id.replacingOccurrences(of: "poa-", with: ""))
-        guard let hardwareID else { throw CameraError.unsupported("Unknown camera id \(id)") }
-        return POACameraDevice(native: native, cameraID: hardwareID)
+        guard let vendor = vendor(forID: id) else {
+            throw CameraError.unsupported("Unknown camera id \(id)")
+        }
+        guard let hardwareID = Int32(id.dropFirst(idPrefix(vendor).count)) else {
+            throw CameraError.unsupported("Unknown camera id \(id)")
+        }
+        switch vendor {
+        case .playerOne:
+            guard let native = POANative.shared else {
+                throw CameraError.sdkNotFound(vendor: .playerOne)
+            }
+            return POACameraDevice(native: native, cameraID: hardwareID)
+        case .zwo:
+            guard let native = ASINative.shared else {
+                throw CameraError.sdkNotFound(vendor: .zwo)
+            }
+            return ASICameraDevice(native: native, cameraID: hardwareID)
+        }
     }
 }

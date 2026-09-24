@@ -1,19 +1,19 @@
+import CollimationCore
 import Foundation
 import Metal
 import simd
 
-/// GPU copy of `StarDetector.momentCentroid`: peak in a window, then the
-/// intensity-weighted center of pixels ≥ 35% of that peak.
+/// GPU copy of `StarDetector.momentCentroid`: sky from the lower tail, then
+/// the centre of mass of `(ADU - sky)` for pixels at or above the cutoff.
+/// `sky` and `threshold` come from `momentLevels` so this matches the CPU path.
 ///
 /// Must run on the **same command queue** as the draw, after this frame’s
 /// `replace`, so the reduction sees the texels about to be presented. A second
 /// queue raced the previous draw and panned with a one-frame-late centroid.
 final class GPUCentroid {
-    static let halfWindow = 256
+    static let halfWindow = StarDetector.momentCentroidHalfWindow
 
     private let device: MTLDevice
-    private let peakPipeline: MTLComputePipelineState
-    private let reducePeakPipeline: MTLComputePipelineState
     private let momentPipeline: MTLComputePipelineState
     private let reduceMomentPipeline: MTLComputePipelineState
     private var partials: MTLBuffer?
@@ -25,17 +25,11 @@ final class GPUCentroid {
         self.device = device
         let options = MTLCompileOptions()
         guard let library = try? device.makeLibrary(source: Self.shaderSource, options: options),
-              let peak = library.makeFunction(name: "stabilizePeak"),
-              let reducePeak = library.makeFunction(name: "stabilizeReducePeak"),
               let moments = library.makeFunction(name: "stabilizeMoments"),
               let reduceMoments = library.makeFunction(name: "stabilizeReduceMoments"),
-              let peakPipeline = try? device.makeComputePipelineState(function: peak),
-              let reducePeakPipeline = try? device.makeComputePipelineState(function: reducePeak),
               let momentPipeline = try? device.makeComputePipelineState(function: moments),
               let reduceMomentPipeline = try? device.makeComputePipelineState(function: reduceMoments)
         else { return nil }
-        self.peakPipeline = peakPipeline
-        self.reducePeakPipeline = reducePeakPipeline
         self.momentPipeline = momentPipeline
         self.reduceMomentPipeline = reduceMomentPipeline
         result = device.makeBuffer(length: MemoryLayout<MomentPartial>.stride, options: .storageModeShared)
@@ -44,7 +38,9 @@ final class GPUCentroid {
     func measure(
         queue: MTLCommandQueue,
         texture: MTLTexture,
-        seed: SIMD2<Double>?
+        seed: SIMD2<Double>?,
+        sky: UInt16,
+        threshold: UInt16
     ) -> SIMD2<Double>? {
         let width = texture.width
         let height = texture.height
@@ -68,7 +64,14 @@ final class GPUCentroid {
         let groupCount = groupsX * groupsY
         guard preparePartials(groupCount: groupCount), let partials else { return nil }
 
-        var roi = StabilizeROI(x0: Int32(x0), y0: Int32(y0), x1: Int32(x1), y1: Int32(y1))
+        var roi = StabilizeROI(
+            x0: Int32(x0),
+            y0: Int32(y0),
+            x1: Int32(x1),
+            y1: Int32(y1),
+            sky: UInt32(sky),
+            threshold: UInt32(threshold)
+        )
         var groups = UInt32(groupCount)
         epoch &+= 1
         if epoch == 0 { epoch = 1 }
@@ -80,25 +83,10 @@ final class GPUCentroid {
         let grid = MTLSize(width: groupsX, height: groupsY, depth: 1)
         let threads = MTLSize(width: tgW, height: tgH, depth: 1)
         if let encoder = command.makeComputeCommandEncoder() {
-            encoder.setComputePipelineState(peakPipeline)
-            encoder.setTexture(texture, index: 0)
-            encoder.setBytes(&roi, length: MemoryLayout<StabilizeROI>.stride, index: 0)
-            encoder.setBuffer(partials, offset: 0, index: 1)
-            encoder.dispatchThreadgroups(grid, threadsPerThreadgroup: threads)
-            encoder.memoryBarrier(scope: .buffers)
-
-            encoder.setComputePipelineState(reducePeakPipeline)
-            encoder.setBuffer(partials, offset: 0, index: 0)
-            encoder.setBuffer(result, offset: 0, index: 1)
-            encoder.setBytes(&groups, length: MemoryLayout<UInt32>.stride, index: 2)
-            encoder.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-            encoder.memoryBarrier(scope: .buffers)
-
             encoder.setComputePipelineState(momentPipeline)
             encoder.setTexture(texture, index: 0)
             encoder.setBytes(&roi, length: MemoryLayout<StabilizeROI>.stride, index: 0)
-            encoder.setBuffer(result, offset: 0, index: 1)
-            encoder.setBuffer(partials, offset: 0, index: 2)
+            encoder.setBuffer(partials, offset: 0, index: 1)
             encoder.dispatchThreadgroups(grid, threadsPerThreadgroup: threads)
             encoder.memoryBarrier(scope: .buffers)
 
@@ -138,6 +126,8 @@ final class GPUCentroid {
         var y0: Int32
         var x1: Int32
         var y1: Int32
+        var sky: UInt32
+        var threshold: UInt32
     }
 
     private struct MomentPartial {
@@ -157,6 +147,8 @@ final class GPUCentroid {
         int y0;
         int x1;
         int y1;
+        uint sky;
+        uint threshold;
     };
 
     struct MomentPartial {
@@ -167,7 +159,7 @@ final class GPUCentroid {
         uint epoch;
     };
 
-    kernel void stabilizePeak(
+    kernel void stabilizeMoments(
         texture2d<ushort, access::read> tex [[texture(0)]],
         constant StabilizeROI &roi [[buffer(0)]],
         device MomentPartial *partials [[buffer(1)]],
@@ -176,80 +168,23 @@ final class GPUCentroid {
         uint2 ntg [[threadgroups_per_grid]],
         uint tid [[thread_index_in_threadgroup]]
     ) {
-        threadgroup uint sharedPeak[256];
-        uint2 pixel = uint2(uint(roi.x0) + gid.x, uint(roi.y0) + gid.y);
-        uint v = 0;
-        if (int(pixel.x) < roi.x1 && int(pixel.y) < roi.y1
-            && pixel.x < tex.get_width() && pixel.y < tex.get_height()) {
-            v = uint(tex.read(pixel).r);
-        }
-        sharedPeak[tid] = v;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        for (uint stride = 128; stride > 0; stride >>= 1) {
-            if (tid < stride) {
-                sharedPeak[tid] = max(sharedPeak[tid], sharedPeak[tid + stride]);
-            }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-        }
-        if (tid == 0) {
-            uint groupIndex = tgid.y * ntg.x + tgid.x;
-            partials[groupIndex].peak = sharedPeak[0];
-        }
-    }
-
-    kernel void stabilizeReducePeak(
-        device const MomentPartial *partials [[buffer(0)]],
-        device MomentPartial *result [[buffer(1)]],
-        constant uint &groupCount [[buffer(2)]],
-        uint tid [[thread_index_in_threadgroup]]
-    ) {
-        threadgroup uint sharedPeak[256];
-        uint v = 0;
-        for (uint i = tid; i < groupCount; i += 256) {
-            v = max(v, partials[i].peak);
-        }
-        sharedPeak[tid] = v;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        for (uint stride = 128; stride > 0; stride >>= 1) {
-            if (tid < stride) {
-                sharedPeak[tid] = max(sharedPeak[tid], sharedPeak[tid + stride]);
-            }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-        }
-        if (tid == 0) {
-            result[0].peak = sharedPeak[0];
-            result[0].flux = 0;
-            result[0].sumX = 0;
-            result[0].sumY = 0;
-        }
-    }
-
-    kernel void stabilizeMoments(
-        texture2d<ushort, access::read> tex [[texture(0)]],
-        constant StabilizeROI &roi [[buffer(0)]],
-        device const MomentPartial *result [[buffer(1)]],
-        device MomentPartial *partials [[buffer(2)]],
-        uint2 gid [[thread_position_in_grid]],
-        uint2 tgid [[threadgroup_position_in_grid]],
-        uint2 ntg [[threadgroups_per_grid]],
-        uint tid [[thread_index_in_threadgroup]]
-    ) {
         threadgroup ulong sharedFlux[256];
         threadgroup ulong sharedX[256];
         threadgroup ulong sharedY[256];
-        uint peak = result[0].peak;
-        uint threshold = max(uint(1), uint(float(peak) * 0.35));
+        uint sky = roi.sky;
+        uint threshold = max(sky, roi.threshold);
         ulong flux = 0;
         ulong sumX = 0;
         ulong sumY = 0;
         uint2 pixel = uint2(uint(roi.x0) + gid.x, uint(roi.y0) + gid.y);
-        if (peak > 0 && int(pixel.x) < roi.x1 && int(pixel.y) < roi.y1
+        if (int(pixel.x) < roi.x1 && int(pixel.y) < roi.y1
             && pixel.x < tex.get_width() && pixel.y < tex.get_height()) {
             uint v = uint(tex.read(pixel).r);
             if (v >= threshold) {
-                flux = ulong(v);
-                sumX = ulong(pixel.x) * ulong(v);
-                sumY = ulong(pixel.y) * ulong(v);
+                uint weight = v - sky;
+                flux = ulong(weight);
+                sumX = ulong(pixel.x) * ulong(weight);
+                sumY = ulong(pixel.y) * ulong(weight);
             }
         }
         sharedFlux[tid] = flux;

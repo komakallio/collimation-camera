@@ -7,6 +7,8 @@ public final class StackCaptureBuffer: @unchecked Sendable {
     private var frames: [Frame] = []
     private var target = 0
     private var capturing = false
+    private var sensorCentroid: SIMD2<Double>?
+    private var expectedROI: ROI?
 
     public init() {}
 
@@ -28,10 +30,12 @@ public final class StackCaptureBuffer: @unchecked Sendable {
         return target
     }
 
-    public func begin(target: Int) {
+    public func begin(target: Int, sensorCentroid: SIMD2<Double>? = nil, expectedROI: ROI? = nil) {
         lock.lock()
         frames.removeAll(keepingCapacity: true)
         self.target = max(0, target)
+        self.sensorCentroid = sensorCentroid
+        self.expectedROI = expectedROI
         if self.target > 0 {
             frames.reserveCapacity(self.target)
         }
@@ -53,7 +57,17 @@ public final class StackCaptureBuffer: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard capturing, frames.count < target else { return frames.count }
-        frames.append(frame)
+        if let expectedROI, frame.roi != expectedROI { return frames.count }
+        if let sensorCentroid {
+            guard frame.roi.contains(sensorPoint: sensorCentroid) else { return frames.count }
+            // The live crop can be clamped at a sensor edge or still reflect
+            // the previous readout. Stack directly from sensor coordinates.
+            frames.append(CaptureLayout.stackingFrame(
+                from: frame, seed: frame.roi.framePixel(fromSensorPoint: sensorCentroid)
+            ))
+        } else {
+            frames.append(frame)
+        }
         if frames.count >= target {
             capturing = false
         }

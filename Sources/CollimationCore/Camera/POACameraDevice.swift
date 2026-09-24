@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import POACameraC
 
@@ -31,32 +30,50 @@ final class POACameraDevice: CameraDevice {
     }
 
     func open() throws {
+        // The properties lookup has to come first. It calls POAGetCameraCount,
+        // which is what scans the bus and makes a camera id valid; without it
+        // POAOpenCamera answers POA_ERROR_INVALID_ID. Enumerating and opening
+        // are the same process in the app, so this was invisible there — but
+        // `capture-cli --device poa-0` opens without ever listing, and failed
+        // against a real Xena 585M until this was reordered.
+        guard let props = native.properties(cameraID) else {
+            throw CameraError.notConnected
+        }
         try native.open(cameraID)
         try native.initialize(cameraID)
         opened = true
-        if let props = native.properties(cameraID) {
-            descriptor = CameraDescriptor(
-                id: "poa-\(cameraID)",
-                name: cString(props.cameraModelName),
-                sensorWidth: Int(props.maxWidth),
-                sensorHeight: Int(props.maxHeight),
-                pixelSizeMicrons: props.pixelSize,
-                isSimulator: false,
-                hardwareID: cameraID
-            )
-            var bins: [Int] = []
-            withUnsafeBytes(of: props.bins) { raw in
-                for v in raw.bindMemory(to: Int32.self) where v > 0 {
-                    bins.append(Int(v))
-                }
+        descriptor = CameraDescriptor(
+            id: "poa-\(cameraID)",
+            name: cString(props.cameraModelName),
+            sensorWidth: Int(props.maxWidth),
+            sensorHeight: Int(props.maxHeight),
+            pixelSizeMicrons: props.pixelSize,
+            isSimulator: false,
+            hardwareID: cameraID
+        )
+        var bins: [Int] = []
+        withUnsafeBytes(of: props.bins) { raw in
+            for v in raw.bindMemory(to: Int32.self) where v > 0 {
+                bins.append(Int(v))
             }
-            if !bins.isEmpty { supportedBins = bins }
         }
+        if !bins.isEmpty { supportedBins = bins }
         if let range = native.intRange(cameraID, POA_EXPOSURE) {
             controls.exposureRange = range
         }
         if let range = native.intRange(cameraID, POA_GAIN) {
             controls.gainRange = range
+        }
+        // Fastest readout the link allows, the same thing the ZWO path does
+        // with ASI_BANDWIDTHOVERLOAD. A Xena 585M and a Poseidon-M PRO both
+        // report 100 out of 35...100 already, so this changes nothing on
+        // either; it is here because the SDK does not promise that default and
+        // a throttled link would show up as a rate nobody could explain. The
+        // log line is what makes that visible.
+        if let range = native.intRange(cameraID, POA_USB_BANDWIDTH_LIMIT) {
+            let before = (try? native.getInt(cameraID, POA_USB_BANDWIDTH_LIMIT)).map(String.init) ?? "?"
+            try? native.setInt(cameraID, POA_USB_BANDWIDTH_LIMIT, range.upperBound)
+            Log.info("POA USB bandwidth limit \(before) -> \(range.upperBound) (range \(range.lowerBound)...\(range.upperBound))")
         }
         try? native.setFormat(cameraID, POA_RAW16)
         format = (try? native.currentFormat(cameraID)) ?? POA_RAW16
@@ -79,6 +96,12 @@ final class POACameraDevice: CameraDevice {
         grabLock.lock()
         grabCancelled = true
         grabLock.unlock()
+    }
+
+    /// `properties` walks the enumerated cameras, so a camera that has been
+    /// unplugged is simply not among them any more.
+    func isStillPresent() -> Bool {
+        native.properties(cameraID) != nil
     }
 
     func applyExposure(_ microseconds: Int) throws {
@@ -145,7 +168,7 @@ final class POACameraDevice: CameraDevice {
         }
         try grabBuffer.withUnsafeMutableBytes { raw in
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress else {
-                throw CameraError.poa(code: -1, message: "Failed to allocate frame buffer")
+                throw CameraError.sdk(vendor: .playerOne, code: -1, message: "Failed to allocate frame buffer")
             }
             try native.grab(cameraID, buffer: base, size: size, timeoutMs: timeoutMs) { [weak self] in
                 guard let self else { return true }
@@ -161,7 +184,7 @@ final class POACameraDevice: CameraDevice {
             grabBuffer.withUnsafeBytes { src in
                 guard let d = dest.baseAddress, let s = src.baseAddress else { return }
                 if format == POA_RAW16 {
-                    memcpy(d, s, pixelCount * MemoryLayout<UInt16>.size)
+                    d.copyMemory(from: s, byteCount: pixelCount * MemoryLayout<UInt16>.size)
                 } else {
                     let bytes = src.bindMemory(to: UInt8.self)
                     let out = dest.bindMemory(to: UInt16.self)

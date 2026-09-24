@@ -74,7 +74,7 @@ public enum FilterWheelError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .sdkNotFound:
-            return "Player One Filter Wheel SDK was not found. Place libPlayerOnePW.dylib in Vendor/PlayerOne or the app Frameworks folder."
+            return "Player One Filter Wheel SDK was not found. Place \(VendorLibrary.playerOneFilterWheel) in Vendor/\(VendorLibrary.playerOneFolder) or next to the executable."
         case .sdkSymbolMissing(let name):
             return "Player One Filter Wheel SDK is missing symbol \(name)."
         case .notConnected:

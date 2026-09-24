@@ -1,0 +1,17 @@
+# Keep line endings LF everywhere. The project is built on macOS, Windows, and
+# Linux from the same checkout, and Swift, shell, and PowerShell sources are all
+# happier with one convention than with per-platform conversion.
+* text=auto eol=lf
+
+# Windows-only tooling that some editors still expect to be CRLF.
+*.ps1 text eol=crlf
+
+# Binary assets.
+*.png binary
+*.icns binary
+*.ico binary
+*.tif binary
+*.zip binary
+
+# Vendored third-party source: not this project's code for language stats.
+Sources/CImGui/vendor/** linguist-vendored

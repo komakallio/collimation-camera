@@ -4,17 +4,17 @@ import Foundation
 final class FrameCoalescer: @unchecked Sendable {
     private let lock = NSLock()
     private let queue: DispatchQueue
-    private var latest: Frame?
+    private var latest: (frame: Frame, epoch: UInt64)?
     private var running = false
-    var handler: ((Frame) -> Void)?
+    var handler: ((Frame, UInt64) -> Void)?
 
     init(label: String) {
         self.queue = DispatchQueue(label: label, qos: .userInitiated)
     }
 
-    func submit(_ frame: Frame) {
+    func submit(_ frame: Frame, epoch: UInt64) {
         lock.lock()
-        latest = frame
+        latest = (frame, epoch)
         if running {
             lock.unlock()
             return
@@ -36,14 +36,14 @@ final class FrameCoalescer: @unchecked Sendable {
     private func drain() {
         while true {
             lock.lock()
-            guard let frame = latest else {
+            guard let pending = latest else {
                 running = false
                 lock.unlock()
                 return
             }
             latest = nil
             lock.unlock()
-            handler?(frame)
+            handler?(pending.frame, pending.epoch)
         }
     }
 }
