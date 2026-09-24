@@ -36,13 +36,15 @@ public enum OverlayScene {
 
         var result: [HUDPrimitive] = []
 
-        // A cross through the sensor center, only while that point is on screen.
-        // Each arm runs to the view edge and fades out along the way.
+        // A cross through the sensor center, 200 sensor pixels each way, only
+        // while that point is on screen. The arms fade toward their tips.
         if let sensorCenter = overlay.sensorCenterInImage,
            sensorCenter.x >= -2, sensorCenter.y >= -2,
            sensorCenter.x <= Double(overlay.imageWidth) + 2,
            sensorCenter.y <= Double(overlay.imageHeight) + 2 {
-            result += fadingCross(at: layout.viewPoint(image: sensorCenter), viewSize: viewSize)
+            let binning = Double(max(overlay.roi.binning, 1))
+            let arm = OverlayChrome.sensorCrossArmPixels / binning * layout.zoom
+            result += fadingCross(at: layout.viewPoint(image: sensorCenter), arm: arm)
         }
 
         // The star, coloured by how well exposed it is.
@@ -71,16 +73,16 @@ public enum OverlayScene {
         return result
     }
 
-    /// Four arms from the sensor center to the view edges. A stroke cannot
-    /// carry a gradient, so each arm is short pieces whose alpha falls off
-    /// with the square of the distance.
-    private static func fadingCross(at center: SIMD2<Double>, viewSize: SIMD2<Double>) -> [HUDPrimitive] {
-        guard center.x >= 0, center.y >= 0, center.x <= viewSize.x, center.y <= viewSize.y else { return [] }
+    /// Four arms of `arm` view points. A stroke cannot carry a gradient, so
+    /// each arm is short pieces whose alpha falls off with the square of the
+    /// distance.
+    private static func fadingCross(at center: SIMD2<Double>, arm: Double) -> [HUDPrimitive] {
+        guard arm > 1 else { return [] }
         let ends = [
-            SIMD2(0, center.y),
-            SIMD2(viewSize.x, center.y),
-            SIMD2(center.x, 0),
-            SIMD2(center.x, viewSize.y),
+            SIMD2(center.x - arm, center.y),
+            SIMD2(center.x + arm, center.y),
+            SIMD2(center.x, center.y - arm),
+            SIMD2(center.x, center.y + arm),
         ]
         return ends.flatMap { fadingArm(from: center, to: $0) }
     }

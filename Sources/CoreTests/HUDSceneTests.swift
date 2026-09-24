@@ -59,10 +59,10 @@ func testOverlaySceneSensorCenter() throws {
     let nearest = horizontal.min { abs(($0.0.x + $0.1.x) / 2 - expected.x) < abs(($1.0.x + $1.1.x) / 2 - expected.x) }
     let farthest = horizontal.max { abs(($0.0.x + $0.1.x) / 2 - expected.x) < abs(($1.0.x + $1.1.x) / 2 - expected.x) }
     try expectUI((nearest?.2.a ?? 0) > (farthest?.2.a ?? 1), "the cross is brighter at the center than at the edge")
-    try expectUI(
-        horizontal.contains { min($0.0.x, $0.1.x) <= 1e-6 } && horizontal.contains { max($0.0.x, $0.1.x) >= viewSize.x - 1e-6 },
-        "the cross reaches both view edges"
-    )
+    let arm = OverlayChrome.sensorCrossArmPixels
+    let reach = horizontal.flatMap { [min($0.0.x, $0.1.x), max($0.0.x, $0.1.x)] }
+    try expectUI(abs((reach.min() ?? 0) - (expected.x - arm)) < 1e-6, "left tip is 200 sensor pixels from the center")
+    try expectUI(abs((reach.max() ?? 0) - (expected.x + arm)) < 1e-6, "right tip is 200 sensor pixels from the center")
 
     // Off-frame sensor centers are not drawn.
     let far = OverlayModel(

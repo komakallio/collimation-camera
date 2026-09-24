@@ -89,6 +89,9 @@ public enum OverlayChrome {
 
     /// Stroke widths and sizes the overlay uses, in view points.
     public static let crosshairWidth = 1.0
+    /// Each arm of the sensor-center cross, in unbinned sensor pixels. The
+    /// view length is this times the zoom, so the mark stays put on the sensor.
+    public static let sensorCrossArmPixels = 200.0
     public static let starCrosshairSize = 14.0
     public static let crosshairDotRadius = 3.0
     public static let ringWidth = 1.2

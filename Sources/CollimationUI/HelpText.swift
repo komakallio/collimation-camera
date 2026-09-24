@@ -28,7 +28,7 @@ public enum HelpText {
     public static let fwhm = "Full width at half maximum. 1600 mm focal length, 3.76 µm pixels."
 
     public static let legend =
-        "White cross is the physical sensor center; it fades toward the edges. The star marker is green when exposure is good, yellow when faint, and red when clipped. Cyan is the outer donut, gold the secondary shadow, red the coma."
+        "White cross is the physical sensor center, 200 sensor pixels each way, fading toward the tips. The star marker is green when exposure is good, yellow when faint, and red when clipped. Cyan is the outer donut, gold the secondary shadow, red the coma."
 
     public static let roiMap =
         "Full sensor with the current camera ROI. White plus is the physical sensor center. Grid lines are sensor quarters."
