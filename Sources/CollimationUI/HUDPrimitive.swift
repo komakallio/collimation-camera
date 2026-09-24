@@ -46,8 +46,8 @@ public enum HUDPrimitive: Equatable, Sendable {
 
 /// Shapes several scenes share.
 public enum HUDShape {
-    /// The crosshair used for the sensor center and the star marker: a cross of
-    /// half-width `size` with a filled dot at the middle.
+    /// The crosshair used for the star marker: a cross of half-width `size`
+    /// with a filled dot at the middle.
     public static func crosshair(
         at point: SIMD2<Double>,
         color: HUDColor,
@@ -89,7 +89,6 @@ public enum OverlayChrome {
 
     /// Stroke widths and sizes the overlay uses, in view points.
     public static let crosshairWidth = 1.0
-    public static let sensorCrosshairSize = 18.0
     public static let starCrosshairSize = 14.0
     public static let crosshairDotRadius = 3.0
     public static let ringWidth = 1.2

@@ -28,7 +28,7 @@ public enum LogFile {
 
     nonisolated(unsafe) private static var handle: FileHandle?
     private static let lock = NSLock()
-    nonisolated(unsafe) private static let formatter: DateFormatter = {
+    private static let formatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss.SSS"
         return formatter

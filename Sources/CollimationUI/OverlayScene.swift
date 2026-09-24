@@ -36,18 +36,13 @@ public enum OverlayScene {
 
         var result: [HUDPrimitive] = []
 
-        // The sensor center, only while it is inside the displayed frame.
+        // A cross through the sensor center, only while that point is on screen.
+        // Each arm runs to the view edge and fades out along the way.
         if let sensorCenter = overlay.sensorCenterInImage,
            sensorCenter.x >= -2, sensorCenter.y >= -2,
            sensorCenter.x <= Double(overlay.imageWidth) + 2,
            sensorCenter.y <= Double(overlay.imageHeight) + 2 {
-            result += HUDShape.crosshair(
-                at: layout.viewPoint(image: sensorCenter),
-                color: OverlayChrome.frameCenter,
-                size: OverlayChrome.sensorCrosshairSize,
-                lineWidth: OverlayChrome.crosshairWidth,
-                dotRadius: OverlayChrome.crosshairDotRadius
-            )
+            result += fadingCross(at: layout.viewPoint(image: sensorCenter), viewSize: viewSize)
         }
 
         // The star, coloured by how well exposed it is.
@@ -76,6 +71,42 @@ public enum OverlayScene {
         return result
     }
 
+    /// Four arms from the sensor center to the view edges. A stroke cannot
+    /// carry a gradient, so each arm is short pieces whose alpha falls off
+    /// with the square of the distance.
+    private static func fadingCross(at center: SIMD2<Double>, viewSize: SIMD2<Double>) -> [HUDPrimitive] {
+        guard center.x >= 0, center.y >= 0, center.x <= viewSize.x, center.y <= viewSize.y else { return [] }
+        let ends = [
+            SIMD2(0, center.y),
+            SIMD2(viewSize.x, center.y),
+            SIMD2(center.x, 0),
+            SIMD2(center.x, viewSize.y),
+        ]
+        return ends.flatMap { fadingArm(from: center, to: $0) }
+    }
+
+    private static let fadeSteps = 12
+
+    private static func fadingArm(from: SIMD2<Double>, to: SIMD2<Double>) -> [HUDPrimitive] {
+        let length = hypot(to.x - from.x, to.y - from.y)
+        guard length > 1 else { return [] }
+        let steps = fadeSteps
+        return (0..<steps).map { index in
+            let t0 = Double(index) / Double(steps)
+            let t1 = Double(index + 1) / Double(steps)
+            let start = SIMD2(from.x + (to.x - from.x) * t0, from.y + (to.y - from.y) * t0)
+            let end = SIMD2(from.x + (to.x - from.x) * t1, from.y + (to.y - from.y) * t1)
+            let remain = 1 - (t0 + t1) / 2
+            let alpha = Double(OverlayChrome.frameCenter.a) * remain * remain
+            return .line(
+                from: start,
+                to: end,
+                color: OverlayChrome.frameCenter.opacity(alpha),
+                width: OverlayChrome.crosshairWidth
+            )
+        }
+    }
+
     private static func circle(
         _ fitted: FittedCircle,
         layout: ImageLayout,
@@ -94,7 +125,7 @@ public enum OverlayScene {
 public enum LegendScene {
     public struct Row: Equatable, Sendable {
         public enum Mark: Equatable, Sendable {
-            case crosshair(HUDColor)
+            case cross(HUDColor)
             case starPeaks
             case ring(HUDColor)
             case line(HUDColor)
@@ -114,7 +145,7 @@ public enum LegendScene {
     public static let markSpacing = 6.0
 
     public static let rows: [Row] = [
-        Row(label: "Sensor center", mark: .crosshair(OverlayChrome.frameCenter)),
+        Row(label: "Sensor center", mark: .cross(OverlayChrome.frameCenter)),
         Row(label: "Star", mark: .starPeaks),
         Row(label: "Outer ring", mark: .ring(OverlayChrome.outerRing)),
         Row(label: "Inner ring", mark: .ring(OverlayChrome.innerRing)),
@@ -125,8 +156,11 @@ public enum LegendScene {
     public static func markPrimitives(_ mark: Row.Mark, size: SIMD2<Double> = markSize) -> [HUDPrimitive] {
         let center = SIMD2(size.x / 2, size.y / 2)
         switch mark {
-        case .crosshair(let color):
-            return HUDShape.crosshair(at: center, color: color, size: 8, lineWidth: 1, dotRadius: max(8 * 0.22, 1.2))
+        case .cross(let color):
+            return [
+                .line(from: SIMD2(2, center.y), to: SIMD2(size.x - 2, center.y), color: color, width: 1),
+                .line(from: SIMD2(center.x, 1), to: SIMD2(center.x, size.y - 1), color: color, width: 1),
+            ]
         case .starPeaks:
             let colors = [OverlayChrome.starGood, OverlayChrome.starFaint, OverlayChrome.starSaturated]
             let step = size.x / 4

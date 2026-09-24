@@ -54,12 +54,14 @@ func testOverlaySceneSensorCenter() throws {
         zoom: 1
     )
     let expected = layout.viewPoint(image: sensorCenter)
-    let horizontal = lines(primitives).filter { $0.2 == OverlayChrome.frameCenter && $0.0.y == $0.1.y }
-    try expectUI(horizontal.count == 1, "one horizontal arm for the sensor center")
-    try expectUI(abs(horizontal[0].0.y - expected.y) < 1e-9, "crosshair y \(horizontal[0].0.y) vs \(expected.y)")
+    let horizontal = lines(primitives).filter { abs($0.0.y - expected.y) < 1e-6 && abs($0.1.y - expected.y) < 1e-6 }
+    try expectUI(horizontal.count == 24, "twelve fading pieces on each horizontal arm, got \(horizontal.count)")
+    let nearest = horizontal.min { abs(($0.0.x + $0.1.x) / 2 - expected.x) < abs(($1.0.x + $1.1.x) / 2 - expected.x) }
+    let farthest = horizontal.max { abs(($0.0.x + $0.1.x) / 2 - expected.x) < abs(($1.0.x + $1.1.x) / 2 - expected.x) }
+    try expectUI((nearest?.2.a ?? 0) > (farthest?.2.a ?? 1), "the cross is brighter at the center than at the edge")
     try expectUI(
-        abs((horizontal[0].0.x + horizontal[0].1.x) / 2 - expected.x) < 1e-9,
-        "crosshair x centred on the sensor center"
+        horizontal.contains { min($0.0.x, $0.1.x) <= 1e-6 } && horizontal.contains { max($0.0.x, $0.1.x) >= viewSize.x - 1e-6 },
+        "the cross reaches both view edges"
     )
 
     // Off-frame sensor centers are not drawn.
@@ -72,7 +74,8 @@ func testOverlaySceneSensorCenter() throws {
     )
     let farPrimitives = OverlayScene.primitives(overlay: far, zoom: 1, viewSize: viewSize)
     try expectUI(
-        lines(farPrimitives).filter { $0.2 == OverlayChrome.frameCenter }.isEmpty,
+        lines(farPrimitives).filter { $0.2 == OverlayChrome.frameCenter }.isEmpty
+            && circles(farPrimitives).filter { $0.2 == OverlayChrome.frameCenter }.isEmpty,
         "sensor center outside the frame is not drawn"
     )
 }
