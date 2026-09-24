@@ -297,8 +297,11 @@ public struct StarDetector: Sendable {
         )
     }
 
-    /// Intensity-weighted centroid in a window. The live view uses a GPU copy of
-    /// this reduction; this CPU path is for detection, stacking, and tests.
+    /// Intensity-weighted centroid in a window, with the sky subtracted. The
+    /// frame is assumed to contain one star plus background noise: a fraction
+    /// of the raw peak sits below that sky when the star is faint and would
+    /// pull the lock toward the window centre. The live view uses a GPU copy
+    /// of this reduction; this CPU path is for detection, stacking, and tests.
     public func momentCentroid(
         in frame: Frame,
         around seed: SIMD2<Double>?,
@@ -328,6 +331,39 @@ public struct StarDetector: Sendable {
                 return nil
             }
             return SIMD2(x, y)
+        }
+    }
+
+    /// Sky and cutoff for `momentCentroid`, so the GPU reduction weights the
+    /// same pixels. Nil when the peak does not clear the noise.
+    public func momentLevels(
+        in frame: Frame,
+        around seed: SIMD2<Double>?,
+        halfWindow: Int = momentCentroidHalfWindow
+    ) -> (sky: UInt16, threshold: UInt16)? {
+        let width = frame.width
+        let height = frame.height
+        guard width > 0, height > 0 else { return nil }
+        let cx = seed.map { Int($0.x.rounded()) } ?? width / 2
+        let cy = seed.map { Int($0.y.rounded()) } ?? height / 2
+        let hw = max(32, min(halfWindow, max(width, height)))
+        return frame.pixels.withUnsafeBufferPointer { buffer in
+            guard let pixels = buffer.baseAddress else { return nil }
+            var sky: UInt16 = 0
+            var threshold: UInt16 = 0
+            guard collimation_moment_levels(
+                pixels,
+                Int32(width),
+                Int32(height),
+                Int32(cx),
+                Int32(cy),
+                Int32(hw),
+                &sky,
+                &threshold
+            ) != 0 else {
+                return nil
+            }
+            return (sky, threshold)
         }
     }
 }

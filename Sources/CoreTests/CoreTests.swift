@@ -16,6 +16,7 @@ struct CoreTests {
         failures += run("large donut detection", testLargeDonutDetection)
         failures += run("crop-filling donut detection", testCropFillingDonutDetection)
         failures += run("moment centroid", testMomentCentroid)
+        failures += run("faint star moment centroid", testFaintStarMomentCentroid)
         failures += run("empty sky", testEmptySky)
         failures += run("star fwhm", testStarFWHM)
         failures += run("telescope optics from camera name", testTelescopeOpticsFromCameraName)
@@ -332,6 +333,52 @@ private func testMomentCentroid() throws {
     }
     try expect(abs(next.x - 188) < 6, "moved x \(next.x)")
     try expect(abs(next.y - 90) < 6, "moved y \(next.y)")
+}
+
+private func testFaintStarMomentCentroid() throws {
+    // A faint star on a bright sky. Weighting by raw ADU pulls the centroid
+    // toward the window centre because the pedestal outweighs the star.
+    let width = 160
+    let height = 160
+    let star = SIMD2(112.0, 38.0)
+    let background = 8_000.0
+    let excess = 600.0
+    let sigma = 2.4
+    var pixels = [UInt16](repeating: 0, count: width * height)
+    var rng = RNG(seed: 19)
+    for y in 0..<height {
+        for x in 0..<width {
+            let dx = Double(x) - star.x
+            let dy = Double(y) - star.y
+            let signal = excess * exp(-(dx * dx + dy * dy) / (2 * sigma * sigma))
+            let noisy = background + signal + rng.gaussian() * 18
+            pixels[y * width + x] = UInt16(min(65535, max(0, noisy.rounded())))
+        }
+    }
+    let frame = Frame(
+        width: width,
+        height: height,
+        pixels: pixels,
+        roi: ROI(x: 0, y: 0, width: width, height: height)
+    )
+    guard let centroid = StarDetector().momentCentroid(in: frame, around: nil) else {
+        throw Expectation(description: "expected a faint-star centroid")
+    }
+    let error = hypot(centroid.x - star.x, centroid.y - star.y)
+    let centre = SIMD2(Double(width) / 2, Double(height) / 2)
+    try expect(error < 2.5, "faint star error \(error) at \(centroid)")
+    try expect(
+        hypot(centroid.x - centre.x, centroid.y - centre.y) > 20,
+        "centroid must not fall back to the window centre"
+    )
+
+    let flat = Frame(
+        width: width,
+        height: height,
+        pixels: [UInt16](repeating: 8_000, count: width * height),
+        roi: ROI(x: 0, y: 0, width: width, height: height)
+    )
+    try expect(StarDetector().momentCentroid(in: flat, around: nil) == nil, "flat sky is not a star")
 }
 
 private func testEmptySky() throws {

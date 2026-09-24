@@ -156,11 +156,17 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let measured: SIMD2<Double>?
         if stabilization.measuresCentroid {
             if let gpuCentroid, let texture = textures[writeIndex],
-               texture.width == frame.width, texture.height == frame.height {
+               texture.width == frame.width, texture.height == frame.height,
+               let levels = StarDetector().momentLevels(
+                   in: frame,
+                   around: stabilization.measurementSeed(in: frame)
+               ) {
                 measured = gpuCentroid.measure(
                     queue: queue,
                     texture: texture,
-                    seed: stabilization.measurementSeed(in: frame)
+                    seed: stabilization.measurementSeed(in: frame),
+                    sky: levels.sky,
+                    threshold: levels.threshold
                 )
             } else {
                 return stabilization.process(frame, viewWidth: viewWidth, viewHeight: viewHeight)
