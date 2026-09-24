@@ -229,12 +229,37 @@ final class GPULiveRenderer {
             height: windowSize.y
         )
 
-        var rect = QuadRect(
-            x0: Float(placed.x0),
-            y0: Float(placed.y0),
-            x1: Float(placed.x1),
-            y1: Float(placed.y1)
-        )
+        let star = (allowStab ? renderState.stabilizeCentroid : nil) ?? renderState.quarterStar
+        let tiles = renderState.quarterView
+            ? QuarterView.quads(
+                imageWidth: textureWidth,
+                imageHeight: textureHeight,
+                star: star ?? .zero,
+                imageRect: image
+            )
+            : []
+        let placedTiles: [(ndc: (x0: Double, y0: Double, x1: Double, y1: Double), quad: QuarterView.Quad)]
+        if renderState.quarterView, star != nil, !tiles.isEmpty {
+            placedTiles = tiles.map { tile in
+                let ndc = ImageLayout.ndcRect(
+                    (
+                        x: liveRect.origin.x + tile.x,
+                        y: liveRect.origin.y + tile.y,
+                        width: tile.width,
+                        height: tile.height
+                    ),
+                    inViewOfWidth: windowSize.x,
+                    height: windowSize.y
+                )
+                return (ndc, tile)
+            }
+        } else {
+            placedTiles = [(
+                placed,
+                QuarterView.Quad(x: 0, y: 0, width: 0, height: 0, u0: 0, v0: 0, u1: 1, v1: 1)
+            )]
+        }
+
         var uniforms = StretchUniforms(
             black: Float(renderState.stretch.black),
             white: Float(max(renderState.stretch.white, renderState.stretch.black + 0.0005)),
@@ -248,12 +273,24 @@ final class GPULiveRenderer {
             texH: Float(textureHeight)
         )
 
-        SDL_PushGPUVertexUniformData(commandBuffer, 0, &rect, UInt32(MemoryLayout<QuadRect>.size))
         SDL_PushGPUFragmentUniformData(commandBuffer, 0, &uniforms, UInt32(MemoryLayout<StretchUniforms>.size))
         SDL_BindGPUGraphicsPipeline(pass, pipeline)
         var boundTexture: OpaquePointer? = texture
         SDL_BindGPUFragmentStorageTextures(pass, 0, &boundTexture, 1)
-        SDL_DrawGPUPrimitives(pass, 4, 1, 0, 0)
+        for tile in placedTiles {
+            var rect = QuadRect(
+                x0: Float(tile.ndc.x0),
+                y0: Float(tile.ndc.y0),
+                x1: Float(tile.ndc.x1),
+                y1: Float(tile.ndc.y1),
+                u0: Float(tile.quad.u0),
+                v0: Float(tile.quad.v0),
+                u1: Float(tile.quad.u1),
+                v1: Float(tile.quad.v1)
+            )
+            SDL_PushGPUVertexUniformData(commandBuffer, 0, &rect, UInt32(MemoryLayout<QuadRect>.size))
+            SDL_DrawGPUPrimitives(pass, 4, 1, 0, 0)
+        }
     }
 
     // MARK: - Upload

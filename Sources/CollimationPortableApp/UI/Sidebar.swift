@@ -190,6 +190,7 @@ enum Sidebar {
     private static func stabilizationSection(engine: CollimationEngine, host: any UIHost) {
         guard header(SidebarText.stabilizationSection) else { return }
         command(CommandCatalog.ID.cameraStabilize, engine: engine, host: host)
+        command(CommandCatalog.ID.viewQuarter, engine: engine, host: host)
     }
 
     private static func stretchSection(engine: CollimationEngine, host: any UIHost) {

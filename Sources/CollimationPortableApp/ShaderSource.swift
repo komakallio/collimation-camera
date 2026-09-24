@@ -38,6 +38,7 @@ enum ShaderSource {
 
     struct QuadRect {
         float x0, y0, x1, y1;
+        float u0, v0, u1, v1;
     };
 
     struct StretchUniforms {
@@ -67,8 +68,8 @@ enum ShaderSource {
         // Triangle strip: 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right.
         float x = (vid == 0 || vid == 2) ? rect.x0 : rect.x1;
         float y = (vid == 0 || vid == 1) ? rect.y1 : rect.y0;
-        float u = (vid == 0 || vid == 2) ? 0.0 : 1.0;
-        float v = (vid == 0 || vid == 1) ? 0.0 : 1.0;
+        float u = (vid == 0 || vid == 2) ? rect.u0 : rect.u1;
+        float v = (vid == 0 || vid == 1) ? rect.v0 : rect.v1;
         VertexOut out;
         out.position = float4(x, y, 0, 1);
         out.uv = float2(u, v);
@@ -135,13 +136,17 @@ enum ShaderSource {
         float y0;
         float x1;
         float y1;
+        float u0;
+        float v0;
+        float u1;
+        float v1;
     };
 
     VertexOut main(uint vid : SV_VertexID) {
         float x = (vid == 0 || vid == 2) ? x0 : x1;
         float y = (vid == 0 || vid == 1) ? y1 : y0;
-        float u = (vid == 0 || vid == 2) ? 0.0 : 1.0;
-        float v = (vid == 0 || vid == 1) ? 0.0 : 1.0;
+        float u = (vid == 0 || vid == 2) ? u0 : u1;
+        float v = (vid == 0 || vid == 1) ? v0 : v1;
         VertexOut output;
         output.position = float4(x, y, 0, 1);
         output.uv = float2(u, v);
@@ -263,4 +268,8 @@ struct QuadRect {
     var y0: Float = -1
     var x1: Float = 1
     var y1: Float = 1
+    var u0: Float = 0
+    var v0: Float = 0
+    var u1: Float = 1
+    var v1: Float = 1
 }

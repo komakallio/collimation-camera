@@ -325,6 +325,47 @@ func testImageLayoutNDCRect() throws {
     try expectUI(abs(topNDC.y0 + 0.25) < 1e-12, "flipped bottom edge \(topNDC.y0)")
 }
 
+func testQuarterViewTiles() throws {
+    let rect = (x: 0.0, y: 0.0, width: 512.0, height: 512.0)
+    let tiles = QuarterView.quads(
+        imageWidth: 512,
+        imageHeight: 512,
+        star: SIMD2(256, 256),
+        imageRect: rect
+    )
+    try expectUI(tiles.count == 4, "four tiles, got \(tiles.count)")
+    try expectUI(tiles.allSatisfy { abs($0.width - 256) < 1e-9 && abs($0.height - 256) < 1e-9 }, "a centred star fills every tile")
+    // Top-left stays the original top-left quadrant, star at its inner corner.
+    let topLeft = tiles.first { abs($0.x) < 1e-9 && abs($0.y) < 1e-9 }
+    try expectUI(topLeft != nil, "a tile fills the top-left")
+    try expectUI(abs((topLeft?.u0 ?? 1) - 0) < 1e-9 && abs((topLeft?.v0 ?? 1) - 0) < 1e-9, "top-left is not mirrored")
+    try expectUI(abs((topLeft?.u1 ?? 0) - 0.5) < 1e-9 && abs((topLeft?.v1 ?? 0) - 0.5) < 1e-9, "its inner corner is the star")
+    // Bottom-left shows the original top-right, so the horizontal seam joins
+    // the two upper quadrants and an up-down mismatch is visible there too.
+    let bottomLeft = tiles.first { abs($0.x) < 1e-9 && abs($0.y - 256) < 1e-9 }
+    try expectUI(bottomLeft != nil, "a tile fills the bottom-left")
+    try expectUI(abs((bottomLeft?.u0 ?? 0) - 1) < 1e-9 && abs((bottomLeft?.v1 ?? 1) - 0) < 1e-9, "bottom-left is the top-right quadrant, mirrored")
+    try expectUI(abs((bottomLeft?.u1 ?? 0) - 0.5) < 1e-9 && abs((bottomLeft?.v0 ?? 0) - 0.5) < 1e-9, "its inner corner is the star")
+    let topRight = tiles.first { abs($0.x - 256) < 1e-9 && abs($0.y) < 1e-9 }
+    try expectUI(topRight != nil, "a tile fills the top-right")
+    try expectUI(abs((topRight?.v0 ?? 0) - 1) < 1e-9, "top-right is the bottom quadrant, mirrored")
+    try expectUI(abs((topRight?.v1 ?? 1) - 0.5) < 1e-9, "its inner edge is the star")
+    try expectUI(tiles.allSatisfy { quad in
+        let onStarX = abs(quad.x - 256) < 1e-6 || abs(quad.x + quad.width - 256) < 1e-6
+        let onStarY = abs(quad.y - 256) < 1e-6 || abs(quad.y + quad.height - 256) < 1e-6
+        return onStarX && onStarY
+    }, "every tile meets the star")
+
+    let off = QuarterView.quads(
+        imageWidth: 512,
+        imageHeight: 512,
+        star: SIMD2(256, 100),
+        imageRect: rect
+    )
+    let swappedUp = off.first { abs($0.x - 256) < 1e-6 && abs($0.y) < 1e-6 }
+    try expectUI(abs((swappedUp?.height ?? 0) - 100) < 1e-6, "a tall quadrant is clipped to the space opposite the star")
+}
+
 /// Every stroke the scenes emit, including the ones inside a clip.
 private func strokeWidths(_ primitives: [HUDPrimitive]) -> [Double] {
     var widths: [Double] = []

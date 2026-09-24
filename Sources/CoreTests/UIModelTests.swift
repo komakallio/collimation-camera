@@ -52,6 +52,7 @@ func testCommandCatalogEnablement() throws {
         CommandCatalog.ID.mountRefreshPorts,
         CommandCatalog.ID.filterWheelRefresh,
         CommandCatalog.ID.viewFitToWindow,
+        CommandCatalog.ID.viewQuarter,
     ] {
         try expectUI(try enabled(id), "\(id) should be enabled while disconnected")
     }
@@ -168,6 +169,7 @@ func testShortcutUniqueness() throws {
     try expectUI(seen[.primaryShift("g")] == CommandCatalog.ID.mountCalibrate, "⇧⌘G calibrate")
     try expectUI(seen[.primary("g")] == CommandCatalog.ID.mountCenter, "⌘G center")
     try expectUI(seen[.primary("o")] == CommandCatalog.ID.viewOverlay, "⌘O overlay")
+    try expectUI(seen[.primary("j")] == CommandCatalog.ID.viewQuarter, "⌘J quarter view")
 
     // The portable app turns each shortcut into one ImGui key chord, and its
     // key table covers Return, A-Z, and 0-9. Anything else would be listed in

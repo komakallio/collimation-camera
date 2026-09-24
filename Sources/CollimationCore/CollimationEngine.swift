@@ -99,6 +99,9 @@ public final class CollimationEngine {
         didSet { updateStabilization() }
     }
     public var showOverlay = true
+    public var quarterView = false {
+        didSet { updateStabilization() }
+    }
     public var zoom: Double = 1 {
         didSet { updateStabilization() }
     }
@@ -827,6 +830,8 @@ public final class CollimationEngine {
         renderStateSlot.update { state in
             state.stretch = stretch
             state.zoom = zoom
+            state.quarterView = quarterView
+            state.quarterStar = overlay.centroid
             // Lock and centroid for a live frame are written by the renderer.
             // Drop them here when they must not apply: stab off, or a full-frame
             // search whose pixels are not the crop the lock was measured on.

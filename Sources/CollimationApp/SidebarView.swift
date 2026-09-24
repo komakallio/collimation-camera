@@ -252,6 +252,7 @@ struct SidebarView: View {
     private var stabilizationSection: some View {
         GroupBox(SidebarText.stabilizationSection) {
             toggle(CommandCatalog.ID.cameraStabilize)
+            toggle(CommandCatalog.ID.viewQuarter)
         }
     }
 

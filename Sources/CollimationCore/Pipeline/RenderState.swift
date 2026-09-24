@@ -3,6 +3,9 @@ import Foundation
 public struct RenderState: Sendable {
     public var stretch: StretchParams
     public var zoom: Double
+    public var quarterView: Bool
+    /// Image pixel the quarter view splits on. Nil draws the frame unchanged.
+    public var quarterStar: SIMD2<Double>?
     public var stabilizeLock: SIMD2<Double>?
     public var stabilizeCentroid: SIMD2<Double>?
     /// Size and ROI of the frame the stabilize pose was measured on.
@@ -13,6 +16,8 @@ public struct RenderState: Sendable {
     public init(
         stretch: StretchParams = .default,
         zoom: Double = 1,
+        quarterView: Bool = false,
+        quarterStar: SIMD2<Double>? = nil,
         stabilizeLock: SIMD2<Double>? = nil,
         stabilizeCentroid: SIMD2<Double>? = nil,
         imageWidth: Int = 0,
@@ -21,6 +26,8 @@ public struct RenderState: Sendable {
     ) {
         self.stretch = stretch
         self.zoom = zoom
+        self.quarterView = quarterView
+        self.quarterStar = quarterStar
         self.stabilizeLock = stabilizeLock
         self.stabilizeCentroid = stabilizeCentroid
         self.imageWidth = imageWidth

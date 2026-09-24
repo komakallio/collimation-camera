@@ -74,6 +74,7 @@ public enum CommandCatalog {
         public static let filterWheelRefresh = "filterWheel.refresh"
         public static let viewOverlay = "view.overlay"
         public static let viewFitToWindow = "view.fitToWindow"
+        public static let viewQuarter = "view.quarter"
 
         /// `filter.<position>` for the ⌥1…⌥9 slot commands.
         public static func filter(_ position: Int) -> String { "filter.\(position)" }
@@ -229,6 +230,15 @@ public enum CommandCatalog {
             shortTitle: { $0.showOverlay ? "Hide overlay" : "Show overlay" },
             help: "Toggle crosshairs, fitted circles, and the coma arrow on the live view",
             shortcuts: [.primary("o")]
+        ),
+        Command(
+            id: ID.viewQuarter,
+            menu: .view,
+            kind: .toggle(get: { $0.quarterView }, set: { $0.quarterView = $1 }),
+            title: "Quarter View",
+            shortTitle: "Quarter view",
+            help: "Keep the top-left quadrant, swap the right pair above and below, then swap the lower pair left and right. Left-right and up-down mismatches each show on a seam. The star still meets in the centre.",
+            shortcuts: [.primary("j")]
         ),
         Command(
             id: ID.viewFitToWindow,

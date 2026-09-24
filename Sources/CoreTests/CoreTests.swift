@@ -101,6 +101,7 @@ struct CoreTests {
         failures += run("star profile scene", testStarProfileScene)
         failures += run("hud stroke widths", testHUDStrokeWidths)
         failures += run("image layout ndc rect", testImageLayoutNDCRect)
+        failures += run("quarter view tiles", testQuarterViewTiles)
         failures += run("live region scissor", testLiveRegionScissor)
         failures += run("stretch shader math", testStretchShaderMath)
         failures += run("stretch shader copies", testStretchShaderCopies)

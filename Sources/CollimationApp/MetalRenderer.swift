@@ -117,9 +117,6 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             lockNormalized: lockNormalized,
             stabilizeCentroid: stabilizeCentroid
         )
-        // Shared with the portable app's renderer so both build the same quad.
-        let ndc = layout.ndcRect()
-
         var uniforms = StretchUniforms(
             black: Float(state.stretch.black),
             white: Float(max(state.stretch.white, state.stretch.black + 0.0005)),
@@ -135,18 +132,46 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         encoder.setFragmentTexture(texture, index: 0)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<StretchUniforms>.stride, index: 0)
 
-        let x0 = Float(ndc.x0)
-        let x1 = Float(ndc.x1)
-        let y0 = Float(ndc.y0)
-        let y1 = Float(ndc.y1)
-        var vertices: [Float] = [
-            x0, y1, 0, 0,
-            x1, y1, 1, 0,
-            x0, y0, 0, 1,
-            x1, y0, 1, 1
-        ]
-        encoder.setVertexBytes(&vertices, length: vertices.count * MemoryLayout<Float>.stride, index: 0)
-        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        let star = (allowStab ? stabilizeCentroid : nil) ?? state.quarterStar
+        let tiles = state.quarterView
+            ? QuarterView.quads(
+                imageWidth: texture.width,
+                imageHeight: texture.height,
+                star: star ?? .zero,
+                imageRect: layout.imageRect
+            )
+            : []
+        let quads: [QuarterView.Quad]
+        if state.quarterView, star != nil, !tiles.isEmpty {
+            quads = tiles
+        } else {
+            quads = [QuarterView.Quad(
+                x: layout.imageRect.x,
+                y: layout.imageRect.y,
+                width: layout.imageRect.width,
+                height: layout.imageRect.height,
+                u0: 0, v0: 0, u1: 1, v1: 1
+            )]
+        }
+        for quad in quads {
+            let placed = ImageLayout.ndcRect(
+                (x: quad.x, y: quad.y, width: quad.width, height: quad.height),
+                inViewOfWidth: viewWidth,
+                height: viewHeight
+            )
+            let x0 = Float(placed.x0)
+            let x1 = Float(placed.x1)
+            let y0 = Float(placed.y0)
+            let y1 = Float(placed.y1)
+            var vertices: [Float] = [
+                x0, y1, Float(quad.u0), Float(quad.v0),
+                x1, y1, Float(quad.u1), Float(quad.v0),
+                x0, y0, Float(quad.u0), Float(quad.v1),
+                x1, y0, Float(quad.u1), Float(quad.v1)
+            ]
+            encoder.setVertexBytes(&vertices, length: vertices.count * MemoryLayout<Float>.stride, index: 0)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        }
         encoder.endEncoding()
         command.present(drawable)
         command.commit()
