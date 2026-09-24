@@ -3,7 +3,7 @@ import CollimationCore
 import CollimationUI
 import Foundation
 
-/// The left-hand panel: Camera, Filter wheel, Mount, ROI & zoom,
+/// The left-hand panel: Equipment, Camera, Filter wheel, Mount, ROI & zoom,
 /// Image stabilization, Stretch, Collimation.
 ///
 /// Section-for-section port of `SidebarView`. Every label comes from the
@@ -42,6 +42,7 @@ enum Sidebar {
         }
         defer { igEnd() }
 
+        equipmentSection(engine: engine, host: host)
         cameraSection(engine: engine, host: host)
         filterWheelSection(engine: engine, host: host)
         mountSection(engine: engine, host: host)
@@ -53,9 +54,10 @@ enum Sidebar {
 
     // MARK: - Sections
 
-    private static func cameraSection(engine: CollimationEngine, host: any UIHost) {
-        guard header(SidebarText.cameraSection) else { return }
+    private static func equipmentSection(engine: CollimationEngine, host: any UIHost) {
+        guard header(SidebarText.equipmentSection) else { return }
 
+        subtitle(SidebarText.cameraSection)
         combo(
             label: "##device",
             selection: engine.selectedDeviceID,
@@ -67,23 +69,43 @@ enum Sidebar {
         igSameLine(0, -1)
         command(CommandCatalog.ID.cameraRefreshDevices, engine: engine, host: host)
 
-        command(CommandCatalog.ID.cameraSaveTIFF, engine: engine, host: host)
-
-        command(CommandCatalog.ID.cameraSaveStacked, engine: engine, host: host)
-        igSameLine(0, -1)
-        let frameCounts = FrameStacker.subframeCounts.map { (String($0), MetricText.stackCount($0)) }
-        igSetNextItemWidth(comboWidth(fitting: frameCounts))
-        combo(
-            label: "##frames",
-            selection: String(engine.stackFrameCount),
-            options: frameCounts,
-            enabled: engine.canSelectStackCount,
-            help: HelpText.stackCount
-        ) { value in
-            if let count = Int(value) { engine.stackFrameCount = count }
+        subtitle(SidebarText.filterWheelSection)
+        if engine.filterWheels.isEmpty {
+            ImGuiText.disabled(
+                MetricText.filterWheelPlaceholder(sdkPresent: PhoenixWheel.sdkVersion != nil)
+            )
+        } else {
+            combo(
+                label: "##wheel",
+                selection: engine.selectedFilterWheelID,
+                options: engine.filterWheels.map { ($0.id, $0.name) },
+                enabled: engine.canSelectFilterWheel
+            ) { engine.selectedFilterWheelID = $0 }
         }
 
-        command(CommandCatalog.ID.cameraSaveConstellation, engine: engine, host: host)
+        command(CommandCatalog.ID.filterWheelConnect, engine: engine, host: host)
+        igSameLine(0, -1)
+        command(CommandCatalog.ID.filterWheelRefresh, engine: engine, host: host)
+
+        subtitle(SidebarText.mountSection)
+        if engine.serialPorts.isEmpty {
+            ImGuiText.disabled(MetricText.serialPortPlaceholder)
+        } else {
+            combo(
+                label: "##port",
+                selection: engine.selectedSerialPort,
+                options: engine.serialPorts.map { ($0, MetricText.serialPortName($0)) },
+                enabled: engine.canSelectSerialPort
+            ) { engine.selectedSerialPort = $0 }
+        }
+
+        command(CommandCatalog.ID.mountConnect, engine: engine, host: host)
+        igSameLine(0, -1)
+        command(CommandCatalog.ID.mountRefreshPorts, engine: engine, host: host)
+    }
+
+    private static func cameraSection(engine: CollimationEngine, host: any UIHost) {
+        guard header(SidebarText.cameraSection) else { return }
 
         logSlider(
             label: SidebarText.exposure,
@@ -106,27 +128,28 @@ enum Sidebar {
         )
 
         secondary(engine.statusText)
+
+        command(CommandCatalog.ID.cameraSaveTIFF, engine: engine, host: host)
+
+        command(CommandCatalog.ID.cameraSaveStacked, engine: engine, host: host)
+        igSameLine(0, -1)
+        let frameCounts = FrameStacker.subframeCounts.map { (String($0), MetricText.stackCount($0)) }
+        igSetNextItemWidth(comboWidth(fitting: frameCounts))
+        combo(
+            label: "##frames",
+            selection: String(engine.stackFrameCount),
+            options: frameCounts,
+            enabled: engine.canSelectStackCount,
+            help: HelpText.stackCount
+        ) { value in
+            if let count = Int(value) { engine.stackFrameCount = count }
+        }
+
+        command(CommandCatalog.ID.cameraSaveConstellation, engine: engine, host: host)
     }
 
     private static func filterWheelSection(engine: CollimationEngine, host: any UIHost) {
         guard header(SidebarText.filterWheelSection) else { return }
-
-        if engine.filterWheels.isEmpty {
-            ImGuiText.disabled(
-                MetricText.filterWheelPlaceholder(sdkPresent: PhoenixWheel.sdkVersion != nil)
-            )
-        } else {
-            combo(
-                label: "##wheel",
-                selection: engine.selectedFilterWheelID,
-                options: engine.filterWheels.map { ($0.id, $0.name) },
-                enabled: engine.canSelectFilterWheel
-            ) { engine.selectedFilterWheelID = $0 }
-        }
-
-        command(CommandCatalog.ID.filterWheelConnect, engine: engine, host: host)
-        igSameLine(0, -1)
-        command(CommandCatalog.ID.filterWheelRefresh, engine: engine, host: host)
 
         if !engine.filterSlots.isEmpty {
             combo(
@@ -145,21 +168,6 @@ enum Sidebar {
 
     private static func mountSection(engine: CollimationEngine, host: any UIHost) {
         guard header(SidebarText.mountSection) else { return }
-
-        if engine.serialPorts.isEmpty {
-            ImGuiText.disabled(MetricText.serialPortPlaceholder)
-        } else {
-            combo(
-                label: "##port",
-                selection: engine.selectedSerialPort,
-                options: engine.serialPorts.map { ($0, MetricText.serialPortName($0)) },
-                enabled: engine.canSelectSerialPort
-            ) { engine.selectedSerialPort = $0 }
-        }
-
-        command(CommandCatalog.ID.mountConnect, engine: engine, host: host)
-        igSameLine(0, -1)
-        command(CommandCatalog.ID.mountRefreshPorts, engine: engine, host: host)
 
         command(CommandCatalog.ID.mountCalibrate, engine: engine, host: host)
         igSameLine(0, -1)
@@ -268,6 +276,12 @@ enum Sidebar {
 
     private static func header(_ title: String) -> Bool {
         title.withCString { igCollapsingHeader_TreeNodeFlags($0, Int32(ImGuiTreeNodeFlags_DefaultOpen.rawValue)) }
+    }
+
+    private static func subtitle(_ title: String) {
+        igPushFont(nil, Fonts.captionSize)
+        ImGuiText.disabled(title)
+        igPopFont()
     }
 
     private static func secondary(_ text: String) {

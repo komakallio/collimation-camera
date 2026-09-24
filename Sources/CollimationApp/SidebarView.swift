@@ -68,9 +68,16 @@ struct SidebarView: View {
         }
     }
 
+    private func subtitle(_ title: String) -> some View {
+        Text(title)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                equipmentSection
                 cameraSection
                 filterWheelSection
                 mountSection
@@ -85,9 +92,10 @@ struct SidebarView: View {
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
-    private var cameraSection: some View {
-        GroupBox(SidebarText.cameraSection) {
+    private var equipmentSection: some View {
+        GroupBox(SidebarText.equipmentSection) {
             VStack(alignment: .leading, spacing: 8) {
+                subtitle(SidebarText.cameraSection)
                 Picker("Device", selection: $engine.selectedDeviceID) {
                     ForEach(engine.devices) { device in
                         Text(device.name).tag(device.id)
@@ -101,23 +109,55 @@ struct SidebarView: View {
                     button(CommandCatalog.ID.cameraConnect, appliesShortcut: true)
                     button(CommandCatalog.ID.cameraRefreshDevices)
                 }
-                button(CommandCatalog.ID.cameraSaveTIFF)
-                HStack(spacing: 8) {
-                    button(CommandCatalog.ID.cameraSaveStacked)
-                    Picker("Frames", selection: $engine.stackFrameCount) {
-                        ForEach(FrameStacker.subframeCounts, id: \.self) { count in
-                            Text(MetricText.stackCount(count)).tag(count)
+
+                subtitle(SidebarText.filterWheelSection)
+                if engine.filterWheels.isEmpty {
+                    Text(MetricText.filterWheelPlaceholder(sdkPresent: PhoenixWheel.sdkVersion != nil))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Picker("Wheel", selection: $engine.selectedFilterWheelID) {
+                        ForEach(engine.filterWheels) { wheel in
+                            Text(wheel.name).tag(wheel.id)
                         }
                     }
                     .labelsHidden()
-                    .pickerStyle(.menu)
-                    .fixedSize()
-                    .disabled(!engine.canSelectStackCount)
-                    .help(HelpText.stackCount)
+                    .disabled(!engine.canSelectFilterWheel)
                 }
-                .help(HelpText.stackedSave)
-                button(CommandCatalog.ID.cameraSaveConstellation)
 
+                HStack {
+                    button(CommandCatalog.ID.filterWheelConnect)
+                    button(CommandCatalog.ID.filterWheelRefresh)
+                }
+
+                subtitle(SidebarText.mountSection)
+                if engine.serialPorts.isEmpty {
+                    Text(MetricText.serialPortPlaceholder)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Picker("Port", selection: $engine.selectedSerialPort) {
+                        ForEach(engine.serialPorts, id: \.self) { path in
+                            Text(MetricText.serialPortName(path)).tag(path)
+                        }
+                    }
+                    .labelsHidden()
+                    .disabled(!engine.canSelectSerialPort)
+                }
+
+                HStack {
+                    button(CommandCatalog.ID.mountConnect)
+                    button(CommandCatalog.ID.mountRefreshPorts)
+                }
+            }
+        }
+        .onAppear {
+            engine.refreshFilterWheels()
+            engine.refreshSerialPorts()
+        }
+    }
+
+    private var cameraSection: some View {
+        GroupBox(SidebarText.cameraSection) {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .bottom, spacing: 8) {
                     CommitSlider(
                         title: SidebarText.exposure,
@@ -139,6 +179,23 @@ struct SidebarView: View {
                 Text(engine.statusText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                button(CommandCatalog.ID.cameraSaveTIFF)
+                HStack(spacing: 8) {
+                    button(CommandCatalog.ID.cameraSaveStacked)
+                    Picker("Frames", selection: $engine.stackFrameCount) {
+                        ForEach(FrameStacker.subframeCounts, id: \.self) { count in
+                            Text(MetricText.stackCount(count)).tag(count)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .fixedSize()
+                    .disabled(!engine.canSelectStackCount)
+                    .help(HelpText.stackCount)
+                }
+                .help(HelpText.stackedSave)
+                button(CommandCatalog.ID.cameraSaveConstellation)
             }
         }
     }
@@ -146,24 +203,6 @@ struct SidebarView: View {
     private var filterWheelSection: some View {
         GroupBox(SidebarText.filterWheelSection) {
             VStack(alignment: .leading, spacing: 8) {
-                if engine.filterWheels.isEmpty {
-                    Text(MetricText.filterWheelPlaceholder(sdkPresent: PhoenixWheel.sdkVersion != nil))
-                        .foregroundStyle(.secondary)
-                } else {
-                    Picker("Wheel", selection: $engine.selectedFilterWheelID) {
-                        ForEach(engine.filterWheels) { wheel in
-                            Text(wheel.name).tag(wheel.id)
-                        }
-                    }
-                    .labelsHidden()
-                    .disabled(!engine.canSelectFilterWheel)
-                }
-
-                HStack {
-                    button(CommandCatalog.ID.filterWheelConnect)
-                    button(CommandCatalog.ID.filterWheelRefresh)
-                }
-
                 if !engine.filterSlots.isEmpty {
                     Picker("Filter", selection: filterSelection) {
                         ForEach(engine.filterSlots) { slot in
@@ -181,7 +220,6 @@ struct SidebarView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .onAppear { engine.refreshFilterWheels() }
     }
 
     private var filterSelection: Binding<Int> {
@@ -194,24 +232,6 @@ struct SidebarView: View {
     private var mountSection: some View {
         GroupBox(SidebarText.mountSection) {
             VStack(alignment: .leading, spacing: 8) {
-                if engine.serialPorts.isEmpty {
-                    Text(MetricText.serialPortPlaceholder)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Picker("Port", selection: $engine.selectedSerialPort) {
-                        ForEach(engine.serialPorts, id: \.self) { path in
-                            Text(MetricText.serialPortName(path)).tag(path)
-                        }
-                    }
-                    .labelsHidden()
-                    .disabled(!engine.canSelectSerialPort)
-                }
-
-                HStack {
-                    button(CommandCatalog.ID.mountConnect)
-                    button(CommandCatalog.ID.mountRefreshPorts)
-                }
-
                 HStack {
                     button(CommandCatalog.ID.mountCalibrate)
                     button(CommandCatalog.ID.mountCenter)
@@ -231,7 +251,6 @@ struct SidebarView: View {
                 }
             }
         }
-        .onAppear { engine.refreshSerialPorts() }
     }
 
     private var roiSection: some View {

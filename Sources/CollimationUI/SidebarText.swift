@@ -15,6 +15,7 @@ import Foundation
 public enum SidebarText {
     // MARK: - Sections
 
+    public static let equipmentSection = "Equipment"
     public static let cameraSection = "Camera"
     public static let filterWheelSection = "Filter wheel"
     public static let mountSection = "Mount"
@@ -25,6 +26,7 @@ public enum SidebarText {
 
     /// In the order both sidebars lay them out, so a test can check that.
     public static let sections = [
+        equipmentSection,
         cameraSection,
         filterWheelSection,
         mountSection,
