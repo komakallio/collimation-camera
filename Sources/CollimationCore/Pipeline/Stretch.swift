@@ -28,7 +28,7 @@ public struct StretchParams: Equatable, Sendable {
     public init(
         black: Double = 0.01,
         white: Double = 1,
-        midtones: Double = 0.25,
+        midtones: Double = 0.1,
         arcsinh: Double = 10,
         curve: StretchCurve = .mtf
     ) {

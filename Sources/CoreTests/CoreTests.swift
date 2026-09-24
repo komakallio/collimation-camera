@@ -170,6 +170,9 @@ private func testAutoStretch() throws {
 }
 
 private func testMTFIdentityAtHalf() throws {
+    let initial = StretchParams.default
+    try expect(initial.curve == .mtf, "default curve")
+    try expect(abs(initial.midtones - 0.1) < 1e-12, "default midtones \(initial.midtones)")
     for x in [0.0, 0.25, 0.5, 0.75, 1.0] {
         try expect(abs(StretchParams.mtf(x, midtones: 0.5) - x) < 1e-9, "linear \(x)")
     }
