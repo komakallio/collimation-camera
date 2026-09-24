@@ -48,6 +48,7 @@ func testCommandCatalogEnablement() throws {
         CommandCatalog.ID.cameraRefreshDevices,
         CommandCatalog.ID.cameraAutoStretch,
         CommandCatalog.ID.viewOverlay,
+        CommandCatalog.ID.viewSensorMarks,
         CommandCatalog.ID.cameraStabilize,
         CommandCatalog.ID.mountRefreshPorts,
         CommandCatalog.ID.filterWheelRefresh,
@@ -168,7 +169,8 @@ func testShortcutUniqueness() throws {
     try expectUI(seen[.primary("l")] == CommandCatalog.ID.cameraStabilize, "⌘L stabilize")
     try expectUI(seen[.primaryShift("g")] == CommandCatalog.ID.mountCalibrate, "⇧⌘G calibrate")
     try expectUI(seen[.primary("g")] == CommandCatalog.ID.mountCenter, "⌘G center")
-    try expectUI(seen[.primary("o")] == CommandCatalog.ID.viewOverlay, "⌘O overlay")
+    try expectUI(seen[.primary("o")] == CommandCatalog.ID.viewOverlay, "⌘O collimation")
+    try expectUI(seen[.primary("m")] == CommandCatalog.ID.viewSensorMarks, "⌘M sensor marks")
     try expectUI(seen[.primary("j")] == CommandCatalog.ID.viewQuarter, "⌘J quarter view")
 
     // The portable app turns each shortcut into one ImGui key chord, and its

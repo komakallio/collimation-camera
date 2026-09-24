@@ -160,14 +160,16 @@ struct ContentView: View {
 
     private func chrome(pose: RenderState?) -> some View {
         ZStack {
-            if engine.showOverlay {
+            if engine.showCollimation || engine.showSensorMarks {
                 OverlayView(
                     overlay: engine.overlay,
                     zoom: engine.zoom,
                     lockNormalized: pose?.stabilizeLock,
                     liveCentroid: pose?.stabilizeCentroid,
                     displayedWidth: pose?.imageWidth,
-                    displayedHeight: pose?.imageHeight
+                    displayedHeight: pose?.imageHeight,
+                    showCollimation: engine.showCollimation,
+                    showSensorMarks: engine.showSensorMarks
                 )
             }
             VStack {
@@ -185,8 +187,11 @@ struct ContentView: View {
                 HStack {
                     Spacer()
                     VStack(alignment: .trailing, spacing: 8) {
-                        if engine.showOverlay {
-                            OverlayLegendView()
+                        if engine.showCollimation || engine.showSensorMarks {
+                            OverlayLegendView(
+                                collimation: engine.showCollimation,
+                                sensorMarks: engine.showSensorMarks
+                            )
                         }
                         if engine.overlay.sensorWidth > 0, engine.overlay.sensorHeight > 0 {
                             let star = ROIMapScene.displayedStar(

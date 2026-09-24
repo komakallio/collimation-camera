@@ -27,7 +27,7 @@ see Not yet verified at the end.
 | Stabilize view | ✅ | ✅ | Own Image stabilization panel. Always enabled. Both run the CPU `StabilizationController` once per new frame. |
 | Quarter view | ✅ | ✅ | Same panel. Top-left stays; the right pair swaps vertically and the lower pair swaps horizontally, so both seams join quadrants that did not originally touch. |
 | Full-frame search | ✅ | ✅ | Always. A lost star switches to a binned full-frame search until it is found. |
-| Collimation overlay and legend | ✅ | ✅ | Always enabled. `OverlayScene` and `LegendScene` primitives, drawn in SwiftUI on macOS and on an ImGui draw list in the portable app. |
+| Collimation overlay and legend | ✅ | ✅ | Two toggles: collimation indicators (rings and coma) and sensor marks (center cross, tracking grid, star). `OverlayScene` and `LegendScene` primitives, drawn in SwiftUI on macOS and on an ImGui draw list in the portable app. While tracking, a faint grid every 200 sensor pixels; the sensor-center cross fades out to that colour by halfway along each arm. |
 | ROI map | ✅ | ✅ | 140×94 max. |
 | Star profile | ✅ | ✅ | 148×102. |
 | Histogram | ✅ | ✅ | |

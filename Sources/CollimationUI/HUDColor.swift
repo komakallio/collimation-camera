@@ -27,6 +27,17 @@ public struct HUDColor: Equatable, Sendable {
         HUDColor(r, g, b, Float(value))
     }
 
+    /// `amount` 0 keeps this colour; 1 is `other`.
+    public func mixed(with other: HUDColor, amount: Double) -> HUDColor {
+        let t = Float(max(0, min(1, amount)))
+        return HUDColor(
+            r + (other.r - r) * t,
+            g + (other.g - g) * t,
+            b + (other.b - b) * t,
+            a + (other.a - a) * t
+        )
+    }
+
     public static let clear = HUDColor(0, 0, 0, 0)
     public static let white = HUDColor(1, 1, 1)
     public static let black = HUDColor(0, 0, 0)

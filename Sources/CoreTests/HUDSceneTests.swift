@@ -59,7 +59,10 @@ func testOverlaySceneSensorCenter() throws {
     let nearest = horizontal.min { abs(($0.0.x + $0.1.x) / 2 - expected.x) < abs(($1.0.x + $1.1.x) / 2 - expected.x) }
     let farthest = horizontal.max { abs(($0.0.x + $0.1.x) / 2 - expected.x) < abs(($1.0.x + $1.1.x) / 2 - expected.x) }
     try expectUI((nearest?.2.a ?? 0) > (farthest?.2.a ?? 1), "the cross is brighter at the center than at the edge")
+    try expectUI(farthest?.2 == OverlayChrome.sensorGrid, "the cross fades out to the tracking-grid colour")
     let arm = OverlayChrome.sensorCrossArmPixels
+    let halfway = horizontal.first { abs(max(abs($0.0.x - expected.x), abs($0.1.x - expected.x)) - arm / 2) < 1 }
+    try expectUI(halfway?.2 == OverlayChrome.sensorGrid, "the cross has reached the grid colour halfway along the arm")
     let reach = horizontal.flatMap { [min($0.0.x, $0.1.x), max($0.0.x, $0.1.x)] }
     try expectUI(abs((reach.min() ?? 0) - (expected.x - arm)) < 1e-6, "left tip is 200 sensor pixels from the center")
     try expectUI(abs((reach.max() ?? 0) - (expected.x + arm)) < 1e-6, "right tip is 200 sensor pixels from the center")
@@ -78,6 +81,26 @@ func testOverlaySceneSensorCenter() throws {
             && circles(farPrimitives).filter { $0.2 == OverlayChrome.frameCenter }.isEmpty,
         "sensor center outside the frame is not drawn"
     )
+    let fullSpan = lines(primitives).filter { line in
+        line.2 == OverlayChrome.sensorGrid && abs(abs(line.0.y - line.1.y) - 512) < 1e-6
+    }
+    try expectUI(fullSpan.isEmpty, "the grid is off unless a star is being tracked")
+
+    var tracking = overlay
+    tracking.trackingState = .tracking
+    let grid = lines(OverlayScene.primitives(overlay: tracking, zoom: 1, viewSize: viewSize))
+        .filter { $0.2 == OverlayChrome.sensorGrid && abs(abs($0.0.y - $0.1.y) - 512) < 1e-6 }
+    let xs = grid.map(\.0.x).sorted()
+    try expectUI(xs.count >= 2, "tracking draws a vertical grid, got \(xs.count)")
+    if xs.count >= 2 {
+        try expectUI(abs(xs[1] - xs[0] - OverlayChrome.sensorCrossArmPixels) < 1e-6, "grid spacing is 200 sensor pixels")
+    }
+    let tracked = lines(OverlayScene.primitives(overlay: tracking, zoom: 1, viewSize: viewSize))
+    let crossTips = tracked.filter { line in
+        abs(line.0.y - line.1.y) < 1e-6 && abs(abs(line.0.x - line.1.x) - 512) > 1
+            && line.2 == OverlayChrome.sensorGrid
+    }
+    try expectUI(crossTips.isEmpty, "the faded tips are the grid line, not a second stroke on top of it")
 }
 
 /// With stabilization on, the rings follow the live centroid.

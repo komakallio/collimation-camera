@@ -90,9 +90,13 @@ final class LiveMTKView: MTKView {
 }
 
 struct OverlayLegendView: View {
+    var collimation = true
+    var sensorMarks = true
+
     var body: some View {
+        let rows = LegendScene.rows(collimation: collimation, sensorMarks: sensorMarks)
         VStack(alignment: .leading, spacing: LegendScene.rowSpacing) {
-            ForEach(Array(LegendScene.rows.enumerated()), id: \.offset) { _, row in
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 HStack(spacing: LegendScene.markSpacing) {
                     Canvas { context, size in
                         HUDCanvas.draw(
@@ -126,6 +130,8 @@ struct OverlayView: View {
     /// When set, live pose is applied only if it matches this overlay frame size.
     var displayedWidth: Int? = nil
     var displayedHeight: Int? = nil
+    var showCollimation = true
+    var showSensorMarks = true
 
     var body: some View {
         Canvas { context, size in
@@ -137,7 +143,9 @@ struct OverlayView: View {
                     liveCentroid: liveCentroid,
                     displayedWidth: displayedWidth,
                     displayedHeight: displayedHeight,
-                    viewSize: SIMD2(size.width, size.height)
+                    viewSize: SIMD2(size.width, size.height),
+                    showCollimation: showCollimation,
+                    showSensorMarks: showSensorMarks
                 ),
                 in: &context
             )

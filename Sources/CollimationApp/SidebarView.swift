@@ -322,6 +322,7 @@ struct SidebarView: View {
                         .frame(width: CompassDialScene.size.x, height: CompassDialScene.size.y)
                 }
                 button(CommandCatalog.ID.viewOverlay)
+                button(CommandCatalog.ID.viewSensorMarks)
                 Text(qualityText)
                     .font(.caption)
                     .foregroundStyle(.secondary)

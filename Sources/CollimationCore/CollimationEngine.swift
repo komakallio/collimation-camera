@@ -98,7 +98,10 @@ public final class CollimationEngine {
     public var stabilize = false {
         didSet { updateStabilization() }
     }
-    public var showOverlay = true
+    /// Fitted rings and the coma arrow.
+    public var showCollimation = true
+    /// Sensor-center cross, tracking grid, and star marker.
+    public var showSensorMarks = true
     public var quarterView = false {
         didSet { updateStabilization() }
     }

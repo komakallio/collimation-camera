@@ -265,6 +265,7 @@ enum Sidebar {
         dial(engine: engine)
 
         command(CommandCatalog.ID.viewOverlay, engine: engine, host: host)
+        command(CommandCatalog.ID.viewSensorMarks, engine: engine, host: host)
         secondary(MetricText.quality(
             trackingState: engine.tracking.state,
             starPeak: engine.overlay.starPeak,

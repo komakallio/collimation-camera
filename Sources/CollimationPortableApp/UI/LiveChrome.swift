@@ -24,7 +24,7 @@ enum LiveChrome {
         let origin = liveRect.origin * pointScale
         let pose = engine.stabilize ? engine.renderStateSlot.peek() : nil
 
-        if engine.showOverlay {
+        if engine.showCollimation || engine.showSensorMarks {
             HUDDrawList.draw(
                 OverlayScene.primitives(
                     overlay: engine.overlay,
@@ -33,7 +33,9 @@ enum LiveChrome {
                     liveCentroid: pose?.stabilizeCentroid,
                     displayedWidth: pose?.imageWidth,
                     displayedHeight: pose?.imageHeight,
-                    viewSize: liveRect.size
+                    viewSize: liveRect.size,
+                    showCollimation: engine.showCollimation,
+                    showSensorMarks: engine.showSensorMarks
                 ),
                 on: list,
                 origin: origin,
@@ -160,8 +162,9 @@ enum LiveChrome {
             bottom = rowTop - widgetSpacing
         }
 
-        guard engine.showOverlay else { return }
-        let rows = LegendScene.rows
+        guard engine.showCollimation || engine.showSensorMarks else { return }
+        let rows = LegendScene.rows(collimation: engine.showCollimation, sensorMarks: engine.showSensorMarks)
+        guard !rows.isEmpty else { return }
         let rowHeight = LegendScene.markSize.y
         let textSize = 10.0
         var widest = 0.0

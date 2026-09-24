@@ -73,6 +73,7 @@ public enum CommandCatalog {
         public static let filterWheelConnect = "filterWheel.connect"
         public static let filterWheelRefresh = "filterWheel.refresh"
         public static let viewOverlay = "view.overlay"
+        public static let viewSensorMarks = "view.sensorMarks"
         public static let viewFitToWindow = "view.fitToWindow"
         public static let viewQuarter = "view.quarter"
 
@@ -225,11 +226,20 @@ public enum CommandCatalog {
         Command(
             id: ID.viewOverlay,
             menu: .view,
-            kind: .toggle(get: { $0.showOverlay }, set: { $0.showOverlay = $1 }),
-            title: { _ in "Collimation Overlay" },
-            shortTitle: { $0.showOverlay ? "Hide overlay" : "Show overlay" },
-            help: "Toggle crosshairs, fitted circles, and the coma arrow on the live view",
+            kind: .toggle(get: { $0.showCollimation }, set: { $0.showCollimation = $1 }),
+            title: { _ in "Collimation Indicators" },
+            shortTitle: { $0.showCollimation ? "Hide collimation" : "Show collimation" },
+            help: "Toggle the fitted rings and the coma arrow on the live view",
             shortcuts: [.primary("o")]
+        ),
+        Command(
+            id: ID.viewSensorMarks,
+            menu: .view,
+            kind: .toggle(get: { $0.showSensorMarks }, set: { $0.showSensorMarks = $1 }),
+            title: { _ in "Sensor Marks" },
+            shortTitle: { $0.showSensorMarks ? "Hide sensor marks" : "Show sensor marks" },
+            help: "Toggle the sensor-center cross, the tracking grid, and the star marker",
+            shortcuts: [.primary("m")]
         ),
         Command(
             id: ID.viewQuarter,
