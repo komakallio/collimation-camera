@@ -21,6 +21,36 @@ They drive the same engine and take every label, shortcut, and HUD from the same
 - Simulator camera so you can develop and test without hardware
 - Player One and ZWO cameras through one device list, both loaded at run time
 - Player One Phoenix filter wheel: connect, read on-wheel aliases, and move to a slot
+- PrimaLuceLab ESATTO focuser over USB: position feedback, In/Out step moves, absolute targets, and Stop
+
+## ESATTO focuser
+
+Open the **Focuser** panel, select its serial port, and click **Connect**.
+On this computer COM4 is selected by default when available; subsequent port
+selections are remembered independently of the mount. Close other software
+using the same port before connecting. The native USB connection uses
+115200 baud, 8N1, without an ASCOM or vendor SDK dependency.
+
+Connecting takes a few seconds while the controller starts. The panel shows
+the current position and calibrated maximum in motor steps. Set **Step size**
+and use **In** (decrease position) or **Out** (increase position), or enter an
+absolute **Target position** and click **Go to**. Moves outside the device's
+calibrated range are disabled. **Stop** and **Disconnect** remain available
+during movement; disconnecting and quitting attempt to stop the motor before
+closing the port. New focus moves are disabled during stacking or mount work,
+and new stacks, auto exposure and mount calibration/centering wait for focus
+movement to finish. Focus control also works without a connected camera.
+
+For a read-only connection check using the application's native driver:
+
+```powershell
+scripts\run-win.ps1 -Product CollimationCamera -Configuration release -Arguments @('--check-focuser','COM4')
+```
+
+The check reports identity, calibrated range, position and motor state, then
+closes the port without sending a motor command. It writes to the normal app
+log. The protocol implementation follows the
+[INDI ESATTO command definitions](https://github.com/indilib/indi/blob/master/drivers/focuser/primalucacommandset.cpp).
 
 ## Requirements
 

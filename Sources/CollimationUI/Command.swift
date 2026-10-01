@@ -6,6 +6,7 @@ public enum CommandMenu: String, Equatable, Sendable, CaseIterable {
     case camera
     case mount
     case filterWheel
+    case focuser
     case view
 
     public var title: String {
@@ -13,6 +14,7 @@ public enum CommandMenu: String, Equatable, Sendable, CaseIterable {
         case .camera: return "Camera"
         case .mount: return "Mount"
         case .filterWheel: return "Filter Wheel"
+        case .focuser: return "Focuser"
         case .view: return "View"
         }
     }

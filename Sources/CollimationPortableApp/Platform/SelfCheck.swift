@@ -14,6 +14,35 @@ import Foundation
 /// whether the fonts and the vendor SDKs were found, and which serial ports
 /// exist. Everything goes to the log as well, so the file can be sent on.
 enum SelfCheck {
+    /// Explicit read-only hardware check, before SDL or a camera is opened.
+    /// A normal disconnect sends MOT_STOP; this probe closes the raw port so
+    /// it never sends a motor command, even if another controller started a move.
+    static func checkFocuserIfRequested(_ arguments: [String]) {
+        guard let index = arguments.firstIndex(of: "--check-focuser") else { return }
+        guard index + 1 < arguments.count, !arguments[index + 1].hasPrefix("--") else {
+            Log.info("Usage: CollimationCamera --check-focuser <serial port>")
+            Diagnostics.stop()
+            exit(1)
+        }
+        let port = PlatformSerialPort()
+        let focuser = EsattoFocuser(port: port)
+        var result: Int32 = 0
+        do {
+            let state = try focuser.connect(path: arguments[index + 1])
+            Log.info("ESATTO on \(arguments[index + 1]): \(state.serialNumber)")
+            Log.info(MetricText.focuserPosition(state))
+            Log.info("Motor: \(state.isMoving ? "moving" : "stopped")")
+            let polled = try focuser.snapshot()
+            Log.info("Position poll: \(polled.position), moving: \(polled.isMoving)")
+        } catch {
+            Log.info("Focuser check failed: \(error.localizedDescription)")
+            result = 1
+        }
+        port.close()
+        Diagnostics.stop()
+        exit(result)
+    }
+
     static func isRequested(_ arguments: [String]) -> Bool {
         arguments.contains("--check")
     }

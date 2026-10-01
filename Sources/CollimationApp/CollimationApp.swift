@@ -45,6 +45,10 @@ struct CollimationApp: App {
                 Text(CollimationUI.CommandMenu.view.title),
                 content: { menuItems(for: .view) }
             )
+            SwiftUI.CommandMenu(
+                Text(CollimationUI.CommandMenu.focuser.title),
+                content: { menuItems(for: .focuser) }
+            )
         }
     }
 

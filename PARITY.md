@@ -40,6 +40,7 @@ see Not yet verified at the end.
 | Mount calibrate | ✅ | ✅ | `canCalibrateMount`. Tightened at milestone 2: the menu item now also needs a connected camera and no stack in flight. |
 | Center star | ✅ | ✅ | `canCenterStar`. Same tightening as calibrate. |
 | Filter wheel connect and goto | ✅ | ✅ | `canConnectFilterWheel`, `canSelectFilter`. |
+| ESATTO focuser connect, step, goto and stop | ✅ | ✅ | Native USB JSON, 115200 8N1. Independent remembered port (`focuser.serialPort`), live position and calibrated limits. Serial work runs off the main actor; Stop and Disconnect remain available while moving. |
 | Keyboard shortcuts | ✅ | ✅ | Return connects on both. ImGui maps `.primary` to Cmd on macOS itself, so one chord reads Cmd-K there and Ctrl-K on Windows. |
 | Menus | system menu bar | in-window menu bar | Both built from `CommandCatalog`; the portable app has no system menu bar to put them in. |
 | Quit | app menu | File ▸ Quit | Not a `CommandCatalog` entry: it acts on the process, not the engine, and macOS supplies its own. The portable app draws its own File menu with the platform's shortcut. |
@@ -80,3 +81,10 @@ until they pass:
 - The portable app on macOS, and the macOS half of the milestone 0 spike.
 - HUD geometry compared by overlaying screenshots of the two apps for the same
   simulator state (§9.8).
+- ESATTO physical In/Out moves, goto and Stop remain to be checked. On
+  1 October 2026, read-only queries on COM4 identified ESATTO30136 (ESATTO3,
+  firmware 3.05.28), position 317000, calibrated maximum 731000, motor stopped.
+  The application's native `--check-focuser COM4` also read and polled those
+  values successfully. Scripted tests cover command encoding, errors, limits,
+  startup retries, polling and connection cancellation. The macOS focuser
+  interface has not been run here.

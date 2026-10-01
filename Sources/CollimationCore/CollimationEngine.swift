@@ -160,6 +160,40 @@ public final class CollimationEngine {
     public private(set) var filterSlots: [FilterSlot] = []
     public var selectedFilterPosition = 0
 
+    public var focuserPorts: [String] = []
+    public var selectedFocuserPort = "" {
+        didSet { defaults.set(selectedFocuserPort, forKey: Self.focuserPortDefaultsKey) }
+    }
+    public private(set) var isFocuserConnected = false
+    public private(set) var isFocuserBusy = false
+    public private(set) var focuserSnapshot: FocuserSnapshot?
+    public private(set) var focuserStatus = "ESATTO — disconnected"
+    public var focuserStepSize = 1000
+    public var focuserTargetPosition = 0
+
+    public var canConnectFocuser: Bool {
+        isFocuserConnected || isFocuserBusy || !selectedFocuserPort.isEmpty
+    }
+    public var canSelectFocuserPort: Bool { !isFocuserConnected && !isFocuserBusy }
+    public var canRefreshFocuserPorts: Bool { canSelectFocuserPort }
+    public var canMoveFocuser: Bool {
+        isFocuserConnected && !isFocuserBusy && focuserSnapshot?.isMoving == false && !isStacking && !isMountBusy
+    }
+    public var canMoveFocuserIn: Bool {
+        canMoveFocuser && focuserStepSize > 0 && focuserStepSize <= (focuserSnapshot?.position ?? 0)
+    }
+    public var canMoveFocuserOut: Bool {
+        guard let state = focuserSnapshot else { return false }
+        return canMoveFocuser && focuserStepSize > 0 && focuserStepSize <= state.maxPosition - state.position
+    }
+    public var canGotoFocuser: Bool {
+        guard let state = focuserSnapshot else { return false }
+        return canMoveFocuser && (0...state.maxPosition).contains(focuserTargetPosition)
+    }
+    /// Stop and disconnect remain available during commands and failed polls.
+    public var canStopFocuser: Bool { isFocuserConnected }
+    private var focuserIsWorking: Bool { isFocuserBusy || focuserSnapshot?.isMoving == true }
+
     /// Folder the last snapshot was written to. Both apps remember it here so
     /// the save panel and the portable app's dialog agree.
     public var snapshotDirectory: URL? {
@@ -185,14 +219,14 @@ public final class CollimationEngine {
 
     public var canRefreshDevices: Bool { !isConnected }
     public var canSelectDevice: Bool { !isConnected }
-    public var canAutoExpose: Bool { isConnected && !isAutoExposing && !isStacking && !isMountBusy }
+    public var canAutoExpose: Bool { isConnected && !isAutoExposing && !isStacking && !isMountBusy && !focuserIsWorking }
     public var canSaveSnapshot: Bool { isConnected && !isStacking }
     public var canSaveStacked: Bool {
-        isConnected && !isStacking && !isMountBusy && tracking.state == .tracking
+        isConnected && !isStacking && !isMountBusy && !focuserIsWorking && tracking.state == .tracking
     }
     public var canSelectStackCount: Bool { !isStacking }
     public var canCalibrateMount: Bool {
-        isMountConnected && isConnected && !isMountBusy && !isStacking && tracking.state == .tracking
+        isMountConnected && isConnected && !isMountBusy && !isStacking && !focuserIsWorking && tracking.state == .tracking
     }
     public var canCenterStar: Bool { canCalibrateMount && isMountCalibrated }
     public var canSaveConstellation: Bool { canCenterStar }
@@ -242,6 +276,11 @@ public final class CollimationEngine {
     nonisolated private let fpsMeter = FPSMeter()
     nonisolated private let mount = EQ6Mount()
     nonisolated private let filterWheel = PhoenixWheel()
+    nonisolated private let focuser: any FocuserDevice
+    nonisolated private let focuserQueue = DispatchQueue(label: "collimation.focuser")
+    @ObservationIgnored private var focuserPollTask: Task<Void, Never>?
+    @ObservationIgnored private var focuserPollID: UUID?
+    @ObservationIgnored private var focuserGeneration = 0
     @ObservationIgnored private var device: CameraDevice?
     @ObservationIgnored private var applyingControls = false
     @ObservationIgnored private var lastSentExposure: Int?
@@ -272,14 +311,17 @@ public final class CollimationEngine {
     public static let defaultSearchBinning = 4
     private static let serialPortDefaultsKey = "mount.serialPort"
     private static let filterWheelDefaultsKey = "filterWheel.id"
+    private static let focuserPortDefaultsKey = "focuser.serialPort"
     private static let snapshotDirectoryDefaultsKey = "snapshot.directory"
 
     public init(
         defaults: UserDefaults = .standard,
-        serialPortPaths: @escaping () -> [String] = SerialPortScanner.availablePaths
+        serialPortPaths: @escaping () -> [String] = SerialPortScanner.availablePaths,
+        focuser: any FocuserDevice = EsattoFocuser()
     ) {
         self.defaults = defaults
         self.serialPortPaths = serialPortPaths
+        self.focuser = focuser
         refreshDevices()
         selectedDeviceID = DeviceCatalog.preferredDeviceID(in: devices)
         // The remembered port is read before refreshSerialPorts() so the
@@ -288,6 +330,10 @@ public final class CollimationEngine {
             selectedSerialPort = saved
         }
         refreshSerialPorts()
+        if let saved = defaults.string(forKey: Self.focuserPortDefaultsKey), !saved.isEmpty {
+            selectedFocuserPort = saved
+        }
+        refreshFocuserPorts()
         if let path = defaults.string(forKey: Self.snapshotDirectoryDefaultsKey), !path.isEmpty {
             snapshotDirectory = URL(fileURLWithPath: path, isDirectory: true)
         }
@@ -335,6 +381,9 @@ public final class CollimationEngine {
         stopCapture()
         mount.disconnect()
         filterWheel.disconnect()
+        // Drain queued work before close, so a pending connect cannot reopen
+        // the port after shutdown. Normal UI disconnect uses the async path.
+        focuserQueue.sync { focuser.disconnect() }
     }
 
     public var selectedDevice: CameraDescriptor? {
@@ -907,6 +956,152 @@ public final class CollimationEngine {
         case .idle:
             statusText = "Live"
         }
+    }
+
+    public func refreshFocuserPorts() {
+        guard canRefreshFocuserPorts else { return }
+        var ports = serialPortPaths()
+        if selectedFocuserPort.isEmpty {
+            // COM4 is preferred only when present; other computers use the
+            // first available port, and each focuser selection is remembered.
+            selectedFocuserPort = ports.first(where: { $0.uppercased() == "COM4" }) ?? ports.first ?? ""
+        }
+        if !selectedFocuserPort.isEmpty, !ports.contains(selectedFocuserPort) {
+            ports.insert(selectedFocuserPort, at: 0)
+        }
+        focuserPorts = ports
+    }
+
+    public func connectFocuser() {
+        guard !isFocuserConnected, !isFocuserBusy else { return }
+        refreshFocuserPorts()
+        let path = selectedFocuserPort
+        guard !path.isEmpty else { presentError(FocuserError.noPortSelected); return }
+        errorMessage = nil
+        focuserGeneration &+= 1
+        isFocuserBusy = true
+        focuserStatus = "Opening \(path)…"
+        performFocuserOperation({ try $0.connect(path: path) }) { engine, state in
+            engine.isFocuserConnected = true
+            engine.focuserTargetPosition = state.position
+            engine.startFocuserPolling()
+        }
+    }
+
+    public func disconnectFocuser() {
+        focuserGeneration &+= 1
+        focuserPollTask?.cancel()
+        focuserPollTask = nil
+        focuserPollID = nil
+        isFocuserConnected = false
+        isFocuserBusy = false
+        focuserSnapshot = nil
+        focuserStatus = "ESATTO — disconnected"
+        let device = focuser
+        // Enqueued synchronously on the main actor. A reconnect always follows
+        // this close, even when the previous request has not answered yet.
+        focuserQueue.async { device.disconnect() }
+    }
+
+    public func moveFocuserIn() {
+        guard canMoveFocuserIn, let state = focuserSnapshot else { return }
+        moveFocuser(to: state.position - focuserStepSize)
+    }
+
+    public func moveFocuserOut() {
+        guard canMoveFocuserOut, let state = focuserSnapshot else { return }
+        moveFocuser(to: state.position + focuserStepSize)
+    }
+
+    public func gotoFocuser() {
+        guard canGotoFocuser else { return }
+        moveFocuser(to: focuserTargetPosition)
+    }
+
+    private func moveFocuser(to position: Int) {
+        guard canMoveFocuser else { return }
+        errorMessage = nil
+        focuserGeneration &+= 1
+        isFocuserBusy = true
+        focuserTargetPosition = position
+        focuserStatus = "Moving to \(position) steps…"
+        performFocuserOperation({ try $0.move(to: position) }) { _, _ in }
+    }
+
+    public func stopFocuser() {
+        guard canStopFocuser else { return }
+        // Invalidate any pending move/poll result. Stop is queued after the
+        // current short transaction, never after waiting for travel to finish.
+        focuserGeneration &+= 1
+        isFocuserBusy = true
+        focuserStatus = "Stopping…"
+        performFocuserOperation({ try $0.stop() }) { engine, state in
+            engine.focuserTargetPosition = state.position
+        }
+    }
+
+    private func performFocuserOperation(
+        _ work: @escaping @Sendable (any FocuserDevice) throws -> FocuserSnapshot,
+        completion: @escaping @MainActor @Sendable (CollimationEngine, FocuserSnapshot) -> Void
+    ) {
+        let generation = focuserGeneration
+        let device = focuser
+        focuserQueue.async { [weak self] in
+            let result = Result { try work(device) }
+            Task { @MainActor [weak self] in
+                guard let self, self.focuserGeneration == generation else { return }
+                self.isFocuserBusy = false
+                switch result {
+                case .success(let state):
+                    self.publishFocuser(state)
+                    completion(self, state)
+                case .failure(let error):
+                    self.disconnectFocuser()
+                    self.focuserStatus = "ESATTO — connection failed"
+                    self.presentError(error)
+                }
+            }
+        }
+    }
+
+    private func startFocuserPolling() {
+        focuserPollTask?.cancel()
+        focuserPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+                guard let self, self.isFocuserConnected else { return }
+                self.pollFocuser()
+            }
+        }
+    }
+
+    private func pollFocuser() {
+        guard isFocuserConnected, !isFocuserBusy, focuserPollID == nil else { return }
+        let pollID = UUID()
+        focuserPollID = pollID
+        let generation = focuserGeneration
+        let device = focuser
+        focuserQueue.async { [weak self] in
+            let result = Result { try device.snapshot() }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                // An old session must not clear a new session's pending poll.
+                if self.focuserPollID == pollID { self.focuserPollID = nil }
+                guard self.focuserGeneration == generation, !self.isFocuserBusy else { return }
+                switch result {
+                case .success(let state): self.publishFocuser(state)
+                case .failure(let error):
+                    self.disconnectFocuser()
+                    self.focuserStatus = "ESATTO — communication lost"
+                    self.presentError(error)
+                }
+            }
+        }
+    }
+
+    private func publishFocuser(_ state: FocuserSnapshot) {
+        focuserSnapshot = state
+        focuserStatus = state.isMoving ? "ESATTO — moving…" : "ESATTO — connected"
     }
 
     public func refreshSerialPorts() {

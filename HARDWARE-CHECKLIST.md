@@ -136,6 +136,30 @@ Without a mount, a com0com virtual pair or a USB serial loopback is enough to
 check that the port is listed and that Connect fails with `unrecognized`
 rather than crashing.
 
+## ESATTO focuser
+
+- Select the ESATTO USB port in **Focuser** (COM4 on this computer) and Connect.
+  Allow about three seconds for controller startup; check the position and
+  calibrated maximum against the vendor application, with that application
+  closed before this app takes the port.
+- The read-only `--check-focuser COM4` diagnostic uses the same native driver
+  and sends no motor commands. COM4 read-only queries on 1 October 2026
+  reported ESATTO30136, firmware 3.05.28, position 317000 / 731000, stopped.
+  The application's native driver also connected and polled the same values.
+- With room in both directions, choose a small step and check In decreases
+  and Out increases the physical position by that step. Go to the original
+  position, then check Stop during a longer move.
+- Check negative/out-of-range targets and non-positive/oversized steps are
+  disabled, and that repeated moves wait for the motor to stop.
+- Disconnect during movement, reconnect, and check its actual position.
+  Unplug USB during a move: the window should remain responsive, the error
+  should allow reconnect, and a later response must not restore stale state.
+- Quit during movement and confirm the motor stops. Stacking and mount work
+  should disable new focus moves; active focus movement should disable new
+  stacks, auto exposure and mount calibration/centering.
+
+Physical movement and unplug/quit acceptance are still pending.
+
 ## 7. The filter wheel
 
 Connect a Phoenix wheel, read the aliases stored on it, and move to a slot.

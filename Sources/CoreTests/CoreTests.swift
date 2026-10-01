@@ -6,8 +6,15 @@ struct CoreTests {
     // MainActor so tests can build a CollimationEngine, which is main-actor
     // isolated. Nonisolated test bodies still convert to the closure type.
     @MainActor
-    static func main() {
+    static func main() async {
         var failures = 0
+        failures += run("esatto serial protocol", testEsattoProtocol)
+        failures += run("esatto limits and errors", testEsattoLimitsAndErrors)
+        failures += run("esatto connection failures", testEsattoConnectionFailures)
+        failures += run("esatto startup retry", testEsattoStartupRetry)
+        failures += run("remembered focuser port", testRememberedFocuserPort)
+        failures += await runAsync("focuser lifecycle", testFocuserEngineLifecycle)
+        failures += await runAsync("focuser cancelled connect", testFocuserCancelledConnect)
         failures += run("histogram percentiles", testHistogramPercentiles)
         failures += run("auto stretch", testAutoStretch)
         failures += run("mtf identity", testMTFIdentityAtHalf)
@@ -130,6 +137,18 @@ struct CoreTests {
         } else {
             print("\(failures) test(s) failed.")
             exit(1)
+        }
+    }
+
+    @MainActor
+    private static func runAsync(_ name: String, _ body: @MainActor () async throws -> Void) async -> Int {
+        do {
+            try await body()
+            print("ok  \(name)")
+            return 0
+        } catch {
+            print("FAIL  \(name): \(error)")
+            return 1
         }
     }
 

@@ -78,6 +78,7 @@ struct SidebarView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 equipmentSection
+                focuserSection
                 cameraSection
                 filterWheelSection
                 mountSection
@@ -152,6 +153,49 @@ struct SidebarView: View {
         .onAppear {
             engine.refreshFilterWheels()
             engine.refreshSerialPorts()
+        }
+    }
+
+    private var focuserSection: some View {
+        GroupBox(SidebarText.focuserSection) {
+            VStack(alignment: .leading, spacing: 8) {
+                if engine.focuserPorts.isEmpty {
+                    Text(MetricText.serialPortPlaceholder).foregroundStyle(.secondary)
+                } else {
+                    Picker(SidebarText.focuserPort, selection: $engine.selectedFocuserPort) {
+                        ForEach(engine.focuserPorts, id: \.self) { path in
+                            Text(MetricText.serialPortName(path)).tag(path)
+                        }
+                    }
+                    .labelsHidden()
+                    .disabled(!engine.canSelectFocuserPort)
+                    .help(HelpText.focuser)
+                }
+                HStack {
+                    button(CommandCatalog.ID.focuserConnect)
+                    button(CommandCatalog.ID.focuserRefreshPorts)
+                }
+                Text(engine.focuserStatus).font(.caption).foregroundStyle(.secondary)
+                if let state = engine.focuserSnapshot {
+                    Text(MetricText.focuserPosition(state)).font(.caption.monospacedDigit())
+                }
+                Text(SidebarText.focuserStepSize).font(.caption)
+                TextField(SidebarText.focuserStepSize, value: $engine.focuserStepSize, format: .number.grouping(.never))
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(!engine.canMoveFocuser)
+                    .help(HelpText.focuserStepSize)
+                HStack {
+                    button(CommandCatalog.ID.focuserIn)
+                    button(CommandCatalog.ID.focuserOut)
+                    button(CommandCatalog.ID.focuserStop)
+                }
+                Text(SidebarText.focuserTarget).font(.caption)
+                TextField(SidebarText.focuserTarget, value: $engine.focuserTargetPosition, format: .number.grouping(.never))
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(!engine.canMoveFocuser)
+                    .help(HelpText.focuserTarget)
+                button(CommandCatalog.ID.focuserGoto)
+            }
         }
     }
 

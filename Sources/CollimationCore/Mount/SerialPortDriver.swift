@@ -8,7 +8,7 @@ public enum SerialPortError: Error {
     case ioFailed
 }
 
-/// 8N1 serial port used to talk to an EQ6 SynScan handset or EQDIR adapter.
+/// 8N1 serial port for mounts and focusers.
 /// One implementation per platform; tests substitute a scripted double.
 public protocol SerialPortDriver: AnyObject, Sendable {
     var isOpen: Bool { get }
@@ -37,13 +37,13 @@ public typealias PlatformSerialPort = WindowsSerialPort
 public typealias PlatformSerialPort = POSIXSerialPort
 #endif
 
-/// Shared wire logging, so both drivers print the same `EQ6 TX`/`EQ6 RX` lines.
+/// Shared wire logging for both drivers and all serial equipment.
 enum SerialLog {
     static func log(_ direction: String, _ data: Data) {
         if data.isEmpty {
-            Log.info("EQ6 \(direction)")
+            Log.info("SERIAL \(direction)")
         } else {
-            Log.info("EQ6 \(direction) \(describe(data))")
+            Log.info("SERIAL \(direction) \(describe(data))")
         }
     }
 

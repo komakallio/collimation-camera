@@ -127,6 +127,10 @@ public enum MetricText {
 
     public static let serialPortPlaceholder = "No serial ports"
 
+    public static func focuserPosition(_ state: FocuserSnapshot) -> String {
+        "Position \(state.position) / \(state.maxPosition) steps"
+    }
+
     /// The calibration lines under the mount status: when it was measured, and
     /// the backlash line only when either axis exceeds half a pixel.
     public static func calibrationSummary(_ calibration: GuideCalibration) -> [String] {

@@ -13,6 +13,7 @@ SDL_SetAppMetadata("Collimation Camera", "1.0", "local.collimation-camera")
 
 // Before SDL_Init, so a failure in SDL itself is already being recorded.
 Diagnostics.start()
+SelfCheck.checkFocuserIfRequested(CommandLine.arguments)
 Diagnostics.routeSDLLog()
 
 guard SDL_Init(SDL_INIT_VIDEO) else {

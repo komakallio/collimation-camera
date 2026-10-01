@@ -22,6 +22,7 @@ final class ScriptedSerialPortDriver: SerialPortDriver, @unchecked Sendable {
     /// Every write in order, for asserting the probe sequence.
     private(set) var writes: [Data] = []
     private(set) var openedPaths: [String] = []
+    private(set) var openedBauds: [Int] = []
     private(set) var closeCount = 0
     private(set) var flushCount = 0
 
@@ -64,6 +65,7 @@ final class ScriptedSerialPortDriver: SerialPortDriver, @unchecked Sendable {
         if let openError { throw openError }
         open = true
         openedPaths.append(path)
+        openedBauds.append(baud)
     }
 
     func close() {

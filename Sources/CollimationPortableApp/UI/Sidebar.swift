@@ -43,6 +43,7 @@ enum Sidebar {
         defer { igEnd() }
 
         equipmentSection(engine: engine, host: host)
+        focuserSection(engine: engine, host: host)
         cameraSection(engine: engine, host: host)
         filterWheelSection(engine: engine, host: host)
         mountSection(engine: engine, host: host)
@@ -179,6 +180,57 @@ enum Sidebar {
                 secondary(line)
             }
         }
+    }
+
+    private static func focuserSection(engine: CollimationEngine, host: any UIHost) {
+        guard header(SidebarText.focuserSection) else { return }
+        if engine.focuserPorts.isEmpty {
+            ImGuiText.disabled(MetricText.serialPortPlaceholder)
+        } else {
+            combo(
+                label: "##focuserPort",
+                selection: engine.selectedFocuserPort,
+                options: engine.focuserPorts.map { ($0, MetricText.serialPortName($0)) },
+                enabled: engine.canSelectFocuserPort,
+                help: HelpText.focuser
+            ) { engine.selectedFocuserPort = $0 }
+        }
+        command(CommandCatalog.ID.focuserConnect, engine: engine, host: host)
+        igSameLine(0, -1)
+        command(CommandCatalog.ID.focuserRefreshPorts, engine: engine, host: host)
+        secondary(engine.focuserStatus)
+        if let state = engine.focuserSnapshot {
+            secondary(MetricText.focuserPosition(state))
+        }
+        integerInput(
+            SidebarText.focuserStepSize, value: engine.focuserStepSize,
+            enabled: engine.canMoveFocuser, help: HelpText.focuserStepSize
+        ) { engine.focuserStepSize = $0 }
+        command(CommandCatalog.ID.focuserIn, engine: engine, host: host)
+        igSameLine(0, -1)
+        command(CommandCatalog.ID.focuserOut, engine: engine, host: host)
+        igSameLine(0, -1)
+        command(CommandCatalog.ID.focuserStop, engine: engine, host: host)
+        integerInput(
+            SidebarText.focuserTarget, value: engine.focuserTargetPosition,
+            enabled: engine.canMoveFocuser, help: HelpText.focuserTarget
+        ) { engine.focuserTargetPosition = $0 }
+        command(CommandCatalog.ID.focuserGoto, engine: engine, host: host)
+    }
+
+    private static func integerInput(
+        _ label: String, value: Int, enabled: Bool, help: String,
+        onChange: (Int) -> Void
+    ) {
+        subtitle(label)
+        igBeginDisabled(!enabled)
+        defer { igEndDisabled() }
+        igSetNextItemWidth(-1)
+        var number = Int32(clamping: value)
+        if ("##focuser" + label).withCString({ igInputInt($0, &number, 0, 0, 0) }) {
+            onChange(Int(number))
+        }
+        ImGuiText.tooltip(help)
     }
 
     private static func roiSection(engine: CollimationEngine, host: any UIHost) {

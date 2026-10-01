@@ -7,6 +7,9 @@ import Foundation
 /// pickers, sections, and HUD widgets. Both apps show them: `.help` on macOS,
 /// `igSetItemTooltip` after the item in ImGui.
 public enum HelpText {
+    public static let focuser = "ESATTO USB focuser. In decreases the position; Out increases it. Moves use the device's calibrated travel range."
+    public static let focuserStepSize = "Distance in motor steps for each In or Out move."
+    public static let focuserTarget = "Absolute position in motor steps. Enter a target, then press Go to."
     public static let stackCount = "Number of 256×256 frames to capture and average"
 
     public static let stackedSave =

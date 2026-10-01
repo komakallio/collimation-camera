@@ -72,6 +72,12 @@ public enum CommandCatalog {
         public static let mountCenter = "mount.center"
         public static let filterWheelConnect = "filterWheel.connect"
         public static let filterWheelRefresh = "filterWheel.refresh"
+        public static let focuserConnect = "focuser.connect"
+        public static let focuserRefreshPorts = "focuser.refreshPorts"
+        public static let focuserIn = "focuser.in"
+        public static let focuserOut = "focuser.out"
+        public static let focuserGoto = "focuser.goto"
+        public static let focuserStop = "focuser.stop"
         public static let viewOverlay = "view.overlay"
         public static let viewSensorMarks = "view.sensorMarks"
         public static let viewFitToWindow = "view.fitToWindow"
@@ -85,6 +91,60 @@ public enum CommandCatalog {
 
     @MainActor
     public static let all: [Command] = [
+        Command(
+            id: ID.focuserConnect,
+            menu: .focuser,
+            title: { $0.isFocuserConnected || $0.isFocuserBusy ? "Disconnect Focuser" : "Connect Focuser" },
+            shortTitle: { $0.isFocuserConnected || $0.isFocuserBusy ? "Disconnect" : "Connect" },
+            help: HelpText.focuser,
+            isEnabled: { $0.canConnectFocuser },
+            perform: { engine, _ in
+                if engine.isFocuserConnected || engine.isFocuserBusy { engine.disconnectFocuser() }
+                else { engine.connectFocuser() }
+            }
+        ),
+        Command(
+            id: ID.focuserRefreshPorts,
+            menu: nil,
+            title: "Refresh",
+            shortTitle: "Refresh",
+            isEnabled: { $0.canRefreshFocuserPorts },
+            perform: { engine, _ in engine.refreshFocuserPorts() }
+        ),
+        Command(
+            id: ID.focuserIn,
+            menu: .focuser,
+            title: "Focus In",
+            shortTitle: "In",
+            help: "Decrease the focuser position by the step size.",
+            isEnabled: { $0.canMoveFocuserIn },
+            perform: { engine, _ in engine.moveFocuserIn() }
+        ),
+        Command(
+            id: ID.focuserOut,
+            menu: .focuser,
+            title: "Focus Out",
+            shortTitle: "Out",
+            help: "Increase the focuser position by the step size.",
+            isEnabled: { $0.canMoveFocuserOut },
+            perform: { engine, _ in engine.moveFocuserOut() }
+        ),
+        Command(
+            id: ID.focuserGoto,
+            menu: .focuser,
+            title: "Go to Focus Position",
+            shortTitle: "Go to",
+            isEnabled: { $0.canGotoFocuser },
+            perform: { engine, _ in engine.gotoFocuser() }
+        ),
+        Command(
+            id: ID.focuserStop,
+            menu: .focuser,
+            title: "Stop Focuser",
+            shortTitle: "Stop",
+            isEnabled: { $0.canStopFocuser },
+            perform: { engine, _ in engine.stopFocuser() }
+        ),
         Command(
             id: ID.cameraConnect,
             menu: .camera,

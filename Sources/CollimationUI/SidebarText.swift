@@ -19,6 +19,7 @@ public enum SidebarText {
     public static let cameraSection = "Camera"
     public static let filterWheelSection = "Filter wheel"
     public static let mountSection = "Mount"
+    public static let focuserSection = "Focuser"
     public static let roiSection = "ROI & zoom"
     public static let stabilizationSection = "Image stabilization"
     public static let stretchSection = "Stretch"
@@ -27,6 +28,7 @@ public enum SidebarText {
     /// In the order both sidebars lay them out, so a test can check that.
     public static let sections = [
         equipmentSection,
+        focuserSection,
         cameraSection,
         filterWheelSection,
         mountSection,
@@ -45,6 +47,9 @@ public enum SidebarText {
     public static let white = "White"
     public static let midtones = "Midtones"
     public static let arcsinhFactor = "Factor"
+    public static let focuserPort = "Focuser port"
+    public static let focuserStepSize = "Step size"
+    public static let focuserTarget = "Target position"
 
     // MARK: - Metrics
 
