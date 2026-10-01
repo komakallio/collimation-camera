@@ -6,6 +6,7 @@ struct ProcessedFrame: Sendable {
     var coma: ComaResult?
     var fwhm: FWHMResult?
     var focusMetric: FocusMetric?
+    var focusExposure: FocusExposureReading?
     var starProfile: StarIntensityProfile?
     var overlay: OverlayModel
     var displayFrame: Frame
@@ -150,6 +151,19 @@ final class FramePipeline: @unchecked Sendable {
         var fwhm: FWHMResult?
         let focusMetric = measureFocus && trackingState == .tracking
             ? found.flatMap { FocusMetricEstimator().measure(frame: window, detection: $0) } : nil
+        var focusExposure: FocusExposureReading?
+        if measureFocus {
+            if let found {
+                let sensor = window.roi.sensorPoint(fromFramePixel: found.centroid)
+                focusExposure = FocusExposureReading(peak: found.peak, snr: found.snr,
+                    sensorX: sensor.x, sensorY: sensor.y, detected: true)
+            } else if window.pixels.contains(where: { $0 >= StarQuality.clipADU }) {
+                // A washed-out star may defeat detection. Only reduce exposure
+                // from this fallback; never brighten an undetected field.
+                focusExposure = FocusExposureReading(peak: StarQuality.clipADU, snr: 0,
+                    sensorX: 0, sensorY: 0, detected: false)
+            }
+        }
         if trackingState == .tracking, metricsOnDisplay, let centroid = next.centroidInFrame {
             fwhm = fwhmEstimator.measure(frame: display, centroid: centroid, optics: optics)
         }
@@ -196,6 +210,7 @@ final class FramePipeline: @unchecked Sendable {
             coma: result,
             fwhm: fwhm,
             focusMetric: focusMetric,
+            focusExposure: focusExposure,
             starProfile: starProfile,
             overlay: overlay,
             displayFrame: display,

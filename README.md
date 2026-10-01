@@ -41,13 +41,18 @@ closing the port. New focus moves are disabled during stacking or mount work,
 and new stacks, auto exposure and mount calibration/centering wait for focus
 movement to finish. Focus control also works without a connected camera.
 
-For **Autofocus**, connect a real camera and track a single, unsaturated star
+For **Autofocus**, connect a real camera and track a single star
 that fits completely inside the live ROI. Set **Autofocus step** (motor steps;
-1000 by default) and press **Autofocus**. The application checks five fresh
+1000 by default) and press **Autofocus**. The application automatically chooses
+exposure near half the raw pixel range, then checks five fresh
 frames before moving, scans nine positions from four steps inward to four
 outward, fits the minimum of the star's half-flux radius (HFR), and verifies
 the result with five more frames. Each scan point uses a five-frame median.
 HFR is measured on raw camera pixels; display stretch does not affect focus.
+If the star saturates as focus improves, exposure is shortened and the entire
+curve is remeasured, including the initial baseline and final verification.
+The selected exposure remains on the camera after autofocus. Recovery is
+limited to four restarts; saturation at 100 µs reports a clear error.
 
 The first point and final target are approached outward from one step below,
 so allow five steps of inward travel and four outward from the starting
@@ -71,7 +76,7 @@ scripts\run-win.ps1 -Product capture-cli -Configuration release --autofocus COM4
 ```
 
 Use `capture-cli --list` for camera IDs. The command requires a real camera,
-waits for a tracked unsaturated star, logs the scan, and exits non-zero on
+waits for a tracked star, tunes the starting exposure automatically, logs the scan, and exits non-zero on
 failure. It uses a separate settings domain from the graphical app.
 
 For a read-only connection check using the application's native driver:

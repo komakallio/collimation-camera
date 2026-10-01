@@ -10,6 +10,12 @@ struct CoreTests {
         var failures = 0
         failures += run("autofocus HFR metric", testFocusMetric)
         failures += run("autofocus bounded curve", testAutofocusPlan)
+        failures += run("autofocus exposure policy", testAutofocusExposurePolicy)
+        failures += await runAsync("autofocus exposure startup and buffered frames", testAutofocusExposureStartup)
+        failures += await runAsync("autofocus exposure scan recovery", testAutofocusExposureScanRecovery)
+        failures += await runAsync("autofocus exposure verification recovery", testAutofocusExposureVerificationRecovery)
+        failures += await runAsync("autofocus exposure limit", testAutofocusExposureLimit)
+        failures += await runAsync("autofocus exposure cancellation", testAutofocusExposureCancellation)
         failures += await runAsync("autofocus engine optical simulation", testAutofocusEngineSuccess)
         failures += await runAsync("autofocus cancellation", testAutofocusCancellation)
         failures += await runAsync("autofocus failure handling", testAutofocusFailures)

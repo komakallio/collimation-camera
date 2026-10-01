@@ -166,7 +166,7 @@ below. Manual Stop, unplug and quit acceptance on real hardware remain pending.
 - Read-only COM4 check on 1 October 2026: ESATTO30136, position
   319000 / 731000 steps, stopped; identity and repeated status/position polls
   succeeded with the native application driver.
-- With a real camera tracking an unsaturated artificial star, choose an
+- With a real camera tracking an artificial star, choose an
   **Autofocus step** that changes HFR visibly and exceeds backlash. Confirm
   there is room for five inward and four outward steps. Start Autofocus.
 - Confirm five initial frames precede motion, nine positions are sampled
@@ -175,8 +175,12 @@ below. Manual Stop, unplug and quit acceptance on real hardware remain pending.
 - Stop during a move and during frame collection; no later scan moves may
   follow. Repeat with camera disconnect, focuser disconnect, USB removal and
   quitting. Confirm reconnect permits a new run.
-- Cover the camera and overexpose it: autofocus must report a measurement
-  failure. A flat curve or a minimum at the scan edge must fail clearly.
+- Begin with a clipped star: exposure must shorten automatically before any
+  motor move. Check the chosen exposure and final result in the log.
+- Start defocused so the star clips later: autofocus must shorten exposure
+  and remeasure the complete curve. All retained points must use one exposure.
+- Cover the camera: autofocus must report a measurement failure. Saturation
+  persisting at minimum exposure, a flat curve or a scan-edge minimum must fail clearly.
 - Confirm manual focus, exposure/gain, stacking, mount work and filter moves
   are blocked throughout autofocus, including its frame-collection periods.
 
@@ -191,10 +195,19 @@ The scan minimum was 1.083 pixels at 315967; both surrounding samples were
 Earlier attempts exercised two failure paths: the native controller returned
 `BUSY=0` during `MST=dec`, requiring the driver to wait for the non-stop phase;
 and the star clipped as focus improved at 5 ms, correctly aborting frame
-measurement. The final run used shorter exposure to keep the whole scan
+measurement in the original implementation. The final run used shorter exposure to keep the whole scan
 unsaturated. No calibration, speed or controller backlash settings changed.
 
-Windows release build and all 127 core tests passed. The portable sidebar
+Automatic exposure was then verified on the same camera/focuser: a clipped
+20 ms starting exposure was reduced to 4 ms, 0.8 ms and finally **0.627 ms**,
+peak **32368 ADU**, before any motor move. The 311829–319829 scan completed
+with final focus **315930 steps**, HFR **1.023 sensor pixels**. A separate
+native-driver poll confirmed the motor stopped at 315930. The Windows release
+build, all **133 tests**, and the portable sidebar render passed. Synthetic
+optical tests additionally verified exposure recovery during scanning and
+final verification, complete curve replacement, and Stop during selection.
+
+The original autofocus Windows release build and its 127 core tests passed. The portable sidebar
 rendered at 1280×1000 with no widget conflicts. Full optical acceptance used
 the same engine through `capture-cli`; clicking the autofocus control and
 unplug/quit testing during autofocus remain manual acceptance items. The

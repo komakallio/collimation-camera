@@ -92,6 +92,7 @@ struct CaptureCLI {
         --simulator. Device ids come from --list, for example poa-0 or asi-0.
         Frame capture writes a 16-bit mono TIFF. Autofocus prints measurements
         and the verified position; it requires a real camera and moves the motor.
+        For autofocus, --exposure sets the starting exposure; it is tuned automatically.
 
         --frames is the headless version of the live-view rate check: it needs
         no window, so it works over a remote desktop session.

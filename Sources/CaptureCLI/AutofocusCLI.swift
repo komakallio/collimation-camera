@@ -44,14 +44,13 @@ enum AutofocusCLI {
         engine.autofocusStepSize = step
         engine.connect()
         // connect() loads the camera's current controls. Apply the requested
-        // exposure afterwards, then wait for tracking on unclipped frames.
+        // starting exposure afterwards; autofocus handles any clipping.
         engine.exposureMicroseconds = exposure * 1000
         engine.applyExposure()
         engine.connectFocuser()
         let readyDeadline = Date().addingTimeInterval(20)
         while !engine.isFocuserConnected || engine.tracking.state != .tracking
-            || (engine.tracking.detection?.peak ?? StarQuality.clipADU) >= StarQuality.clipADU
-            || (engine.tracking.detection?.snr ?? 0) < 10 {
+            || (engine.tracking.detection?.snr ?? 0) < 6 {
             if let error = engine.errorMessage { throw Failure(message: error) }
             guard Date() < readyDeadline else { throw Failure(message: "Camera/focuser did not acquire a tracked star within 20 seconds.") }
             try await Task.sleep(for: .milliseconds(40))
@@ -61,7 +60,7 @@ enum AutofocusCLI {
         print("Autofocus hardware: \(descriptor.name), \(state.serialNumber) on \(port)")
         print("Position \(state.position); scan \(plan.positions.first!)–\(plan.positions.last!); inward preload \(plan.preloadPosition); exposure \(exposure) ms")
         guard engine.canAutofocus else {
-            throw Failure(message: "Autofocus is unavailable. Check the star signal and saturation; reduce exposure if clipped.")
+            throw Failure(message: "Autofocus is unavailable. Check star tracking and the calibrated focuser travel.")
         }
         engine.startAutofocus()
         let runDeadline = Date().addingTimeInterval(240)
@@ -80,7 +79,8 @@ enum AutofocusCLI {
         guard case .complete(let position, let hfr) = engine.autofocusState else {
             throw Failure(message: engine.errorMessage ?? "Autofocus cancelled or failed.")
         }
-        print(String(format: "Autofocus verified: %d steps, HFR %.3f sensor pixels", position, hfr))
+        print(String(format: "Autofocus verified: %d steps, HFR %.3f sensor pixels, exposure %.3f ms, %d saturation restarts",
+                     position, hfr, engine.exposureMicroseconds / 1000, engine.autofocusExposureRetries))
         return true
     }
 }

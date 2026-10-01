@@ -87,6 +87,23 @@ func testAutofocusPlan() throws {
     catch AutofocusError.noStar { }
 }
 
+func testAutofocusExposurePolicy() throws {
+    try expectUI(try AutofocusExposureControl.nextMicroseconds(current: 10000, peak: 65535) == 2000,
+                 "clipped readings need a large backoff, not a proportional estimate")
+    try expectUI(try AutofocusExposureControl.nextMicroseconds(current: 10000, peak: 32768) == 10000,
+                 "half-scale exposure leaves headroom")
+    try expectUI(try AutofocusExposureControl.nextMicroseconds(current: 10000, peak: 50000) < 7000,
+                 "bright but unclipped readings also shorten exposure")
+    try expectUI(try AutofocusExposureControl.nextMicroseconds(current: 10000, peak: 1000) == ExposureControl.maxMicroseconds,
+                 "faint stars respect the camera maximum")
+    try expectUI(try AutofocusExposureControl.nextMicroseconds(current: 100, peak: 60000) == ExposureControl.minMicroseconds,
+                 "usable readings respect the camera minimum")
+    do {
+        _ = try AutofocusExposureControl.nextMicroseconds(current: 100, peak: 65535)
+        throw UIModelExpectation(description: "minimum exposure saturation accepted")
+    } catch AutofocusError.exposureLimit { }
+}
+
 private final class FocusTestFocuser: FocuserDevice, @unchecked Sendable {
     private let lock = NSLock()
     private var state = FocuserSnapshot(serialNumber: "ESATTO-AF-TEST", position: 12000, maxPosition: 440000, isMoving: false)
@@ -97,6 +114,7 @@ private final class FocusTestFocuser: FocuserDevice, @unchecked Sendable {
     private var failed = false
     private var moveGate: DispatchSemaphore?
     let moveEntered = DispatchSemaphore(value: 0)
+    init(position: Int = 12000) { state.position = position }
     var position: Int { lock.withLock { state.position } }
     var moves: [Int] { lock.withLock { history } }
     var stopCount: Int { lock.withLock { stops } }
@@ -129,7 +147,8 @@ private final class FocusTestFocuser: FocuserDevice, @unchecked Sendable {
 private final class FocusTestCamera: CameraDevice, @unchecked Sendable {
     let descriptor = CameraDescriptor(id: "focus-test", name: "Focus test camera", sensorWidth: 128,
                                       sensorHeight: 128, pixelSizeMicrons: 3.76, isSimulator: false)
-    var controls = CameraControls(exposureMicroseconds: 10000)
+    private var cameraControls = CameraControls(exposureMicroseconds: 10000)
+    var controls: CameraControls { lock.withLock { cameraControls } }
     var currentROI = ROI(x: 0, y: 0, width: 128, height: 128)
     let supportedBins = [1]
     private let focuser: FocusTestFocuser
@@ -141,15 +160,41 @@ private final class FocusTestCamera: CameraDevice, @unchecked Sendable {
     private var flat = false
     private var badVerification = false
     private var frames = 0
-    init(focuser: FocusTestFocuser) { self.focuser = focuser }
+    private var exposureResponse = true
+    private var brightness = 1.0
+    private var constantFlux = false
+    private var verificationBrightness = false
+    private var permanentlyClipped = false
+    private var bufferCount = 0
+    private var bufferedExposures: [Int] = []
+    private var exposureHistory: [Int] = []
+    private let startingSigma: Double
+    var exposures: [Int] { lock.withLock { exposureHistory } }
+    init(focuser: FocusTestFocuser) {
+        self.focuser = focuser
+        startingSigma = sqrt(4 + pow(Double(focuser.position - 12350) / 450, 2))
+    }
+    func configureExposure(brightness: Double = 1, constantFlux: Bool = false,
+                           verificationBrightness: Bool = false, permanentlyClipped: Bool = false, bufferCount: Int = 0) {
+        lock.withLock {
+            exposureResponse = true; self.brightness = brightness; self.constantFlux = constantFlux
+            self.verificationBrightness = verificationBrightness; self.permanentlyClipped = permanentlyClipped
+            self.bufferCount = bufferCount
+        }
+    }
     func configure(oldFrames: Bool = false, missingStar: Bool = false, duplicateFrames: Bool = false,
                    flat: Bool = false, badVerification: Bool = false) {
         lock.withLock { self.oldFrames = oldFrames; self.missingStar = missingStar; self.duplicateFrames = duplicateFrames; self.flat = flat; self.badVerification = badVerification }
     }
     func open() throws { lock.withLock { stopped = false } }
     func close() { lock.withLock { stopped = true } }
-    func applyExposure(_ value: Int) throws { controls.exposureMicroseconds = value }
-    func applyGain(_ value: Int) throws { controls.gain = value }
+    func applyExposure(_ value: Int) throws {
+        lock.withLock {
+            bufferedExposures = Array(repeating: cameraControls.exposureMicroseconds, count: bufferCount)
+            cameraControls.exposureMicroseconds = value; exposureHistory.append(value)
+        }
+    }
+    func applyGain(_ value: Int) throws { lock.withLock { cameraControls.gain = value } }
     func applyROI(_ roi: ROI) throws { currentROI = roi }
     func startVideo() throws { }
     func stopVideo() { }
@@ -161,8 +206,16 @@ private final class FocusTestCamera: CameraDevice, @unchecked Sendable {
         let sigma = config.4 ? 3 : sqrt(4 + pow(Double(focuser.position - 12350) / 450, 2))
         // Seeing occasionally broadens a frame; five-frame medians must survive.
         let seeing = config.6 && focuser.moves.count == 12 ? 3.0 : config.5 % 7 == 0 ? 1.35 : 1.0
+        let peak: Double = lock.withLock {
+            let exposure = bufferedExposures.isEmpty ? cameraControls.exposureMicroseconds : bufferedExposures.removeFirst()
+            if permanentlyClipped { return 100000 }
+            guard exposureResponse else { return 30000 }
+            let fluxScale = constantFlux ? pow(startingSigma / sigma, 2) : 1
+            let finalScale = verificationBrightness && focuser.moves.count >= 12 ? 5.0 : 1.0
+            return 30000 * brightness * fluxScale * finalScale * Double(exposure) / 10000
+        }
         let timestamp = config.1 ? Date.distantPast : config.3 ? Date(timeIntervalSince1970: 4_000_000_000) : Date()
-        return focusFrame(sigma: sigma * seeing, peak: config.2 ? 0 : 30000, timestamp: timestamp)
+        return focusFrame(sigma: sigma * seeing, peak: config.2 ? 0 : peak, timestamp: timestamp)
     }
 }
 
@@ -176,11 +229,11 @@ private func waitForFocus(_ condition: () -> Bool, timeout: TimeInterval = 15) a
 }
 
 @MainActor
-private func focusTestEngine(_ suffix: String, timing: AutofocusTiming = AutofocusTiming(motionTimeout: 1, frameTimeout: 1, settleSeconds: 0.02)) async throws -> (CollimationEngine, FocusTestFocuser, FocusTestCamera, String) {
+private func focusTestEngine(_ suffix: String, position: Int = 12000, timing: AutofocusTiming = AutofocusTiming(motionTimeout: 1, frameTimeout: 1, settleSeconds: 0.02)) async throws -> (CollimationEngine, FocusTestFocuser, FocusTestCamera, String) {
     let suite = "collimation-camera.tests.autofocus.\(suffix)"
     let defaults = UserDefaults(suiteName: suite)!
     defaults.removePersistentDomain(forName: suite)
-    let focuser = FocusTestFocuser()
+    let focuser = FocusTestFocuser(position: position)
     let camera = FocusTestCamera(focuser: focuser)
     let engine = CollimationEngine(defaults: defaults, serialPortPaths: { ["COM4"] }, focuser: focuser,
                                    cameraFactory: { _ in camera }, autofocusTiming: timing)
@@ -213,6 +266,100 @@ func testAutofocusEngineSuccess() async throws {
     try expectUI(focuser.moves.count == 12 && focuser.moves.first == 9500, "one preload, nine points and two final-approach moves")
     try expectUI(Array(focuser.moves.suffix(2)) == [position - 500, position], "final approach matches scan direction")
     try expectUI(engine.canMoveFocuser && engine.canAutoExpose && engine.canAdjustCamera, "success releases interlocks")
+}
+
+@MainActor
+func testAutofocusExposureStartup() async throws {
+    for mode in ["clipped", "buffered", "faint"] {
+        let (engine, focuser, camera, suite) = try await focusTestEngine("exposure-\(mode)")
+        defer { engine.disconnect(); engine.disconnectFocuser(); engine.shutdown(); UserDefaults.standard.removePersistentDomain(forName: suite) }
+        camera.configureExposure(brightness: mode == "faint" ? 0.1 : 10, bufferCount: mode == "buffered" ? 2 : 0)
+        try await waitForFocus { mode == "faint" ? (engine.tracking.detection?.peak ?? 65535) < 5000
+                                                 : (engine.tracking.detection?.peak ?? 0) >= StarQuality.clipADU }
+        try expectUI(engine.canAutofocus, "a clipped tracked star can start autofocus")
+        engine.startAutofocus()
+        try await waitForFocus { !focuser.moves.isEmpty || !engine.isAutofocusing }
+        try expectUI(!camera.exposures.isEmpty && (mode == "faint" ? engine.exposureMicroseconds > 50000 : engine.exposureMicroseconds < 2000),
+                     "exposure is selected before the first motor command")
+        try await waitForFocus { !engine.isAutofocusing }
+        guard case .complete(let position, _) = engine.autofocusState else {
+            throw UIModelExpectation(description: "\(mode) exposure failed: \(engine.errorMessage ?? "no error")")
+        }
+        try expectUI(abs(position - 12350) < 120 && focuser.moves.count == 12, "\(mode) obtains verified focus without a restart")
+        try expectUI(engine.autofocusSamples.count == 9 && Set(engine.autofocusSamples.compactMap(\.exposureMicroseconds)).count == 1,
+                     "all retained samples share the selected exposure")
+    }
+}
+
+@MainActor
+func testAutofocusExposureScanRecovery() async throws {
+    let (engine, focuser, camera, suite) = try await focusTestEngine("exposure-scan", position: 14000)
+    defer { engine.disconnect(); engine.disconnectFocuser(); engine.shutdown(); UserDefaults.standard.removePersistentDomain(forName: suite) }
+    engine.autofocusStepSize = 750
+    camera.configureExposure(constantFlux: true)
+    engine.startAutofocus()
+    try await waitForFocus({ !engine.isAutofocusing }, timeout: 25)
+    guard case .complete(let position, _) = engine.autofocusState else {
+        throw UIModelExpectation(description: "scan saturation failed: \(engine.errorMessage ?? "no error")")
+    }
+    try expectUI(engine.autofocusExposureRetries > 0 && abs(position - 12350) < 150,
+                 "a sharpening star triggers exposure recovery and verified focus")
+    try expectUI(engine.autofocusSamples.count == 9 && Set(engine.autofocusSamples.compactMap(\.exposureMicroseconds)).count == 1,
+                 "partial curves at old exposures are discarded")
+    try expectUI(engine.exposureMicroseconds < 4000 && focuser.moves.allSatisfy({ (10250...17000).contains($0) }),
+                 "recovery keeps the shorter exposure and original travel bounds")
+}
+
+@MainActor
+func testAutofocusExposureVerificationRecovery() async throws {
+    let (engine, _, camera, suite) = try await focusTestEngine("exposure-verify")
+    defer { engine.disconnect(); engine.disconnectFocuser(); engine.shutdown(); UserDefaults.standard.removePersistentDomain(forName: suite) }
+    camera.configureExposure(verificationBrightness: true)
+    engine.startAutofocus()
+    try await waitForFocus({ !engine.isAutofocusing }, timeout: 25)
+    guard case .complete(let position, _) = engine.autofocusState else {
+        throw UIModelExpectation(description: "verification saturation failed: \(engine.errorMessage ?? "no error")")
+    }
+    try expectUI(engine.autofocusExposureRetries == 1 && abs(position - 12350) < 120,
+                 "clipped final verification restarts the whole curve")
+    try expectUI(engine.autofocusSamples.count == 9 && Set(engine.autofocusSamples.compactMap(\.exposureMicroseconds)).count == 1,
+                 "verification compares a complete curve at the new exposure")
+}
+
+@MainActor
+func testAutofocusExposureLimit() async throws {
+    let (engine, focuser, camera, suite) = try await focusTestEngine("exposure-limit")
+    defer { engine.disconnect(); engine.disconnectFocuser(); engine.shutdown(); UserDefaults.standard.removePersistentDomain(forName: suite) }
+    camera.configureExposure(permanentlyClipped: true)
+    engine.startAutofocus()
+    try await waitForFocus { !engine.isAutofocusing }
+    try await waitForFocus { !engine.isFocuserBusy }
+    try expectUI(engine.autofocusState == .failed && engine.errorMessage == AutofocusError.exposureLimit.localizedDescription,
+                 "unrecoverable clipping reports the exposure limit")
+    try expectUI(engine.exposureMicroseconds == 100 && focuser.moves.isEmpty && focuser.stopCount > 0,
+                 "minimum-exposure failure never moves the motor")
+}
+
+@MainActor
+func testAutofocusExposureCancellation() async throws {
+    let (engine, focuser, camera, suite) = try await focusTestEngine("exposure-cancel")
+    defer { engine.disconnect(); engine.disconnectFocuser(); engine.shutdown(); UserDefaults.standard.removePersistentDomain(forName: suite) }
+    camera.configureExposure(brightness: 100)
+    let previousRequests = camera.exposures.count
+    engine.startAutofocus()
+    try await waitForFocus { camera.exposures.count > previousRequests }
+    engine.stopFocuser()
+    let exposure = engine.exposureMicroseconds
+    try await Task.sleep(for: .milliseconds(300))
+    try expectUI(engine.autofocusState == .cancelled && engine.exposureMicroseconds == exposure && focuser.moves.isEmpty,
+                 "Stop cancels exposure selection and prevents subsequent commands")
+    try expectUI(engine.canAdjustCamera && !engine.isAutofocusing, "cancellation releases camera controls")
+    try await waitForFocus { engine.canAutofocus }
+    engine.startAutofocus()
+    engine.stopFocuser()
+    try await Task.sleep(for: .milliseconds(100))
+    try expectUI(engine.autofocusState == .cancelled && focuser.moves.isEmpty,
+                 "cancelling before the autofocus task starts cannot overwrite cancelled status")
 }
 
 @MainActor

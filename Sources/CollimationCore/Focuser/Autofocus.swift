@@ -8,6 +8,8 @@ public enum AutofocusError: Error, LocalizedError, Sendable {
     case minimumNotBracketed
     case flatCurve
     case verificationFailed
+    case exposureLimit
+    case unstableExposure
 
     public var errorDescription: String? {
         switch self {
@@ -18,6 +20,8 @@ public enum AutofocusError: Error, LocalizedError, Sendable {
         case .minimumNotBracketed: return "The best focus is at the scan edge. Move toward that edge or increase the autofocus step and try again."
         case .flatCurve: return "The autofocus curve has no clear minimum. Increase the autofocus step and try again."
         case .verificationFailed: return "Focus verification was worse than the scan minimum. Check seeing, exposure and backlash, then try again."
+        case .exposureLimit: return "The star is still saturated at minimum exposure. Reduce camera gain or star brightness and try autofocus again."
+        case .unstableExposure: return "Autofocus could not stabilise the star exposure. Check changing illumination or camera gain and try again."
         }
     }
 }
@@ -26,11 +30,15 @@ public struct AutofocusSample: Equatable, Sendable {
     public let position: Int
     /// Half-flux radius in unbinned sensor pixels, measured on raw ADU.
     public let hfr: Double
-    public init(position: Int, hfr: Double) { self.position = position; self.hfr = hfr }
+    public let exposureMicroseconds: Int?
+    public init(position: Int, hfr: Double, exposureMicroseconds: Int? = nil) {
+        self.position = position; self.hfr = hfr; self.exposureMicroseconds = exposureMicroseconds
+    }
 }
 
 public enum AutofocusState: Equatable, Sendable {
     case idle
+    case adjustingExposure(microseconds: Int)
     case checkingStar(frames: Int)
     case moving(position: Int)
     case measuring(position: Int, frames: Int)
@@ -39,6 +47,38 @@ public enum AutofocusState: Equatable, Sendable {
     case cancelled
     case failed
 }
+
+/// Leave headroom for a sharper star and seeing fluctuations. Clipped peaks
+/// cannot reveal the actual brightness, so back off before proportional tuning.
+public enum AutofocusExposureControl {
+    public static let maximumRestarts = 4
+    public static let maximumAdjustments = 12
+
+    public static func nextMicroseconds(current: Int, peak: UInt16) throws -> Int {
+        let current = max(ExposureControl.minMicroseconds, min(ExposureControl.maxMicroseconds, current))
+        if peak >= StarQuality.clipADU {
+            guard current > ExposureControl.minMicroseconds else { throw AutofocusError.exposureLimit }
+            return max(ExposureControl.minMicroseconds, Int(Double(current) * 0.2))
+        }
+        let fraction = Double(peak) / 65535
+        if fraction >= 0.45 && fraction <= 0.60 { return current }
+        let proposed = Double(current) * 0.50 / max(fraction, 1.0 / 65535)
+        return Int(max(Double(ExposureControl.minMicroseconds),
+                       min(Double(ExposureControl.maxMicroseconds), proposed)).rounded())
+    }
+}
+
+/// Independent of HFR: clipped stars have useful exposure feedback even when
+/// their flux radius is invalid. Scalars avoid SIMD transfers through async calls.
+struct FocusExposureReading: Sendable {
+    let peak: UInt16
+    let snr: Double
+    let sensorX: Double
+    let sensorY: Double
+    let detected: Bool
+}
+
+struct AutofocusExposureChanged: Error {}
 
 public struct AutofocusTiming: Sendable {
     public var motionTimeout: TimeInterval
