@@ -57,9 +57,12 @@ limited to four restarts; saturation at 100 µs reports a clear error.
 The first point and final target are approached outward from one step below,
 so allow five steps of inward travel and four outward from the starting
 position. The step should exceed mechanical backlash and produce a visible
-change in star size. A flat curve needs a larger step; a scan-edge minimum
-needs a different starting position or wider scan. Travel never expands
-automatically. **Stop**, focuser **Disconnect**, or camera **Disconnect**
+change in star size. A flat curve needs a larger step. When the lowest HFR is
+at an edge and the full curve supports an improving slope, autofocus
+re-centres the scan toward that edge. It keeps following the slope while
+focus improves and calibrated travel allows another window. Weak or noisy
+slopes, direction reversals, loss of improvement and exhausted travel report
+clear errors. **Stop**, focuser **Disconnect**, or camera **Disconnect**
 cancels autofocus and attempts to stop the motor. Failure leaves it at the
 current position and reports the reason. Exposure/gain changes, manual focus,
 stacking, mount work and filter moves are locked during a run. Autofocus is

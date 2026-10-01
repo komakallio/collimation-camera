@@ -175,6 +175,7 @@ public final class CollimationEngine {
     public private(set) var autofocusState: AutofocusState = .idle
     public private(set) var autofocusSamples: [AutofocusSample] = []
     public private(set) var autofocusExposureRetries = 0
+    public private(set) var autofocusRecenters = 0
     @ObservationIgnored private var autofocusTask: Task<Void, Never>?
     @ObservationIgnored private var autofocusID: UUID?
     @ObservationIgnored private var autofocusCancellation: AutofocusCancellation?
@@ -1010,6 +1011,7 @@ public final class CollimationEngine {
             autofocusCancellation = cancellation
             autofocusSamples = []
             autofocusExposureRetries = 0
+            autofocusRecenters = 0
             autofocusFrames = []
             autofocusExposureFrames = []
             autofocusHasSaturation = false
@@ -1023,22 +1025,24 @@ public final class CollimationEngine {
             errorMessage = nil
             applyPipelineConfig()
             Log.info("Autofocus start: \(state.position), step \(plan.step), scan \(plan.positions.first!)–\(plan.positions.last!)")
-            autofocusTask = Task { await self.runAutofocus(plan: plan, id: id, cancellation: cancellation) }
+            autofocusTask = Task { await self.runAutofocus(plan: plan, maximum: state.maxPosition, id: id, cancellation: cancellation) }
         } catch { presentError(error) }
     }
 
-    private func runAutofocus(plan: AutofocusPlan, id: UUID, cancellation: AutofocusCancellation) async {
+    private func runAutofocus(plan initialPlan: AutofocusPlan, maximum: Int, id: UUID, cancellation: AutofocusCancellation) async {
+        var plan = initialPlan
+        var search = AutofocusSearch()
         do {
             try Task.checkCancellation()
             try cancellation.check()
             try await autofocusSelectExposure(cancellation: cancellation)
             while true {
                 do {
-                    if autofocusExposureRetries > 0 {
-                        // Recheck the baseline at the new exposure, approaching
-                        // from the same direction as every scan and final move.
+                    if autofocusExposureRetries > 0 || autofocusRecenters > 0 {
+                        // Recheck the baseline after exposure or range changes,
+                        // using the same approach as every scan and final move.
                         try await autofocusMove(to: plan.positions[4] - plan.step, cancellation: cancellation)
-                        try await autofocusMove(to: plan.positions[4], cancellation: cancellation)
+                        try await autofocusMove(to: plan.positions[4], recentering: autofocusRecenters > 0, cancellation: cancellation)
                     }
                     let initialHFR = try await autofocusMeasure(at: plan.positions[4], verifying: false,
                                                                checkingStar: true, cancellation: cancellation)
@@ -1064,8 +1068,14 @@ public final class CollimationEngine {
                     return
                 } catch is AutofocusExposureChanged {
                     autofocusExposureRetries += 1
+                    search.exposureChanged()
                     autofocusSamples = []
                     Log.info("Autofocus restarting curve after saturation (\(autofocusExposureRetries)/\(AutofocusExposureControl.maximumRestarts))")
+                } catch AutofocusError.minimumNotBracketed {
+                    plan = try search.recenter(plan: plan, samples: autofocusSamples, maximum: maximum)
+                    autofocusRecenters += 1
+                    autofocusSamples = []
+                    Log.info("Autofocus re-centering \(autofocusRecenters): center \(plan.positions[4]), scan \(plan.positions.first!)–\(plan.positions.last!)")
                 }
             }
         } catch {
@@ -1099,11 +1109,11 @@ public final class CollimationEngine {
         return result
     }
 
-    private func autofocusMove(to position: Int, cancellation: AutofocusCancellation) async throws {
+    private func autofocusMove(to position: Int, recentering: Bool = false, cancellation: AutofocusCancellation) async throws {
         try Task.checkCancellation()
         try cancellation.check()
         autofocusAcceptAfter = .distantFuture
-        autofocusState = .moving(position: position)
+        autofocusState = recentering ? .recentering(position: position) : .moving(position: position)
         focuserTargetPosition = position
         _ = try await autofocusOperation(cancellation: cancellation) { try $0.move(to: position) }
         let deadline = Date().addingTimeInterval(autofocusTiming.motionTimeout)

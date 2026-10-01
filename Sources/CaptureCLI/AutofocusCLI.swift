@@ -63,24 +63,25 @@ enum AutofocusCLI {
             throw Failure(message: "Autofocus is unavailable. Check star tracking and the calibrated focuser travel.")
         }
         engine.startAutofocus()
-        let runDeadline = Date().addingTimeInterval(240)
+        var progressDeadline = Date().addingTimeInterval(120)
         var lastState = AutofocusState.idle
         while engine.isAutofocusing {
             if engine.autofocusState != lastState {
                 lastState = engine.autofocusState
+                progressDeadline = Date().addingTimeInterval(120)
                 print("Focus: \(lastState)")
             }
-            guard Date() < runDeadline else {
+            guard Date() < progressDeadline else {
                 engine.stopFocuser()
-                throw Failure(message: "Autofocus exceeded the four-minute command-line limit and was stopped.")
+                throw Failure(message: "Autofocus made no progress for two minutes and was stopped.")
             }
             try await Task.sleep(for: .milliseconds(40))
         }
         guard case .complete(let position, let hfr) = engine.autofocusState else {
             throw Failure(message: engine.errorMessage ?? "Autofocus cancelled or failed.")
         }
-        print(String(format: "Autofocus verified: %d steps, HFR %.3f sensor pixels, exposure %.3f ms, %d saturation restarts",
-                     position, hfr, engine.exposureMicroseconds / 1000, engine.autofocusExposureRetries))
+        print(String(format: "Autofocus verified: %d steps, HFR %.3f sensor pixels, exposure %.3f ms, %d saturation restarts, %d scan re-centers",
+                     position, hfr, engine.exposureMicroseconds / 1000, engine.autofocusExposureRetries, engine.autofocusRecenters))
         return true
     }
 }

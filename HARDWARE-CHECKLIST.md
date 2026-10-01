@@ -179,8 +179,13 @@ below. Manual Stop, unplug and quit acceptance on real hardware remain pending.
   motor move. Check the chosen exposure and final result in the log.
 - Start defocused so the star clips later: autofocus must shorten exposure
   and remeasure the complete curve. All retained points must use one exposure.
+- Start with focus outside the initial scan: a supported HFR slope must
+  re-centre the scan toward the improving edge until focus is bracketed.
+  Check multiple shifts, both directions, exposure recovery and final approach.
+- A weak/inconsistent edge slope must not initiate another scan. Confirm
+  continuing slopes stop at calibrated travel, with every preload in range.
 - Cover the camera: autofocus must report a measurement failure. Saturation
-  persisting at minimum exposure, a flat curve or a scan-edge minimum must fail clearly.
+  persisting at minimum exposure or a flat curve must fail clearly.
 - Confirm manual focus, exposure/gain, stacking, mount work and filter moves
   are blocked throughout autofocus, including its frame-collection periods.
 
@@ -206,6 +211,14 @@ native-driver poll confirmed the motor stopped at 315930. The Windows release
 build, all **133 tests**, and the portable sidebar render passed. Synthetic
 optical tests additionally verified exposure recovery during scanning and
 final verification, complete curve replacement, and Stop during selection.
+
+Scan re-centering was then exercised from **332930 steps** on COM4. Four
+inward shifts moved the centre to 328930, 324930, 320930 and 316930, bracketing
+focus near 315939; four exposure recoveries completed replacement curves.
+The final HFR quality check rejected that run. An immediate follow-up passed
+at **315942 steps**, HFR **1.052 pixels**, exposure **0.532 ms**, without any
+range shifts. All **139 core tests** passed, including both search directions,
+travel exhaustion, slope rejection and cancellation during re-centering.
 
 The original autofocus Windows release build and its 127 core tests passed. The portable sidebar
 rendered at 1280×1000 with no widget conflicts. Full optical acceptance used

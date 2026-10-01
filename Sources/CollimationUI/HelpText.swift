@@ -10,7 +10,7 @@ public enum HelpText {
     public static let focuser = "ESATTO USB focuser. In decreases the position; Out increases it. Moves use the device's calibrated travel range."
     public static let focuserStepSize = "Distance in motor steps for each In or Out move."
     public static let focuserTarget = "Absolute position in motor steps. Enter a target, then press Go to."
-    public static let autofocus = "Choose exposure automatically, then scan nine positions using the tracked star's half-flux radius. Saturation shortens exposure and restarts the scan. Requires a real camera and room within calibrated travel. Stop cancels the run."
+    public static let autofocus = "Choose exposure automatically, then scan nine positions using the tracked star's half-flux radius. Follow a valid slope by re-centering within calibrated travel until a minimum is bracketed. Saturation shortens exposure and restarts the scan. Stop cancels the run."
     public static let autofocusStep = "Spacing in motor steps between autofocus samples. The scan covers four steps either side, plus one inward step for the approach. Choose a step larger than backlash. A flat curve needs a larger step."
     public static let stackCount = "Number of 256×256 frames to capture and average"
 

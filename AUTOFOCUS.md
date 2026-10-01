@@ -20,6 +20,15 @@
 4. Require an interior minimum with both endpoints at least 5% worse.
    Interpolate a quadratic in HFR squared through its three neighbours and
    verify the final position with another five frames (15% tolerance).
+   For an edge minimum, validate the slope using median HFR in three groups
+   of three points and the median pairwise slope: each group must improve
+   by >2%, the end groups by >5%, the median slope by >0.5% per step, and
+   at least 75% of point pairs must improve toward that edge. Re-centre the
+   next nine-point window on the best edge (four sample steps), clamped to
+   allow a complete scan and preload inside calibrated travel. Repeat while
+   the direction remains consistent and the next edge HFR improves >2%.
+   There is no fixed re-centre count; calibrated bounds and progress checks
+   terminate the search. Exposure changes reset the HFR progress comparison.
 5. Keep serial work off the main actor. Stop/disconnect/camera loss cancel the
    run and prevent queued motion from continuing. Time out moves and samples.
    Lock manual focus, exposure/gain changes, stacking, mount work and filter
@@ -44,9 +53,12 @@ The driver now treats any non-stop motor phase as movement as well as BUSY,
 so autofocus and manual controls wait for complete deceleration. A protocol
 regression test covers this transition and malformed phase replies.
 
-The scan intentionally does not expand travel automatically. It leaves the
-focuser at its current position on failure/cancellation and sends Stop; the
-user can adjust the step or starting point before retrying. The one-step
+The search automatically shifts its scan range while a valid improving slope
+exists, within calibrated travel. It leaves the focuser at its current position
+on failure/cancellation and sends Stop. Each new window rechecks a baseline
+at its centre using the same outward approach as the scan and final target.
+The CLI watches for two minutes without progress rather than imposing a
+four-minute total run limit on a continuing search. The one-step
 approach must exceed the system's backlash. This first version focuses the
 single tracked star and does not include temperature/filter compensation.
 
@@ -110,3 +122,36 @@ hardware.
 ```powershell
 scripts\run-win.ps1 -Product capture-cli -Configuration release --autofocus COM4 --device poa-0 --focus-step 1000 --exposure 20
 ```
+
+## Scan re-centering validation, 1 October 2026
+
+- Windows release build passed for all products; all **139 core tests** passed.
+  Added coverage follows slopes in both directions, tolerates a seeing
+  outlier, rejects weak/jagged/isolated-edge trends and mixed exposures,
+  checks large-position overflow, clamps the last full window to either
+  travel limit, and rejects reversals or lack of improvement. A pure search
+  test continues through ten shifts. Optical fixtures converge after two
+  shifts, including saturation recovery, and Stop prevents queued new moves.
+- Real Xena 585M / ESATTO30136 on COM4 started at **332930 steps**, far
+  outside the earlier measured focus. With 1000-step spacing, the search
+  followed the inward slope through four re-centres:
+
+  | Scan centre | Scan range | Lowest median HFR |
+  |---|---|---|
+  | 332930 | 328930–336930 | 15.817 |
+  | 328930 | 324930–332930 | 10.816 |
+  | 324930 | 320930–328930 | 6.021 |
+  | 320930 | 316930–324930 | 1.566 |
+  | 316930 | 312930–320930 | 0.793 |
+
+- This run also exercised four exposure recoveries, ending at 0.521 ms.
+  It bracketed focus and fitted 315939 steps, but the final HFR verification
+  failed against the unusually low scan minimum. The quality check remained
+  unchanged and sent Stop; this was not a successful verified autofocus run.
+- An immediate follow-up from 315939 passed the full optical check at
+  **315942 steps**, HFR **1.052 sensor pixels**, exposure **0.532 ms**. It
+  required no range shifts. Re-centering convergence and final verification
+  are therefore recorded separately; the combined first run was rejected.
+- A separate native-driver poll confirmed stopped at 315942. The portable
+  sidebar rendered at 1280×1000 with no widget conflicts; import checks and
+  `git diff --check` passed.

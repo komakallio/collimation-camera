@@ -10,6 +10,9 @@ public enum AutofocusError: Error, LocalizedError, Sendable {
     case verificationFailed
     case exposureLimit
     case unstableExposure
+    case invalidSlope
+    case searchTravelLimit
+    case searchNotImproving
 
     public var errorDescription: String? {
         switch self {
@@ -17,11 +20,14 @@ public enum AutofocusError: Error, LocalizedError, Sendable {
         case .noStar: return "Autofocus could not measure five fresh star frames. Check tracking, exposure, saturation and whether the whole star fits in the ROI."
         case .motionTimeout: return "Autofocus timed out waiting for the focuser to stop."
         case .positionMismatch: return "The focuser stopped before reaching the autofocus target."
-        case .minimumNotBracketed: return "The best focus is at the scan edge. Move toward that edge or increase the autofocus step and try again."
+        case .minimumNotBracketed: return "Autofocus could not bracket a focus minimum. Check the star and autofocus step."
         case .flatCurve: return "The autofocus curve has no clear minimum. Increase the autofocus step and try again."
         case .verificationFailed: return "Focus verification was worse than the scan minimum. Check seeing, exposure and backlash, then try again."
         case .exposureLimit: return "The star is still saturated at minimum exposure. Reduce camera gain or star brightness and try autofocus again."
         case .unstableExposure: return "Autofocus could not stabilise the star exposure. Check changing illumination or camera gain and try again."
+        case .invalidSlope: return "The best focus is at the scan edge, but the slope is too weak or inconsistent to follow. Check seeing and increase the autofocus step."
+        case .searchTravelLimit: return "Autofocus reached the calibrated travel limit while following the focus slope. Move the optical focus within the focuser's range or reduce the autofocus step."
+        case .searchNotImproving: return "The autofocus slope reversed or stopped improving after re-centering. Check seeing, star tracking and backlash, then try again."
         }
     }
 }
@@ -39,6 +45,7 @@ public struct AutofocusSample: Equatable, Sendable {
 public enum AutofocusState: Equatable, Sendable {
     case idle
     case adjustingExposure(microseconds: Int)
+    case recentering(position: Int)
     case checkingStar(frames: Int)
     case moving(position: Int)
     case measuring(position: Int, frames: Int)
@@ -114,10 +121,7 @@ public struct AutofocusPlan: Sendable {
     /// Interpolate HFR squared around the lowest point. Normalised coordinates
     /// avoid ill-conditioned fits to large absolute ESATTO motor positions.
     public func solution(samples: [AutofocusSample]) throws -> Int {
-        guard samples.count == positions.count,
-              zip(samples, positions).allSatisfy({ $0.position == $1 && $0.hfr.isFinite && $0.hfr > 0 })
-        else { throw AutofocusError.noStar }
-        let best = samples.indices.min { samples[$0].hfr < samples[$1].hfr }!
+        let best = try minimumIndex(samples: samples)
         let low = samples[best].hfr
         guard samples.map(\.hfr).max()! > low * 1.05 else { throw AutofocusError.flatCurve }
         guard best > 0, best < samples.count - 1 else { throw AutofocusError.minimumNotBracketed }
@@ -134,6 +138,41 @@ public struct AutofocusPlan: Sendable {
         return samples[best].position + Int((offset * Double(step)).rounded())
     }
 
+    private func minimumIndex(samples: [AutofocusSample]) throws -> Int {
+        guard samples.count == positions.count,
+              zip(samples, positions).allSatisfy({ $0.position == $1 && $0.hfr.isFinite && $0.hfr > 0 }),
+              samples.allSatisfy({ $0.exposureMicroseconds == samples.first?.exposureMicroseconds })
+        else { throw AutofocusError.noStar }
+        return samples.indices.min { samples[$0].hfr < samples[$1].hfr }!
+    }
+
+    /// Follow a supported edge trend, with half the old window overlapping.
+    /// Median thirds and pairwise slopes reject an isolated low edge reading.
+    public func recentered(samples: [AutofocusSample], maximum: Int) throws -> AutofocusPlan {
+        let best = try minimumIndex(samples: samples)
+        guard best == 0 || best == samples.count - 1 else { throw AutofocusError.minimumNotBracketed }
+        let towardEdge = best == 0 ? samples.reversed().map(\.hfr) : samples.map(\.hfr)
+        let far = Self.median(Array(towardEdge[0..<3]))
+        let middle = Self.median(Array(towardEdge[3..<6]))
+        let near = Self.median(Array(towardEdge[6..<9]))
+        var slopes: [Double] = []
+        for i in 0..<towardEdge.count {
+            for j in (i + 1)..<towardEdge.count {
+                slopes.append((towardEdge[j] - towardEdge[i]) / Double(j - i))
+            }
+        }
+        guard far > middle * 1.02, middle > near * 1.02, far > near * 1.05,
+              Self.median(slopes) < -Self.median(towardEdge) * 0.005,
+              slopes.filter({ $0 < 0 }).count * 4 >= slopes.count * 3 else {
+            throw AutofocusError.invalidSlope
+        }
+        // The current plan has already proved these multiplications safe.
+        guard maximum >= positions.last! else { throw AutofocusError.searchTravelLimit }
+        let center = max(5 * step, min(maximum - 4 * step, positions[best]))
+        guard center != positions[4] else { throw AutofocusError.searchTravelLimit }
+        return try AutofocusPlan(position: center, maximum: maximum, step: step)
+    }
+
     public static func median(_ values: [Double]) -> Double {
         guard !values.isEmpty else { return .nan }
         let sorted = values.sorted()
@@ -144,6 +183,27 @@ public struct AutofocusPlan: Sendable {
         guard samples.allSatisfy({ $0.hfr.isFinite && $0.hfr > 0 }),
               let best = samples.map(\.hfr).min(), hfr.isFinite, hfr > 0,
               hfr <= best * 1.15 else { throw AutofocusError.verificationFailed }
+    }
+}
+
+/// Calibrated travel bounds terminate a continuing slope. Reject reversals and
+/// lack of progress so changing seeing cannot make the motor shuttle forever.
+public struct AutofocusSearch: Sendable {
+    private var direction: Int?
+    private var previousBest: Double?
+    public init() {}
+
+    public mutating func exposureChanged() { previousBest = nil }
+
+    public mutating func recenter(plan: AutofocusPlan, samples: [AutofocusSample], maximum: Int) throws -> AutofocusPlan {
+        let next = try plan.recentered(samples: samples, maximum: maximum)
+        let nextDirection = next.positions[4] > plan.positions[4] ? 1 : -1
+        let best = samples.map(\.hfr).min()!
+        guard direction == nil || direction == nextDirection,
+              previousBest == nil || best < previousBest! * 0.98 else { throw AutofocusError.searchNotImproving }
+        direction = nextDirection
+        previousBest = best
+        return next
     }
 }
 

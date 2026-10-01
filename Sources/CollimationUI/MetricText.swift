@@ -10,6 +10,7 @@ public enum MetricText {
         switch state {
         case .idle: return "Autofocus ready"
         case .adjustingExposure(let microseconds): return String(format: "Focus exposure — %.2f ms", Double(microseconds) / 1000)
+        case .recentering(let position): return "Re-centering focus scan at \(position)"
         case .checkingStar(let frames): return "Checking star — \(frames)/5 frames"
         case .moving(let position): return "Autofocus — moving to \(position)"
         case .measuring(let position, let frames): return "Focus \(samples + 1)/9 at \(position) — \(frames)/5 frames"
