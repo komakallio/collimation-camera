@@ -34,6 +34,14 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
         return proto?.rawValue ?? "Disconnected"
     }
 
+    /// EQDIR and SynScan can perform a short 8x jog. LX200 pulse guiding
+    /// cannot select that speed, so retain its existing pulse path.
+    public var calibrationRAMultiple: Double {
+        lock.lock()
+        defer { lock.unlock() }
+        return proto == .skyWatcher || proto == .synScan ? 8 : 1
+    }
+
     public func connect(path: String, baud: Int = 9600) throws {
         lock.lock()
         defer { lock.unlock() }
@@ -305,9 +313,9 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
     private func initializeSkyWatcherLocked() throws {
         try skyCommandLocked("F", axis: 1, data: "")
         try skyCommandLocked("F", axis: 2, data: "")
-        if let period = SkyWatcherEncoding.plausibleSiderealPeriod(try? inquireNumberLocked("d", axis: 1)) {
-            siderealPeriod = period
-        } else if
+        // `d` returns an encoder position, not a sidereal step period.
+        // Derive the period from the timer frequency and steps per revolution.
+        if
             let steps = try? inquireNumberLocked("a", axis: 1),
             let freq = try? inquireNumberLocked("b", axis: 1),
             steps > 0, freq > 0

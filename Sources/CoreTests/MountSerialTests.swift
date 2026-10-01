@@ -123,7 +123,9 @@ private func skyWatcherScript() -> ScriptedSerialPortDriver {
         ":e1\r": "=020300\r",     // version inquiry, the probe
         ":F1\r": "=\r",           // initialize axis 1
         ":F2\r": "=\r",           // initialize axis 2
-        ":d1\r": "=402300\r",     // sidereal period 9024, little-endian hex24
+        ":d1\r": "=402300\r",     // encoder value that looks like a plausible period
+        ":a1\r": "=00A08C\r",     // 9,216,000 steps/revolution (recorded EQ6)
+        ":b1\r": "=BED100\r",     // 53,694 timer ticks/second -> period 502
         ":K1\r": "=\r",           // stop axis 1
         ":K2\r": "=\r",           // stop axis 2
     ])
@@ -271,10 +273,10 @@ func testEQ6PulseCommands() throws {
     synMount.disconnect()
 
     // SkyWatcher: G/I/J to start the axis, K to stop it. The I payload carries
-    // the sidereal period read during connect, which is what proves the :d1
-    // reply was parsed rather than falling back to the default.
+    // period derived from the recorded motor parameters. The misleading :d1
+    // encoder value must never be treated as a speed.
     let sky = skyWatcherScript()
-    for command in [":G210\r", ":I2402300\r", ":J2\r", ":K2\r"] {
+    for command in [":G210\r", ":I2F60100\r", ":J2\r", ":K2\r"] {
         sky.answer(Data(command.utf8), with: Data("=\r".utf8))
     }
     let skyMount = EQ6Mount(port: sky)
@@ -282,7 +284,8 @@ func testEQ6PulseCommands() throws {
     let beforeSky = sky.writes.count
     try runBlocking { try await skyMount.pulse(.north, milliseconds: 60) }
     let skySent = Array(sky.writtenASCII.dropFirst(beforeSky))
-    try expectUI(skySent == [":G210\\r", ":I2402300\\r", ":J2\\r", ":K2\\r"], "SkyWatcher pulse sent \(skySent)")
+    try expectUI(skySent == [":G210\\r", ":I2F60100\\r", ":J2\\r", ":K2\\r"], "SkyWatcher pulse sent \(skySent)")
+    try expectUI(!sky.writtenASCII.contains(":d1\\r"), "encoder is not a speed inquiry")
     skyMount.disconnect()
 }
 
@@ -357,4 +360,68 @@ func testLX200SilentMountConnectsAndPulses() throws {
     try runBlocking { try await mount.pulse(.east, milliseconds: 40) }
     mount.disconnect()
     try expectUI(!mount.isConnected, "disconnect closes it")
+}
+
+func testMountCentroidAsyncTransfer() throws {
+    try runBlocking {
+        let expected = SIMD2<Double>(1677.0061693659475, 579.4238940016818)
+        let start = try await settledCentroidSample(MountCentroidSample(expected))
+        for index in 1...4 {
+            let next = expected + SIMD2(Double(index) * -9, Double(index) * 7)
+            let sample = try await settledCentroidSample(MountCentroidSample(next))
+            try expectUI(sample.x == next.x && sample.y == next.y, "both centroid coordinates survive nested async returns: expected \(next), got \(sample), start \(start), original \(expected)")
+            try expectUI(start.point == expected, "original point survives subsequent suspensions")
+            let rate = MountGuide.rate(before: start.point, after: sample.point, durationMs: Double(index * 3000))
+            try expectUI(abs(rate.x + 0.003) < 1e-12 && abs(rate.y - 7.0 / 3000) < 1e-12, "both axes preserved in calibration rate")
+        }
+    }
+}
+
+@inline(never)
+private func settledCentroidSample(_ point: MountCentroidSample) async throws -> MountCentroidSample {
+    try await Task.sleep(nanoseconds: 1_000_000)
+    return try await readCentroidSample(point)
+}
+
+@inline(never)
+private func readCentroidSample(_ point: MountCentroidSample) async throws -> MountCentroidSample {
+    try await Task.sleep(nanoseconds: 1_000_000)
+    return MountCentroidSample(point.point)
+}
+
+func testCalibrationRAJog() throws {
+    let sky = skyWatcherScript()
+    for direction in ["10", "11"] {
+        sky.answer(Data(":G1\(direction)\r".utf8), with: Data("=\r".utf8))
+    }
+    sky.answer(Data(":I13F0000\r".utf8), with: Data("=\r".utf8))
+    sky.answer(Data(":J1\r".utf8), with: Data("=\r".utf8))
+    let mount = EQ6Mount(port: sky)
+    try mount.connect(path: "SCRIPT")
+    try expectUI(mount.calibrationRAMultiple == 8, "EQDIR calibration uses 8x")
+    for direction in [GuideDirection.east, .west] {
+        let before = sky.writes.count
+        try runBlocking {
+            try await mount.applyNudge(SlewNudge(ra: direction, dec: nil, siderealMultiple: mount.calibrationRAMultiple))
+            try await mount.applyNudge(nil)
+        }
+        let mode = direction == .east ? "10" : "11"
+        try expectUI(Array(sky.writtenASCII.dropFirst(before)) == [":K1\\r", ":G1\(mode)\\r", ":I13F0000\\r", ":J1\\r", ":K1\\r"], "RA jog starts at 8x, reverses direction, then stops")
+    }
+    mount.disconnect()
+    let syn = synScanScript()
+    syn.answer(SynScanGuide.fixedRateCommand(direction: .east, rate: 2), with: Data("#".utf8))
+    syn.answer(SynScanGuide.fixedRateCommand(direction: .east, rate: 0), with: Data("#".utf8))
+    let handset = EQ6Mount(port: syn)
+    try handset.connect(path: "SCRIPT")
+    try runBlocking {
+        try await handset.applyNudge(SlewNudge(ra: .east, dec: nil, siderealMultiple: handset.calibrationRAMultiple))
+        try await handset.applyNudge(nil)
+    }
+    try expectUI(syn.writes.contains(SynScanGuide.fixedRateCommand(direction: .east, rate: 2)), "SynScan uses rate 2 for calibration")
+    handset.disconnect()
+    let lx = EQ6Mount(port: lx200Script())
+    try lx.connect(path: "SCRIPT")
+    try expectUI(lx.calibrationRAMultiple == 1, "LX200 retains supported pulse guiding")
+    lx.disconnect()
 }

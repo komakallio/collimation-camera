@@ -35,6 +35,7 @@ public struct GuideCalibration: Equatable, Sendable, Codable {
     public var eastY: Double
     public var northX: Double
     public var northY: Double
+    /// Longest outbound motor time; each axis rate is normalised by its own time.
     public var sampleDurationMs: Int
     public var calibratedAt: Date
     /// Lost on-axis pixels when RA reverses, from the east-return residual.
@@ -439,11 +440,12 @@ public enum GuidePulsePlanner {
 
 public enum MountGuide {
     public static let calibrationPulseMs = 3000
+    public static let maxCalibrationAxisMs = 15_000
     public static let maxCenterIterations = 20
     public static let doneRadiusSensorPixels = 32.0
     public static let slewRadiusSensorPixels = 50.0
     public static let slewAxisStopPixels = 40.0
-    public static let minCalibrationMovePixels = 3.0
+    public static let minCalibrationMovePixels = 30.0
     public static let settleMilliseconds = 1_200
     public static let minNudgeSliceMs = 200
     public static let maxNudgeSliceMs = 1_500
@@ -456,6 +458,21 @@ public enum MountGuide {
     public static func rate(before: SIMD2<Double>, after: SIMD2<Double>, durationMs: Double) -> SIMD2<Double> {
         guard durationMs > 0 else { return .zero }
         return (after - before) / durationMs
+    }
+
+    /// Measure each axis independently: a short RA displacement must not be
+    /// accepted just because the same pulse moves Dec a long way. Keep pulses
+    /// short enough to check tracking and cancellation between measurements.
+    public static func nextCalibrationPulseMs(displacement: SIMD2<Double>, elapsedMs: Int) -> Int {
+        guard hypot(displacement.x, displacement.y) < minCalibrationMovePixels else { return 0 }
+        return min(calibrationPulseMs, max(0, maxCalibrationAxisMs - elapsedMs))
+    }
+
+    /// Require visible movement within a single pulse, rather than allowing
+    /// slow drift to accumulate while the gear train is still taking up slack.
+    public static func calibrationTakeupComplete(displacement: SIMD2<Double>) -> Bool {
+        let length = hypot(displacement.x, displacement.y)
+        return length.isFinite && length >= 10
     }
 
     /// On-axis leftover after an outbound pulse and an equal reverse pulse.

@@ -528,13 +528,13 @@ public final class CollimationEngine {
 
                 try await enterFullFrame()
                 Log.info("constellation \(step)/\(steps) \(position.label): target \(position.sensorPoint), sensor \(sensorWidth)x\(sensorHeight)")
-                try await moveStar(to: position.sensorPoint, calibration: calibration)
+                try await moveStar(to: MountCentroidSample(position.sensorPoint), calibration: calibration)
                 guard let reached = tracking.centroidOnSensor,
                       MountGuide.isCentered(errorPixels: reached - position.sensorPoint) else {
                     throw MountError.targetNotReached
                 }
                 let around = tracking.centroidOnSensor ?? position.sensorPoint
-                try await prepareStackWindow(around: around)
+                try await prepareStackWindow(around: MountCentroidSample(around))
 
                 stackWork = .constellationCapturing(
                     step: step,
@@ -604,10 +604,8 @@ public final class CollimationEngine {
             Log.info("stack crop: \(first.roi), star pixel \(first.roi.framePixel(fromSensorPoint: sensor))")
         }
         session.requestFrameLimit(CaptureLayout.maxReadoutFPS)
-        let seed = CaptureLayout.stackingSeed()
-        return try await Task.detached(priority: .userInitiated) {
-            try FrameStacker.average(frames, seed: seed)
-        }.value
+        let seed = StackRegistrationSeed(CaptureLayout.stackingSeed())
+        return try await FrameStacker.averageOffActor(frames, seed: seed)
     }
 
     private func collectStackedFrames(
@@ -1139,54 +1137,16 @@ public final class CollimationEngine {
             // same verified full-sensor capture as a centering move.
             guideCalibration = nil
             try await enterFullFrame()
-            let duration = MountGuide.calibrationPulseMs
-            let beforeEast = try await waitForCentroid()
-            try await sendPulse(.east, milliseconds: duration)
-            let afterEast = try await waitForSettledCentroid()
-            Log.info("calibration east: before \(beforeEast), after \(afterEast), duration \(duration) ms")
-            let eastRate = MountGuide.rate(before: beforeEast, after: afterEast, durationMs: Double(duration))
-            if hypot(eastRate.x, eastRate.y) * Double(duration) < MountGuide.minCalibrationMovePixels {
-                throw MountError.calibrationTooSmall("east")
-            }
-
-            mountStatus = "Calibrating — returning from east…"
-            try await sendPulse(.west, milliseconds: duration)
-            let afterWest = try await waitForSettledCentroid()
-            Log.info("calibration west return: \(afterWest)")
-            let raBacklash = MountGuide.backlashPixels(
-                start: beforeEast,
-                afterOutbound: afterEast,
-                afterReturn: afterWest
-            )
-
-            mountStatus = "Calibrating — measuring north…"
-            let beforeNorth = try await waitForCentroid()
-            try await sendPulse(.north, milliseconds: duration)
-            let afterNorth = try await waitForSettledCentroid()
-            Log.info("calibration north: before \(beforeNorth), after \(afterNorth), duration \(duration) ms")
-            let northRate = MountGuide.rate(before: beforeNorth, after: afterNorth, durationMs: Double(duration))
-            if hypot(northRate.x, northRate.y) * Double(duration) < MountGuide.minCalibrationMovePixels {
-                throw MountError.calibrationTooSmall("north")
-            }
-
-            mountStatus = "Calibrating — returning from north…"
-            try await sendPulse(.south, milliseconds: duration)
-            let afterSouth = try await waitForSettledCentroid()
-            Log.info("calibration south return: \(afterSouth)")
-            let decBacklash = MountGuide.backlashPixels(
-                start: beforeNorth,
-                afterOutbound: afterNorth,
-                afterReturn: afterSouth
-            )
-
+            let east = try await measureCalibrationAxis(.east)
+            let north = try await measureCalibrationAxis(.north)
             let calibration = GuideCalibration(
-                eastRate: eastRate,
-                northRate: northRate,
-                sampleDurationMs: duration,
-                raBacklashPixels: raBacklash,
-                decBacklashPixels: decBacklash
+                eastRate: east.rate.point,
+                northRate: north.rate.point,
+                sampleDurationMs: max(east.durationMs, north.durationMs),
+                raBacklashPixels: east.backlash,
+                decBacklashPixels: north.backlash
             )
-            Log.info("calibration result: east \(eastRate), north \(northRate), axis separation sine \(calibration.axisSeparationSine), backlash RA \(raBacklash) Dec \(decBacklash)")
+            Log.info("calibration result: east \(east.rate.point), north \(north.rate.point), axis separation sine \(calibration.axisSeparationSine), backlash RA \(east.backlash) Dec \(north.backlash)")
             guard calibration.isValid else { throw MountError.calibrationAxesUnreliable }
             try GuideCalibrationStore.save(calibration)
             guideCalibration = calibration
@@ -1200,6 +1160,92 @@ public final class CollimationEngine {
         }
     }
 
+    private final class CalibrationAxisMeasurement: Sendable {
+        let rate: MountCentroidSample
+        let durationMs: Int
+        let backlash: Double
+
+        init(rate: MountCentroidSample, durationMs: Int, backlash: Double) {
+            self.rate = rate
+            self.durationMs = durationMs
+            self.backlash = backlash
+        }
+    }
+
+    private func measureCalibrationAxis(
+        _ direction: GuideDirection
+    ) async throws -> CalibrationAxisMeasurement {
+        let multiple = direction == .east ? mount.calibrationRAMultiple : 1
+        let sliceMs = multiple > 1 ? 750 : MountGuide.calibrationPulseMs
+        if direction == .east {
+            try await takeUpCalibrationBacklash(direction, sliceMs: sliceMs, multiple: multiple)
+        }
+        let start = try await waitForSettledCentroid()
+        var after = start
+        var duration = 0
+        while true {
+            let next = min(sliceMs, MountGuide.nextCalibrationPulseMs(displacement: after.point - start.point, elapsedMs: duration))
+            guard next > 0 else { break }
+            mountStatus = "Calibrating — measuring \(direction.rawValue) at \(Int(multiple))×…"
+            try await sendCalibrationPulse(direction, milliseconds: next, multiple: multiple)
+            duration += next
+            after = try await waitForSettledCentroid()
+            Log.info("calibration \(direction.rawValue): before \(start), after \(after), total pulse duration \(duration) ms at \(multiple)x")
+        }
+        guard MountGuide.errorLength(after.point - start.point) >= MountGuide.minCalibrationMovePixels else {
+            throw MountError.calibrationTooSmall(direction.rawValue)
+        }
+        let rate = MountCentroidSample(MountGuide.rate(before: start.point, after: after.point, durationMs: Double(duration) * multiple))
+        mountStatus = "Calibrating — returning from \(direction.rawValue)…"
+        // Match the outbound time, with a tracking/cancellation check between
+        // chunks. In particular, never pass >9999 ms to an LX200 pulse.
+        var remaining = duration
+        var returned = after
+        while remaining > 0 {
+            let chunk = min(remaining, sliceMs)
+            try await sendCalibrationPulse(direction.opposite, milliseconds: chunk, multiple: multiple)
+            remaining -= chunk
+            returned = try await waitForSettledCentroid()
+        }
+        Log.info("calibration \(direction.opposite.rawValue) return: \(returned), total pulse duration \(duration) ms")
+        return CalibrationAxisMeasurement(rate: rate, durationMs: duration,
+            backlash: MountGuide.backlashPixels(start: start.point, afterOutbound: after.point, afterReturn: returned.point))
+    }
+
+    private func takeUpCalibrationBacklash(_ direction: GuideDirection, sliceMs: Int, multiple: Double) async throws {
+        mountStatus = "Calibrating — taking up RA backlash…"
+        var previous = try await waitForSettledCentroid()
+        var duration = 0
+        while duration < MountGuide.maxCalibrationAxisMs {
+            let chunk = min(sliceMs, MountGuide.maxCalibrationAxisMs - duration)
+            try await sendCalibrationPulse(direction, milliseconds: chunk, multiple: multiple)
+            duration += chunk
+            let current = try await waitForSettledCentroid()
+            let moved = MountGuide.errorLength(current.point - previous.point)
+            Log.info("calibration RA take-up: \(moved) px this pulse, \(duration) ms total at \(multiple)x")
+            if MountGuide.calibrationTakeupComplete(displacement: current.point - previous.point) { return }
+            previous = current
+        }
+        throw MountError.calibrationTooSmall(direction.rawValue)
+    }
+
+    private func sendCalibrationPulse(_ direction: GuideDirection, milliseconds: Int, multiple: Double) async throws {
+        guard multiple > 1 else {
+            try await sendPulse(direction, milliseconds: milliseconds)
+            return
+        }
+        try Task.checkCancellation()
+        do {
+            try await mount.applyNudge(SlewNudge(ra: direction, dec: nil, siderealMultiple: multiple))
+            axisDirections.record(direction)
+            try await sleepMilliseconds(milliseconds)
+            try await mount.applyNudge(nil)
+        } catch {
+            await haltMotionsOffActor()
+            throw error
+        }
+    }
+
     private func runCentering() async {
         do {
             guard let calibration = guideCalibration, calibration.isValid else {
@@ -1207,8 +1253,8 @@ public final class CollimationEngine {
             }
             try beginMountWork("Centering on sensor…", holdROI: true, work: .centering)
             try await enterFullFrame()
-            try await moveStar(to: sensorCenter(), calibration: calibration)
-            let centroid = try await waitForCentroid()
+            try await moveStar(to: MountCentroidSample(sensorCenter()), calibration: calibration)
+            let centroid = (try await waitForCentroid()).point
             let lastError = MountGuide.errorLength(centroid - sensorCenter())
             if MountGuide.isCentered(errorPixels: centroid - sensorCenter()) {
                 await endMountWork(String(format: "Centered — %.1f px from sensor center", lastError))
@@ -1386,11 +1432,11 @@ public final class CollimationEngine {
     private func enterFullFrame() async throws {
         let reference = tracking.state == .tracking ? tracking.centroidOnSensor : nil
         let expected = showFullFramePreview()
-        try await waitForCaptureWindow(expected, reference: reference)
+        try await waitForCaptureWindow(expected, reference: reference.map(MountCentroidSample.init))
     }
 
-    private func waitForCaptureWindow(_ expected: ROI, reference: SIMD2<Double>?) async throws {
-        var gate = MountFrameGate(expectedROI: expected, reference: reference)
+    private func waitForCaptureWindow(_ expected: ROI, reference: MountCentroidSample?) async throws {
+        var gate = MountFrameGate(expectedROI: expected, reference: reference?.point)
         var sequence = frameSequence
         let deadline = Date().addingTimeInterval(12)
         Log.info("mount capture request \(expected), previous centroid \(String(describing: reference))")
@@ -1413,13 +1459,15 @@ public final class CollimationEngine {
         throw MountError.noStar
     }
 
-    private func prepareStackWindow(around sensor: SIMD2<Double>) async throws {
+    private func prepareStackWindow(around sample: MountCentroidSample) async throws {
+        let sensor = sample.point
         let roi = applyTrackingWindow(around: sensor)
-        try await waitForCaptureWindow(roi, reference: sensor)
+        try await waitForCaptureWindow(roi, reference: sample)
     }
 
-    private func moveStar(to target: SIMD2<Double>, calibration: GuideCalibration) async throws {
-        var centroid = try await waitForSettledCentroid()
+    private func moveStar(to targetSample: MountCentroidSample, calibration: GuideCalibration) async throws {
+        let target = targetSample.point
+        var centroid = (try await waitForSettledCentroid()).point
         Log.info("mount move: centroid \(centroid), target \(target), east \(calibration.eastRate), north \(calibration.northRate), backlash RA \(calibration.raBacklashPixels) Dec \(calibration.decBacklashPixels)")
         if MountGuide.isCentered(errorPixels: centroid - target) { return }
 
@@ -1459,7 +1507,7 @@ public final class CollimationEngine {
                 }
                 try await mount.applyNudge(nil)
 
-                centroid = try await waitForSettledCentroid()
+                centroid = (try await waitForSettledCentroid()).point
             }
             try await mount.applyNudge(nil)
         } catch {
@@ -1506,12 +1554,12 @@ public final class CollimationEngine {
         return text
     }
 
-    private func waitForSettledCentroid() async throws -> SIMD2<Double> {
+    private func waitForSettledCentroid() async throws -> MountCentroidSample {
         try await sleepMilliseconds(MountGuide.settleMilliseconds)
         return try await waitForCentroid(minNewFrames: 2, timeout: 10)
     }
 
-    private func waitForCentroid(minNewFrames: Int = 1, timeout: TimeInterval = 4) async throws -> SIMD2<Double> {
+    private func waitForCentroid(minNewFrames: Int = 1, timeout: TimeInterval = 4) async throws -> MountCentroidSample {
         let startSeq = frameSequence
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -1521,7 +1569,9 @@ public final class CollimationEngine {
                tracking.detection != nil,
                let centroid = tracking.centroidOnSensor
             {
-                return centroid
+                let sample = MountCentroidSample(centroid)
+                Log.info("mount centroid sample: x \(sample.x), y \(sample.y)")
+                return sample
             }
             try await Task.sleep(nanoseconds: 40_000_000)
         }

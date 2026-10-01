@@ -192,6 +192,23 @@ public struct StackedImage: Sendable {
     }
 }
 
+/// Scalar storage for a registration point that crosses into an async task.
+///
+/// Swift 6.3 on Windows can misalign a captured `SIMD2<Double>` in an async
+/// closure. Keep the two coordinates in a reference and reconstruct the SIMD
+/// value only after the task has started.
+public final class StackRegistrationSeed: Sendable {
+    public let x: Double
+    public let y: Double
+
+    public init(_ point: SIMD2<Double>) {
+        x = point.x
+        y = point.y
+    }
+
+    fileprivate var point: SIMD2<Double> { SIMD2(x, y) }
+}
+
 public enum FrameStacker {
     public static let subframeCounts = [10, 50, 100, 500, 1000, 5000, 10000]
     public static let defaultSubframeCount = 100
@@ -288,6 +305,17 @@ public enum FrameStacker {
             throw CameraError.unsupported("No tracked star. Keep the artificial star in the frame to stack.")
         }
         return try average(pairs)
+    }
+
+    /// Runs the expensive registration and averaging away from the caller's
+    /// actor without carrying a SIMD value across the async boundary.
+    public static func averageOffActor(
+        _ frames: [Frame],
+        seed: StackRegistrationSeed?
+    ) async throws -> StackedImage {
+        try await Task.detached(priority: .userInitiated) {
+            try average(frames, seed: seed?.point)
+        }.value
     }
 
     static func accumulate(

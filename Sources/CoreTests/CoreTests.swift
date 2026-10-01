@@ -41,6 +41,7 @@ struct CoreTests {
         failures += run("software crop", testSoftwareCrop)
         failures += run("readout fps cap", testReadoutFPSCap)
         failures += run("stack capture buffer", testStackCaptureBuffer)
+        failures += run("stack seed async transfer", testStackSeedAsyncTransfer)
         failures += run("constellation stack crops at sensor edges", testConstellationStackCrops)
         failures += run("constellation layout", testConstellationLayout)
         failures += run("mount frame switch gate", testMountFrameGate)
@@ -70,6 +71,10 @@ struct CoreTests {
         failures += run("guide nudge slice", testGuideNudgeSlice)
         failures += run("synscan fixed rate", testSynScanFixedRate)
         failures += run("guide calibration store", testGuideCalibrationStore)
+        failures += run("guide adaptive calibration", testAdaptiveCalibration)
+        failures += run("mount centroid async transfer", testMountCentroidAsyncTransfer)
+        failures += run("calibration RA jog", testCalibrationRAJog)
+        failures += run("calibration RA delayed start", testCalibrationDelayedStart)
         failures += run("mount backlash", testMountBacklash)
         failures += run("guide slew axes", testGuideSlewAxes)
         failures += run("guide slew commit", testGuideSlewCommit)
@@ -2289,6 +2294,31 @@ private func testFrameStacker() throws {
     }
 }
 
+private func testStackSeedAsyncTransfer() throws {
+    let expected = SIMD2<Double>(63.25, 61.75)
+    let frame = starBlobFrame(at: expected)
+    let seed = StackRegistrationSeed(expected)
+    let done = DispatchSemaphore(value: 0)
+    nonisolated(unsafe) var result: StackedImage?
+    nonisolated(unsafe) var thrown: Error?
+    Task.detached {
+        do {
+            result = try await FrameStacker.averageOffActor(
+                [frame],
+                seed: seed
+            )
+        } catch {
+            thrown = error
+        }
+        done.signal()
+    }
+    done.wait()
+    if let thrown { throw thrown }
+    guard let result else { throw Expectation(description: "async stack returned no image") }
+    try expect(result.width == frame.width && result.height == frame.height, "async stack dimensions")
+    try expect((result.pixels.max() ?? 0) > 20_000, "registration seed survives the async boundary")
+}
+
 private func testConstellationStackCrops() throws {
     let positions = ConstellationCapture.positions(sensorWidth: 3856, sensorHeight: 2180)
     var tiles: [(row: Int, column: Int, image: StackedImage)] = []
@@ -2595,4 +2625,48 @@ private func testLiveRegionScissor() throws {
         targetPixels: SIMD2(1280, 820)
     )
     try expect(degenerate.width == 1280 && degenerate.height == 820, "falls back to the whole target: \(degenerate)")
+}
+
+private func testAdaptiveCalibration() throws {
+    // Recorded 16:37 calibration: RA barely moved, while Dec was already ample.
+    let east = SIMD2(1792.070075348547 - 1798.4998755002223, 1012.5618625968852 - 1005.7927997628576)
+    let north = SIMD2(1921.1409794549863 - 1795.60792657763, 1148.3318174252151 - 1007.3387530876751)
+    try expect(MountGuide.nextCalibrationPulseMs(displacement: east, elapsedMs: 3000) == 3000, "extend recorded weak RA")
+    try expect(MountGuide.nextCalibrationPulseMs(displacement: north, elapsedMs: 3000) == 0, "do not extend strong Dec")
+    var duration = 0
+    var position = SIMD2<Double>.zero
+    let trueRate = east / 3000
+    while true {
+        let pulse = MountGuide.nextCalibrationPulseMs(displacement: position, elapsedMs: duration)
+        if pulse == 0 { break }
+        try expect(pulse <= GuidePulsePlanner.maxCommandMs, "pulse fits LX200 wire format")
+        duration += pulse
+        position += trueRate * Double(pulse)
+    }
+    try expect(duration == 12_000, "slow RA gets four samples")
+    let measuredRate = MountGuide.rate(before: .zero, after: position, durationMs: Double(duration))
+    try expect(MountGuide.errorLength(measuredRate - trueRate) < 1e-12, "normalise by RA's own accumulated motor time")
+    try expect(MountGuide.nextCalibrationPulseMs(displacement: .zero, elapsedMs: MountGuide.maxCalibrationAxisMs) == 0, "stalled axis has a firm limit")
+    try expect(MountGuide.nextCalibrationPulseMs(displacement: SIMD2(30, 0), elapsedMs: 3000) == 0, "accept threshold")
+}
+
+private func testCalibrationDelayedStart() throws {
+    let trueRate = SIMD2<Double>(-0.02, 0.015)
+    var slackMs = 1800.0
+    var position = SIMD2<Double>.zero
+    var takeupMs = 0
+    while takeupMs < MountGuide.maxCalibrationAxisMs {
+        let before = position
+        let lost = min(slackMs, 750)
+        slackMs -= lost
+        position += trueRate * ((750 - lost) * 8)
+        takeupMs += 750
+        if MountGuide.calibrationTakeupComplete(displacement: position - before) { break }
+    }
+    try expect(takeupMs == 2250, "take-up tolerates two stationary pulses before motion starts")
+    let baseline = position
+    position += trueRate * (750 * 8)
+    let measured = MountGuide.rate(before: baseline, after: position, durationMs: 750 * 8)
+    try expect(MountGuide.errorLength(measured - trueRate) < 1e-12, "exclude take-up time and normalise 8x to 1x")
+    try expect(!MountGuide.calibrationTakeupComplete(displacement: SIMD2(1, -1)), "do not interpret small drift as engaged gears")
 }

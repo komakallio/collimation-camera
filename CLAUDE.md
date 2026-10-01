@@ -136,6 +136,14 @@ pipeline. Never judge performance from a development build.
 
 ## Windows
 
+**Keep sensor vectors out of async arguments and results.** The Windows mount
+calibration log showed a valid Y coordinate turning into a denormal number.
+The `mount centroid async transfer` test reproduced corrupt coordinates when
+passing `SIMD2<Double>` through nested async calls. Use `MountCentroidSample`
+across those boundaries and reconstruct the vector synchronously. The test
+must exercise suspension and check both coordinates; synchronous geometry
+tests did not catch this.
+
 Nothing on `PATH` works by default. Use the scripts:
 
 ```powershell

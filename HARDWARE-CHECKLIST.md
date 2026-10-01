@@ -115,6 +115,15 @@ With an EQDIR or SynScan cable:
 - The log carries every exchange as `EQ6 TX` and `EQ6 RX` lines. Keep them.
 - **Calibrate**, then **Center** on an artificial star. Compare the calibration
   numbers with the macOS ones for the same mount.
+- EQDIR/SynScan calibration uses 750 ms RA jogs at 8x. First it takes up RA
+  backlash until one jog visibly moves the star; that time is excluded from
+  the measured rate. Dec (and LX200) retains 3-second guide pulses. Each axis
+  must move at least 30 sensor pixels, with separate 15-second motor-time
+  limits for RA take-up and each outbound measurement. Verify that a delayed
+  RA start does not reduce the measured rate, and Cancel stops the jog. Each
+  return uses the same speed and motor time as its measured outbound move.
+  Check `mount centroid sample` against the calibration coordinates: both X
+  and Y must remain plausible after waiting for frames.
 - From a centred star, run **Save Constellation**. The first tile must remain
   at the sensor centre; then check all eight outer positions. The log records
   the full-frame readout, measured centroid, target and each correction. A

@@ -1,0 +1,241 @@
+diff --git a/Sources/CollimationCore/Mount/EQ6Mount.swift b/Sources/CollimationCore/Mount/EQ6Mount.swift
+index 20a758d..03085a8 100644
+--- a/Sources/CollimationCore/Mount/EQ6Mount.swift
++++ b/Sources/CollimationCore/Mount/EQ6Mount.swift
+@@ -42,8 +42,10 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
+         activeNudge = nil
+         do {
+             try port.open(path: path, baud: baud)
+-        } catch {
++        } catch SerialPortError.openFailed {
+             throw MountError.openFailed(path)
++        } catch {
++            throw MountError.connectionFailed(path: path, detail: error.localizedDescription)
+         }
+         preciseSleep(microseconds: 80_000)
+         port.flush()
+diff --git a/Sources/CollimationCore/Mount/MountError.swift b/Sources/CollimationCore/Mount/MountError.swift
+index 07fe733..60ce230 100644
+--- a/Sources/CollimationCore/Mount/MountError.swift
++++ b/Sources/CollimationCore/Mount/MountError.swift
+@@ -4,6 +4,7 @@ public enum MountError: Error, LocalizedError, Sendable {
+     case notConnected
+     case noPortSelected
+     case openFailed(String)
++    case connectionFailed(path: String, detail: String)
+     case timeout
+     case unrecognized
+     case noStar
+@@ -20,6 +21,8 @@ public enum MountError: Error, LocalizedError, Sendable {
+             return "Select a serial port for the EQ6."
+         case .openFailed(let path):
+             return "Could not open serial port \(path)."
++        case .connectionFailed(let path, let detail):
++            return "Could not connect to the mount on serial port \(path).\n\(detail)"
+         case .timeout:
+             return "Timed out waiting for the mount to respond."
+         case .unrecognized:
+diff --git a/Sources/CollimationCore/Mount/SerialPortDriver.swift b/Sources/CollimationCore/Mount/SerialPortDriver.swift
+index dcd8f0a..1dea8eb 100644
+--- a/Sources/CollimationCore/Mount/SerialPortDriver.swift
++++ b/Sources/CollimationCore/Mount/SerialPortDriver.swift
+@@ -1,11 +1,25 @@
+ import Foundation
+ 
+-public enum SerialPortError: Error {
++public enum SerialPortError: Error, LocalizedError {
+     case openFailed
+     case configureFailed
+     case closed
+     case timeout
+     case ioFailed
++    case windowsFailure(operation: String, code: UInt32, message: String)
++
++    public var errorDescription: String? {
++        switch self {
++        case .openFailed: return "The serial port could not be opened."
++        case .configureFailed: return "The serial port settings could not be applied."
++        case .closed: return "The serial port is closed."
++        case .timeout: return "Timed out waiting for the serial port."
++        case .ioFailed: return "Serial port input/output failed."
++        case .windowsFailure(let operation, let code, let message):
++            let detail = message.isEmpty ? "No system error description is available." : message
++            return "\(operation) failed (Windows error \(code)): \(detail)"
++        }
++    }
+ }
+ 
+ /// 8N1 serial port used to talk to an EQ6 SynScan handset or EQDIR adapter.
+diff --git a/Sources/CollimationCore/Mount/SerialPortWindows.swift b/Sources/CollimationCore/Mount/SerialPortWindows.swift
+index 03c1988..6749233 100644
+--- a/Sources/CollimationCore/Mount/SerialPortWindows.swift
++++ b/Sources/CollimationCore/Mount/SerialPortWindows.swift
+@@ -34,8 +34,8 @@ public final class WindowsSerialPort: SerialPortDriver, @unchecked Sendable {
+         // spells them 0x80000000L and 0x40000000L, and with a 32-bit `long` the
+         // first does not fit a signed long, so Swift sees UInt32 and Int32.
+         let access: DWORD = 0x8000_0000 | 0x4000_0000
+-        let opened = Self.devicePath(for: path).withCString(encodedAs: UTF16.self) { wide in
+-            CreateFileW(
++        let opened = try Self.devicePath(for: path).withCString(encodedAs: UTF16.self) { wide in
++            let opened = CreateFileW(
+                 wide,
+                 access,
+                 0,                      // no sharing, the POSIX driver takes TIOCEXCL
+@@ -44,9 +44,11 @@ public final class WindowsSerialPort: SerialPortDriver, @unchecked Sendable {
+                 0,                      // synchronous I/O
+                 nil
+             )
+-        }
+-        guard let opened, opened != INVALID_HANDLE_VALUE else {
+-            throw SerialPortError.openFailed
++            guard let opened, opened != INVALID_HANDLE_VALUE else {
++                // Capture GetLastError before leaving the closure or cleaning up.
++                throw Self.lastError("CreateFileW")
++            }
++            return opened
+         }
+         handle = opened
+ 
+@@ -125,23 +127,38 @@ public final class WindowsSerialPort: SerialPortDriver, @unchecked Sendable {
+         handle = nil
+     }
+ 
++    private static func lastError(_ operation: String) -> SerialPortError {
++        let code = GetLastError()
++        var buffer = [WCHAR](repeating: 0, count: 1_024)
++        let count = buffer.withUnsafeMutableBufferPointer { text in
++            FormatMessageW(
++                DWORD(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS),
++                nil, code, 0, text.baseAddress, DWORD(text.count), nil
++            )
++        }
++        let message = String(decoding: buffer.prefix(Int(count)), as: UTF16.self)
++            .trimmingCharacters(in: .whitespacesAndNewlines)
++        return .windowsFailure(operation: operation, code: code, message: message)
++    }
++
+     private func configureLocked(baud: Int) throws {
+         guard let handle else { throw SerialPortError.closed }
+ 
+         var dcb = DCB()
+         dcb.DCBlength = DWORD(MemoryLayout<DCB>.size)
+-        guard GetCommState(handle, &dcb) != false else { throw SerialPortError.configureFailed }
++        guard GetCommState(handle, &dcb) != false else { throw Self.lastError("GetCommState") }
+ 
+         // `dtr=on rts=on` is fDtrControl/fRtsControl = ENABLE, which matches the
+         // POSIX driver asserting TIOCM_DTR and TIOCM_RTS. The mode string avoids
+         // touching the DCB bitfields directly.
+         let mode = "baud=\(baud) parity=N data=8 stop=1 to=off xon=off odsr=off octs=off dtr=on rts=on idsr=off"
+-        let built = mode.withCString(encodedAs: UTF16.self) { wide in
+-            BuildCommDCBW(wide, &dcb)
++        try mode.withCString(encodedAs: UTF16.self) { wide in
++            guard BuildCommDCBW(wide, &dcb) != false else {
++                throw Self.lastError("BuildCommDCBW")
++            }
+         }
+-        guard built != false else { throw SerialPortError.configureFailed }
+         dcb.DCBlength = DWORD(MemoryLayout<DCB>.size)
+-        guard SetCommState(handle, &dcb) != false else { throw SerialPortError.configureFailed }
++        guard SetCommState(handle, &dcb) != false else { throw Self.lastError("SetCommState") }
+ 
+         // ReadIntervalTimeout and ReadTotalTimeoutMultiplier both MAXDWORD with a
+         // non-zero constant is the documented "wait up to N ms for one byte".
+@@ -151,7 +168,7 @@ public final class WindowsSerialPort: SerialPortDriver, @unchecked Sendable {
+         timeouts.ReadTotalTimeoutConstant = Self.readSliceMs
+         timeouts.WriteTotalTimeoutMultiplier = 0
+         timeouts.WriteTotalTimeoutConstant = 1_000
+-        guard SetCommTimeouts(handle, &timeouts) != false else { throw SerialPortError.configureFailed }
++        guard SetCommTimeouts(handle, &timeouts) != false else { throw Self.lastError("SetCommTimeouts") }
+ 
+         // PURGE_RXCLEAR | PURGE_TXCLEAR
+         _ = PurgeComm(handle, 0x0000_0008 | 0x0000_0004)
+diff --git a/Sources/CoreTests/CoreTests.swift b/Sources/CoreTests/CoreTests.swift
+index f256b89..775fbfe 100644
+--- a/Sources/CoreTests/CoreTests.swift
++++ b/Sources/CoreTests/CoreTests.swift
+@@ -102,9 +102,11 @@ struct CoreTests {
+         failures += run("eq6 probe order", testEQ6ProbeOrder)
+         failures += run("eq6 unrecognized mount", testEQ6UnrecognizedMount)
+         failures += run("eq6 open failure", testEQ6OpenFailure)
++        failures += run("eq6 connection failure details", testEQ6ConnectionFailureDetails)
+         failures += run("eq6 pulse commands", testEQ6PulseCommands)
+         failures += run("lx200 silent mount", testLX200SilentMountConnectsAndPulses)
+ #if os(Windows)
++        failures += run("windows serial open failure", testWindowsSerialOpenFailure)
+         failures += run("windows com scanner parsing", testWindowsCOMScannerParsing)
+ #endif
+         failures += run("mono tiff 16-bit", testMonoTIFF)
+diff --git a/Sources/CoreTests/MountSerialTests.swift b/Sources/CoreTests/MountSerialTests.swift
+index d16e515..f66553d 100644
+--- a/Sources/CoreTests/MountSerialTests.swift
++++ b/Sources/CoreTests/MountSerialTests.swift
+@@ -227,6 +227,43 @@ func testEQ6OpenFailure() throws {
+     try expectUI(refused.writes.isEmpty, "nothing may be written to a port that did not open")
+ }
+ 
++func testEQ6ConnectionFailureDetails() throws {
++    // Every setup failure used to become just "Could not open serial port COM10."
++    // Check that the operation, error code, and system text reach the UI intact.
++    for operation in ["CreateFileW", "GetCommState", "BuildCommDCBW", "SetCommState", "SetCommTimeouts"] {
++        let port = ScriptedSerialPortDriver()
++        port.openError = SerialPortError.windowsFailure(
++            operation: operation, code: 5, message: "Access is denied."
++        )
++        let mount = EQ6Mount(port: port)
++        var thrown: Error?
++        do { try mount.connect(path: "COM10") } catch { thrown = error }
++        guard case MountError.connectionFailed(let path, let detail)? = thrown else {
++            throw UIModelExpectation(description: "expected detailed connection failure, got \(String(describing: thrown))")
++        }
++        try expectUI(path == "COM10", "the failing port is preserved")
++        try expectUI(detail.contains(operation), "the failing operation is preserved")
++        try expectUI(detail.contains("Windows error 5"), "the numeric error is preserved")
++        try expectUI(detail.contains("Access is denied."), "the system message is preserved")
++        let dialog = thrown?.localizedDescription ?? ""
++        try expectUI(dialog.contains(path) && dialog.contains(detail), "the dialog includes the port and details")
++        try expectUI(!mount.isConnected && !port.isOpen, "failed connection stays disconnected")
++        try expectUI(port.writes.isEmpty, "no protocol probes after setup failure")
++    }
++
++    let fallback = SerialPortError.windowsFailure(operation: "SetCommState", code: 87, message: "")
++    try expectUI(fallback.localizedDescription.contains("Windows error 87"), "code survives missing system text")
++
++    let port = ScriptedSerialPortDriver()
++    port.openError = SerialPortError.configureFailed
++    do {
++        try EQ6Mount(port: port).connect(path: "SCRIPT")
++        throw UIModelExpectation(description: "configuration failure must throw")
++    } catch MountError.connectionFailed(_, let detail) {
++        try expectUI(detail.contains("settings"), "configuration failure is distinguished from opening failure")
++    }
++}
++
+ /// Runs an async call from a synchronous test. `EQ6Mount.pulse` hops to a
+ /// global queue, so blocking the caller here cannot deadlock it.
+ private func runBlocking(_ body: @escaping @Sendable () async throws -> Void) throws {
+@@ -287,6 +324,25 @@ func testEQ6PulseCommands() throws {
+ }
+ 
+ #if os(Windows)
++func testWindowsSerialOpenFailure() throws {
++    try expectUI(WindowsSerialPort.devicePath(for: "COM10") == "\\\\.\\COM10", "COM10 uses device namespace")
++    try expectUI(WindowsSerialPort.devicePath(for: "\\\\.\\COM10") == "\\\\.\\COM10", "prefix is not duplicated")
++
++    // Exercise the real Win32 error capture without hardware. The random device
++    // name does not exist, so this never opens or sends commands to a real port.
++    let port = WindowsSerialPort()
++    defer { port.close() }
++    do {
++        try port.open(path: "CollimationCameraMissingSerialPort-\(UUID().uuidString)", baud: 9600)
++        throw UIModelExpectation(description: "opening a nonexistent device must fail")
++    } catch SerialPortError.windowsFailure(let operation, let code, let message) {
++        try expectUI(operation == "CreateFileW", "the real opening call is reported")
++        try expectUI(code != 0, "GetLastError is captured before it is lost")
++        try expectUI(!message.isEmpty, "the system error is formatted")
++        try expectUI(!port.isOpen, "a failed open does not retain a handle")
++    }
++}
++
+ func testWindowsCOMScannerParsing() throws {
+     // Registry values are UTF-16LE with a trailing NUL, and the byte count
+     // reported by RegEnumValueW includes it.

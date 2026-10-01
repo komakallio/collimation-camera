@@ -36,7 +36,7 @@ public enum MountError: Error, LocalizedError, Sendable {
         case .notCalibrated:
             return "Calibrate the mount before centering."
         case .calibrationTooSmall(let axis):
-            return "The \(axis) pulse barely moved the star. Check the cable, tracking, and that the mount can pulse-guide."
+            return "The \(axis) calibration did not move the star far enough. Check the axis clutch and backlash, and whether the telescope points close to the mount's polar axis."
         case .calibrationAxesUnreliable:
             return "Calibration could not distinguish RA from Dec motion. Reacquire the star and calibrate again."
         case .cancelled:
