@@ -108,6 +108,7 @@ enum Sidebar {
     private static func cameraSection(engine: CollimationEngine, host: any UIHost) {
         guard header(SidebarText.cameraSection) else { return }
 
+        igBeginDisabled(!engine.canAdjustCamera)
         logSlider(
             label: SidebarText.exposure,
             value: engine.exposureMicroseconds,
@@ -128,6 +129,7 @@ enum Sidebar {
             onCommit: { engine.applyGain() }
         )
 
+        igEndDisabled()
         secondary(engine.statusText)
 
         command(CommandCatalog.ID.cameraSaveTIFF, engine: engine, host: host)
@@ -216,6 +218,12 @@ enum Sidebar {
             enabled: engine.canMoveFocuser, help: HelpText.focuserTarget
         ) { engine.focuserTargetPosition = $0 }
         command(CommandCatalog.ID.focuserGoto, engine: engine, host: host)
+        integerInput(
+            SidebarText.autofocusStep, value: engine.autofocusStepSize,
+            enabled: engine.canEditAutofocus, help: HelpText.autofocusStep
+        ) { engine.autofocusStepSize = $0 }
+        command(CommandCatalog.ID.focuserAutofocus, engine: engine, host: host)
+        secondary(MetricText.autofocus(engine.autofocusState, samples: engine.autofocusSamples.count))
     }
 
     private static func integerInput(

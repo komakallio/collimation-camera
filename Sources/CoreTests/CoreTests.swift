@@ -8,8 +8,15 @@ struct CoreTests {
     @MainActor
     static func main() async {
         var failures = 0
+        failures += run("autofocus HFR metric", testFocusMetric)
+        failures += run("autofocus bounded curve", testAutofocusPlan)
+        failures += await runAsync("autofocus engine optical simulation", testAutofocusEngineSuccess)
+        failures += await runAsync("autofocus cancellation", testAutofocusCancellation)
+        failures += await runAsync("autofocus failure handling", testAutofocusFailures)
+        failures += await runAsync("autofocus simulator interlock", testAutofocusSimulatorInterlock)
         failures += run("esatto serial protocol", testEsattoProtocol)
         failures += run("esatto limits and errors", testEsattoLimitsAndErrors)
+        failures += run("esatto deceleration status", testEsattoDecelerationStatus)
         failures += run("esatto connection failures", testEsattoConnectionFailures)
         failures += run("esatto startup retry", testEsattoStartupRetry)
         failures += run("remembered focuser port", testRememberedFocuserPort)

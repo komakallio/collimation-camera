@@ -77,6 +77,21 @@ func testEsattoLimitsAndErrors() throws {
     } catch FocuserError.protocolFailure { }
 }
 
+func testEsattoDecelerationStatus() throws {
+    let port = esattoPort()
+    let focuser = EsattoFocuser(port: port, startupDelayMilliseconds: 0)
+    _ = try focuser.connect(path: "COM4")
+    defer { focuser.disconnect() }
+    for (busy, phase, moving) in [(0, "dec", true), (0, "acc", true), (1, "stop", true), (0, "stop", false)] {
+        let reply = "{\"res\":{\"get\":{\"MOT1\":{\"STATUS\":{\"BUSY\":\(busy),\"MST\":\"\(phase)\"}}}}}\r"
+        port.answer(Data(esattoStatus.utf8), with: Data(reply.utf8))
+        try expectUI(try focuser.snapshot().isMoving == moving, "BUSY \(busy), phase \(phase) must give moving \(moving)")
+    }
+    port.answer(Data(esattoStatus.utf8), with: Data((#"{"res":{"get":{"MOT1":{"STATUS":{"BUSY":0,"MST":false}}}}}"# + "\r").utf8))
+    do { _ = try focuser.snapshot(); throw UIModelExpectation(description: "invalid motor phase accepted") }
+    catch FocuserError.protocolFailure { }
+}
+
 func testEsattoConnectionFailures() throws {
     let silent = ScriptedSerialPortDriver()
     do {

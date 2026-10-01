@@ -6,6 +6,18 @@ import Foundation
 /// A view never spells a format specifier of its own. The em dash placeholder
 /// is the same one the pre-port sidebar used for a missing measurement.
 public enum MetricText {
+    public static func autofocus(_ state: AutofocusState, samples: Int) -> String {
+        switch state {
+        case .idle: return "Autofocus ready"
+        case .checkingStar(let frames): return "Checking star — \(frames)/5 frames"
+        case .moving(let position): return "Autofocus — moving to \(position)"
+        case .measuring(let position, let frames): return "Focus \(samples + 1)/9 at \(position) — \(frames)/5 frames"
+        case .verifying(let position): return "Verifying focus at \(position)…"
+        case .complete(let position, let hfr): return String(format: "Focused at %d — HFR %.2f px", position, hfr)
+        case .cancelled: return "Autofocus cancelled"
+        case .failed: return "Autofocus failed — see error"
+        }
+    }
     public static let placeholder = "—"
 
     // MARK: - Collimation metrics

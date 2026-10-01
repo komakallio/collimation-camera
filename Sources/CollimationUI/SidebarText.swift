@@ -50,6 +50,7 @@ public enum SidebarText {
     public static let focuserPort = "Focuser port"
     public static let focuserStepSize = "Step size"
     public static let focuserTarget = "Target position"
+    public static let autofocusStep = "Autofocus step"
 
     // MARK: - Metrics
 

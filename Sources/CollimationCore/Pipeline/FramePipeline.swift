@@ -5,6 +5,7 @@ struct ProcessedFrame: Sendable {
     var tracking: TrackingStatus
     var coma: ComaResult?
     var fwhm: FWHMResult?
+    var focusMetric: FocusMetric?
     var starProfile: StarIntensityProfile?
     var overlay: OverlayModel
     var displayFrame: Frame
@@ -19,6 +20,7 @@ final class FramePipeline: @unchecked Sendable {
     private let fwhmEstimator = FWHMEstimator()
     private let profileSampler = StarProfileSampler()
     private var holdROI = false
+    private var measureFocus = false
     private var sensorWidth = CameraDescriptor.simulator.sensorWidth
     private var sensorHeight = CameraDescriptor.simulator.sensorHeight
     private var optics = TelescopeOptics.poseidon
@@ -32,12 +34,14 @@ final class FramePipeline: @unchecked Sendable {
         holdROI: Bool = false,
         optics: TelescopeOptics = .poseidon,
         roiAlignment: ROIAlignment = .playerOne,
-        searchBinning: Int = 4
+        searchBinning: Int = 4,
+        measureFocus: Bool = false
     ) {
         lock.lock()
         self.sensorWidth = sensorWidth
         self.sensorHeight = sensorHeight
         self.holdROI = holdROI
+        self.measureFocus = measureFocus
         self.optics = optics
         self.roiAlignment = roiAlignment
         // The tracker's own full-frame search builds a full-frame ROI too, so it
@@ -67,6 +71,7 @@ final class FramePipeline: @unchecked Sendable {
         let sensorWidth = self.sensorWidth
         let sensorHeight = self.sensorHeight
         let optics = self.optics
+        let measureFocus = self.measureFocus
         let roiAlignment = self.roiAlignment
         let seed = lastSensorCentroid.map { frame.roi.framePixel(fromSensorPoint: $0) }
         lock.unlock()
@@ -143,6 +148,8 @@ final class FramePipeline: @unchecked Sendable {
         }
 
         var fwhm: FWHMResult?
+        let focusMetric = measureFocus && trackingState == .tracking
+            ? found.flatMap { FocusMetricEstimator().measure(frame: window, detection: $0) } : nil
         if trackingState == .tracking, metricsOnDisplay, let centroid = next.centroidInFrame {
             fwhm = fwhmEstimator.measure(frame: display, centroid: centroid, optics: optics)
         }
@@ -188,6 +195,7 @@ final class FramePipeline: @unchecked Sendable {
             tracking: next,
             coma: result,
             fwhm: fwhm,
+            focusMetric: focusMetric,
             starProfile: starProfile,
             overlay: overlay,
             displayFrame: display,

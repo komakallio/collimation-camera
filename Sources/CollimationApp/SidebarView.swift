@@ -195,6 +195,14 @@ struct SidebarView: View {
                     .disabled(!engine.canMoveFocuser)
                     .help(HelpText.focuserTarget)
                 button(CommandCatalog.ID.focuserGoto)
+                Text(SidebarText.autofocusStep).font(.caption)
+                TextField(SidebarText.autofocusStep, value: $engine.autofocusStepSize, format: .number.grouping(.never))
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(!engine.canEditAutofocus)
+                    .help(HelpText.autofocusStep)
+                button(CommandCatalog.ID.focuserAutofocus)
+                Text(MetricText.autofocus(engine.autofocusState, samples: engine.autofocusSamples.count))
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -212,6 +220,7 @@ struct SidebarView: View {
                     )
                     button(CommandCatalog.ID.cameraAutoExpose)
                 }
+                .disabled(!engine.canAdjustCamera)
                 CommitSlider(
                     title: SidebarText.gain,
                     value: $engine.gain,
@@ -219,6 +228,7 @@ struct SidebarView: View {
                     format: MetricText.gain(engine.gain),
                     onCommit: { engine.applyGain() }
                 )
+                .disabled(!engine.canAdjustCamera)
 
                 Text(engine.statusText)
                     .font(.caption)

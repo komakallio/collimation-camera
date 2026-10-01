@@ -143,12 +143,22 @@ public final class EsattoFocuser: FocuserDevice, @unchecked Sendable {
         let status = try request("get", fields: ["STATUS": ""])["STATUS"] as? [String: Any]
         let busy = try integer(status?["BUSY"])
         guard busy == 0 || busy == 1 else { throw FocuserError.protocolFailure("Invalid motor status.") }
-        // Read the position after BUSY, so an idle snapshot has the final position.
+        // BUSY drops before deceleration finishes on ESATTO firmware 3.05.28.
+        // Require the motor phase to stop as well, otherwise a new command can
+        // interrupt travel even when ABS_POS momentarily equals the target.
+        var isMoving = busy == 1
+        if let phase = status?["MST"] {
+            guard let name = phase as? String, !name.isEmpty else {
+                throw FocuserError.protocolFailure("Invalid motor phase.")
+            }
+            isMoving = isMoving || name != "stop"
+        }
+        // Read the position after status so an idle snapshot has the final position.
         state.position = try integer(request("get", fields: ["ABS_POS": ""])["ABS_POS"])
         guard (0...state.maxPosition).contains(state.position) else {
             throw FocuserError.protocolFailure("Position is outside the calibrated travel range.")
         }
-        state.isMoving = busy == 1
+        state.isMoving = isMoving
         current = state
         return state
     }

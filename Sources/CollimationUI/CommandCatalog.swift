@@ -78,6 +78,7 @@ public enum CommandCatalog {
         public static let focuserOut = "focuser.out"
         public static let focuserGoto = "focuser.goto"
         public static let focuserStop = "focuser.stop"
+        public static let focuserAutofocus = "focuser.autofocus"
         public static let viewOverlay = "view.overlay"
         public static let viewSensorMarks = "view.sensorMarks"
         public static let viewFitToWindow = "view.fitToWindow"
@@ -91,6 +92,14 @@ public enum CommandCatalog {
 
     @MainActor
     public static let all: [Command] = [
+        Command(
+            id: ID.focuserAutofocus,
+            menu: .focuser,
+            title: "Autofocus",
+            help: HelpText.autofocus,
+            isEnabled: { $0.canAutofocus },
+            perform: { engine, _ in engine.startAutofocus() }
+        ),
         Command(
             id: ID.focuserConnect,
             menu: .focuser,

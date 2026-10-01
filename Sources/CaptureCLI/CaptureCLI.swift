@@ -3,17 +3,19 @@ import Foundation
 
 @main
 struct CaptureCLI {
-    static func main() {
+    @MainActor
+    static func main() async {
         // An uncaught error out of main traps with a Swift stack trace, which
         // is no use to somebody at a telescope trying to find out why the
         // camera did not open. Report it and exit non-zero.
         do {
+            if try await AutofocusCLI.runIfRequested(Array(CommandLine.arguments.dropFirst())) { return }
             try run()
         } catch let error as CameraError {
             FileHandle.standardError.write(Data("\(error.errorDescription ?? "\(error)")\n".utf8))
             exit(1)
         } catch {
-            FileHandle.standardError.write(Data("\(error)\n".utf8))
+            FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
             exit(1)
         }
     }
@@ -73,6 +75,7 @@ struct CaptureCLI {
           capture-cli --list
           capture-cli [--simulator|--hardware] [--device <id>] [--output frame.tif]
           capture-cli --frames <n> [--device <id>] [--exposure <ms>] [--gain <n>] [--roi <px>]
+          capture-cli --autofocus <port> --device <id> [--focus-step <steps>] [--exposure <ms>]
 
         Options:
           --frames <n>     grab n frames and report the rate, instead of writing one
@@ -80,11 +83,15 @@ struct CaptureCLI {
           --gain <n>       gain in the camera's own units
           --roi <px>       square ROI centered on the sensor, rounded to what the
                            camera accepts; 2048 is what the app uses while tracking
+          --autofocus      move the focuser through a bounded scan and verify focus
+                           on a real camera; uses the same engine as the application
+          --focus-step     autofocus sample spacing in motor steps (default 1000)
 
         Camera SDK libraries are loaded at run time from Vendor/PlayerOne and
         Vendor/ZWO, or from next to the executable. Without a camera, use
         --simulator. Device ids come from --list, for example poa-0 or asi-0.
-        The output is a 16-bit mono TIFF.
+        Frame capture writes a 16-bit mono TIFF. Autofocus prints measurements
+        and the verified position; it requires a real camera and moves the motor.
 
         --frames is the headless version of the live-view rate check: it needs
         no window, so it works over a remote desktop session.

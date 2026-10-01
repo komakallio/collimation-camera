@@ -19,6 +19,7 @@ see Not yet verified at the end.
 | Device list (Player One, ZWO, simulators) | ✅ | ✅ | One list; ZWO devices follow Player One. |
 | Exposure and gain | ✅ | ✅ | 100 µs to 100 ms. |
 | Auto exposure | ✅ | ✅ | `canAutoExpose`. |
+| ESATTO autofocus | ✅ | ✅ | Nine-point HFR scan, five fresh frames per position, consistent-direction approach, verified minimum, Stop/disconnect cancellation. Windows simulation and real COM4/Xena optical run passed. macOS interface is wired but not executed here; acceptance details in `HARDWARE-CHECKLIST.md`. |
 | Auto stretch | ✅ | ✅ | Always enabled. |
 | MTF and arcsinh curves | ✅ | ✅ | Shader math must match `StretchParams.apply`; `stretch shader math` keeps the maths in step and `stretch shader copies` keeps the two MSL strings — `MetalRenderer.shaderSource` for this app, `ShaderSource.metal` for the portable one — from drifting apart. HLSL has no `asinh` and uses the log form. |
 | Zoom and fit | ✅ | ✅ | One factor per scroll event by sign, not per tick. |

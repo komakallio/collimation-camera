@@ -170,6 +170,28 @@ public final class CollimationEngine {
     public private(set) var focuserStatus = "ESATTO — disconnected"
     public var focuserStepSize = 1000
     public var focuserTargetPosition = 0
+    public var autofocusStepSize = 1000
+    public private(set) var isAutofocusing = false
+    public private(set) var autofocusState: AutofocusState = .idle
+    public private(set) var autofocusSamples: [AutofocusSample] = []
+    @ObservationIgnored private var autofocusTask: Task<Void, Never>?
+    @ObservationIgnored private var autofocusID: UUID?
+    @ObservationIgnored private var autofocusCancellation: AutofocusCancellation?
+    @ObservationIgnored private var autofocusFrames: [(timestamp: Date, metric: FocusMetric)] = []
+    @ObservationIgnored private var autofocusAcceptAfter = Date.distantFuture
+    @ObservationIgnored private var autofocusLastTimestamp = Date.distantPast
+    @ObservationIgnored private var autofocusAnchorX = 0.0
+    @ObservationIgnored private var autofocusAnchorY = 0.0
+
+    public var canAutofocus: Bool {
+        guard canMoveFocuser, isConnected, device?.descriptor.isSimulator == false,
+              !isAutoExposing, !isFilterWheelMoving, tracking.centroidOnSensor != nil,
+              tracking.state == .tracking, let state = focuserSnapshot,
+              let star = tracking.detection, star.snr >= 10, star.peak < StarQuality.clipADU else { return false }
+        return (try? AutofocusPlan(position: state.position, maximum: state.maxPosition, step: autofocusStepSize)) != nil
+    }
+    public var canEditAutofocus: Bool { !isAutofocusing }
+    public var canAdjustCamera: Bool { !isAutofocusing }
 
     public var canConnectFocuser: Bool {
         isFocuserConnected || isFocuserBusy || !selectedFocuserPort.isEmpty
@@ -177,7 +199,7 @@ public final class CollimationEngine {
     public var canSelectFocuserPort: Bool { !isFocuserConnected && !isFocuserBusy }
     public var canRefreshFocuserPorts: Bool { canSelectFocuserPort }
     public var canMoveFocuser: Bool {
-        isFocuserConnected && !isFocuserBusy && focuserSnapshot?.isMoving == false && !isStacking && !isMountBusy
+        isFocuserConnected && !isFocuserBusy && focuserSnapshot?.isMoving == false && !isStacking && !isMountBusy && mountTask == nil && !isAutoExposing && !isAutofocusing
     }
     public var canMoveFocuserIn: Bool {
         canMoveFocuser && focuserStepSize > 0 && focuserStepSize <= (focuserSnapshot?.position ?? 0)
@@ -192,7 +214,7 @@ public final class CollimationEngine {
     }
     /// Stop and disconnect remain available during commands and failed polls.
     public var canStopFocuser: Bool { isFocuserConnected }
-    private var focuserIsWorking: Bool { isFocuserBusy || focuserSnapshot?.isMoving == true }
+    private var focuserIsWorking: Bool { isAutofocusing || isFocuserBusy || focuserSnapshot?.isMoving == true }
 
     /// Folder the last snapshot was written to. Both apps remember it here so
     /// the save panel and the portable app's dialog agree.
@@ -230,7 +252,7 @@ public final class CollimationEngine {
     }
     public var canCenterStar: Bool { canCalibrateMount && isMountCalibrated }
     public var canSaveConstellation: Bool { canCenterStar }
-    public var canConnectMount: Bool { (isMountConnected || !serialPorts.isEmpty) && !isMountBusy }
+    public var canConnectMount: Bool { (isMountConnected || (!serialPorts.isEmpty && !isAutofocusing)) && !isMountBusy }
     public var canSelectSerialPort: Bool { !isMountConnected && !isMountBusy }
     public var canRefreshSerialPorts: Bool { canSelectSerialPort }
     /// Disconnect is always allowed; only connecting waits for a move to end.
@@ -254,15 +276,16 @@ public final class CollimationEngine {
     }
 
     public var canConnectFilterWheel: Bool {
-        Self.canConnectFilterWheel(
+        if !isFilterWheelConnected && isAutofocusing { return false }
+        return Self.canConnectFilterWheel(
             isConnected: isFilterWheelConnected,
             hasWheels: !filterWheels.isEmpty,
             isMoving: isFilterWheelMoving
         )
     }
-    public var canSelectFilterWheel: Bool { !isFilterWheelConnected && !isFilterWheelMoving }
+    public var canSelectFilterWheel: Bool { !isFilterWheelConnected && !isFilterWheelMoving && !isAutofocusing }
     public var canRefreshFilterWheels: Bool { canSelectFilterWheel }
-    public var canSelectFilter: Bool { isFilterWheelConnected && !isFilterWheelMoving }
+    public var canSelectFilter: Bool { isFilterWheelConnected && !isFilterWheelMoving && !isAutofocusing }
 
     /// Lower zoom bound. Full-frame centering/constellation slews must go
     /// below `minZoom` or the live view still clips stars near the edges.
@@ -278,6 +301,7 @@ public final class CollimationEngine {
     nonisolated private let filterWheel = PhoenixWheel()
     nonisolated private let focuser: any FocuserDevice
     nonisolated private let focuserQueue = DispatchQueue(label: "collimation.focuser")
+    nonisolated private let focuserShutdown = AutofocusCancellation()
     @ObservationIgnored private var focuserPollTask: Task<Void, Never>?
     @ObservationIgnored private var focuserPollID: UUID?
     @ObservationIgnored private var focuserGeneration = 0
@@ -307,6 +331,8 @@ public final class CollimationEngine {
     /// Injected so tests get their own suite and a scripted port list.
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let serialPortPaths: () -> [String]
+    @ObservationIgnored private let cameraFactory: (String) throws -> any CameraDevice
+    @ObservationIgnored private let autofocusTiming: AutofocusTiming
     /// Search binning before a camera is connected, and the ceiling once one is.
     public static let defaultSearchBinning = 4
     private static let serialPortDefaultsKey = "mount.serialPort"
@@ -317,11 +343,15 @@ public final class CollimationEngine {
     public init(
         defaults: UserDefaults = .standard,
         serialPortPaths: @escaping () -> [String] = SerialPortScanner.availablePaths,
-        focuser: any FocuserDevice = EsattoFocuser()
+        focuser: any FocuserDevice = EsattoFocuser(),
+        cameraFactory: @escaping (String) throws -> any CameraDevice = { try DeviceCatalog.makeDevice(id: $0) },
+        autofocusTiming: AutofocusTiming = AutofocusTiming()
     ) {
         self.defaults = defaults
         self.serialPortPaths = serialPortPaths
         self.focuser = focuser
+        self.cameraFactory = cameraFactory
+        self.autofocusTiming = autofocusTiming
         refreshDevices()
         selectedDeviceID = DeviceCatalog.preferredDeviceID(in: devices)
         // The remembered port is read before refreshSerialPorts() so the
@@ -378,6 +408,7 @@ public final class CollimationEngine {
 
     /// Stops capture and closes the mount serial port and filter wheel. Call from app termination.
     nonisolated public func shutdown() {
+        focuserShutdown.cancel()
         stopCapture()
         mount.disconnect()
         filterWheel.disconnect()
@@ -403,7 +434,7 @@ public final class CollimationEngine {
     public func connect() {
         errorMessage = nil
         do {
-            let newDevice = try DeviceCatalog.makeDevice(id: selectedDeviceID)
+            let newDevice = try cameraFactory(selectedDeviceID)
             try newDevice.open()
             device = newDevice
             sensorWidth = newDevice.descriptor.sensorWidth
@@ -488,7 +519,7 @@ public final class CollimationEngine {
     }
 
     public func saveStackedSnapshot(to url: URL) {
-        guard isConnected, !isStacking, !isMountBusy else { return }
+        guard canSaveStacked else { return }
         errorMessage = nil
         stackTask?.cancel()
         isStacking = true
@@ -500,7 +531,7 @@ public final class CollimationEngine {
     }
 
     public func saveConstellation(to url: URL) {
-        guard isConnected, !isStacking, !isMountBusy, isMountConnected, isMountCalibrated else { return }
+        guard canSaveConstellation else { return }
         errorMessage = nil
         stackTask?.cancel()
         isStacking = true
@@ -684,6 +715,7 @@ public final class CollimationEngine {
     }
 
     public func disconnect() {
+        if isAutofocusing { stopFocuser() }
         stackTask?.cancel()
         stackTask = nil
         isStacking = false
@@ -717,13 +749,14 @@ public final class CollimationEngine {
     }
 
     public func applyExposure() {
+        guard canAdjustCamera else { return }
         autoExposeTask?.cancel()
         guard isConnected, !applyingControls else { return }
         sendExposure(Int(exposureMicroseconds.rounded()))
     }
 
     public func autoExpose() {
-        guard isConnected, !isStacking, !isMountBusy, !isAutoExposing else { return }
+        guard canAutoExpose else { return }
         isAutoExposing = true
         autoExposeTask = Task { await self.runAutoExposure() }
     }
@@ -807,7 +840,7 @@ public final class CollimationEngine {
     }
 
     public func applyGain() {
-        guard isConnected, !applyingControls else { return }
+        guard canAdjustCamera, isConnected, !applyingControls else { return }
         let value = Int(gain)
         guard value != lastSentGain else { return }
         lastSentGain = value
@@ -815,7 +848,7 @@ public final class CollimationEngine {
     }
 
     public func applyROISize() {
-        guard isConnected, !isStacking, !isMountBusy else { return }
+        guard !isAutofocusing, isConnected, !isStacking, !isMountBusy else { return }
         pipeline.reset()
         coalescer.cancel()
         softwareCrop.reset()
@@ -944,6 +977,7 @@ public final class CollimationEngine {
         fwhm = processed.fwhm
         starProfile = processed.starProfile
         overlay = processed.overlay
+        receiveAutofocusFrame(timestamp: processed.displayFrame.timestamp, metric: processed.focusMetric)
         updateStabilization()
         guard !isStacking else { return }
         switch processed.tracking.state {
@@ -956,6 +990,153 @@ public final class CollimationEngine {
         case .idle:
             statusText = "Live"
         }
+    }
+
+    public func startAutofocus() {
+        guard canAutofocus, let state = focuserSnapshot,
+              let anchor = tracking.centroidOnSensor else { return }
+        do {
+            let plan = try AutofocusPlan(position: state.position, maximum: state.maxPosition, step: autofocusStepSize)
+            let id = UUID()
+            let cancellation = AutofocusCancellation()
+            focuserGeneration &+= 1
+            autofocusID = id
+            autofocusCancellation = cancellation
+            autofocusSamples = []
+            autofocusFrames = []
+            autofocusAnchorX = anchor.x
+            autofocusAnchorY = anchor.y
+            autofocusAcceptAfter = .distantFuture
+            autofocusLastTimestamp = .distantPast
+            isAutofocusing = true
+            errorMessage = nil
+            applyPipelineConfig()
+            Log.info("Autofocus start: \(state.position), step \(plan.step), scan \(plan.positions.first!)–\(plan.positions.last!)")
+            autofocusTask = Task { await self.runAutofocus(plan: plan, id: id, cancellation: cancellation) }
+        } catch { presentError(error) }
+    }
+
+    private func runAutofocus(plan: AutofocusPlan, id: UUID, cancellation: AutofocusCancellation) async {
+        do {
+            let initialHFR = try await autofocusMeasure(at: plan.positions[4], verifying: false,
+                                                       checkingStar: true, cancellation: cancellation)
+            Log.info(String(format: "Autofocus initial HFR: %.3f px", initialHFR))
+            try await autofocusMove(to: plan.preloadPosition, cancellation: cancellation)
+            for position in plan.positions {
+                try await autofocusMove(to: position, cancellation: cancellation)
+                let hfr = try await autofocusMeasure(at: position, verifying: false, cancellation: cancellation)
+                autofocusSamples.append(AutofocusSample(position: position, hfr: hfr))
+                Log.info(String(format: "Autofocus sample: %d, HFR %.3f px", position, hfr))
+            }
+            let target = try plan.solution(samples: autofocusSamples)
+            try await autofocusMove(to: target - plan.step, cancellation: cancellation)
+            try await autofocusMove(to: target, cancellation: cancellation)
+            let hfr = try await autofocusMeasure(at: target, verifying: true, cancellation: cancellation)
+            try AutofocusPlan.verify(hfr: hfr, samples: autofocusSamples)
+            try AutofocusPlan.verify(hfr: hfr, samples: [AutofocusSample(position: plan.positions[4], hfr: initialHFR)])
+            try cancellation.check()
+            guard autofocusID == id else { return }
+            finishAutofocus(state: .complete(position: target, hfr: hfr))
+            Log.info(String(format: "Autofocus complete: %d, HFR %.3f px", target, hfr))
+        } catch {
+            guard autofocusID == id else { return }
+            finishAutofocus(state: error is CancellationError ? .cancelled : .failed)
+            stopFocuser()
+            presentError(error)
+        }
+    }
+
+    private func autofocusOperation(
+        cancellation: AutofocusCancellation,
+        _ work: @escaping @Sendable (any FocuserDevice) throws -> FocuserSnapshot
+    ) async throws -> FocuserSnapshot {
+        try Task.checkCancellation()
+        try cancellation.check()
+        let device = focuser
+        let shutdown = focuserShutdown
+        let result: FocuserSnapshot = try await withCheckedThrowingContinuation { continuation in
+            focuserQueue.async {
+                do {
+                    try shutdown.check()
+                    try cancellation.check()
+                    continuation.resume(returning: try work(device))
+                } catch { continuation.resume(throwing: error) }
+            }
+        }
+        try Task.checkCancellation()
+        try cancellation.check()
+        publishFocuser(result)
+        return result
+    }
+
+    private func autofocusMove(to position: Int, cancellation: AutofocusCancellation) async throws {
+        autofocusAcceptAfter = .distantFuture
+        autofocusState = .moving(position: position)
+        focuserTargetPosition = position
+        _ = try await autofocusOperation(cancellation: cancellation) { try $0.move(to: position) }
+        let deadline = Date().addingTimeInterval(autofocusTiming.motionTimeout)
+        while Date() < deadline {
+            try await Task.sleep(for: .milliseconds(100))
+            let state = try await autofocusOperation(cancellation: cancellation) { try $0.snapshot() }
+            if !state.isMoving {
+                guard state.position == position else { throw AutofocusError.positionMismatch }
+                return
+            }
+        }
+        throw AutofocusError.motionTimeout
+    }
+
+    private func autofocusMeasure(at position: Int, verifying: Bool, checkingStar: Bool = false,
+                                  cancellation: AutofocusCancellation) async throws -> Double {
+        autofocusFrames = []
+        // SDK timestamps describe readout completion. Wait a full exposure
+        // after the settle interval so a frame begun in motion cannot qualify.
+        let exposureSeconds = Double(lastSentExposure ?? 50_000) / 1_000_000
+        autofocusAcceptAfter = Date().addingTimeInterval(autofocusTiming.settleSeconds + exposureSeconds)
+        let deadline = autofocusAcceptAfter.addingTimeInterval(max(autofocusTiming.frameTimeout, exposureSeconds * 12))
+        autofocusState = checkingStar ? .checkingStar(frames: 0)
+            : verifying ? .verifying(position: position) : .measuring(position: position, frames: 0)
+        while Date() < deadline {
+            try Task.checkCancellation()
+            try cancellation.check()
+            guard isConnected, isFocuserConnected else { throw CancellationError() }
+            if autofocusFrames.count >= AutofocusPlan.framesPerPosition {
+                autofocusAcceptAfter = .distantFuture
+                return AutofocusPlan.median(autofocusFrames.map { $0.metric.hfr })
+            }
+            if checkingStar { autofocusState = .checkingStar(frames: autofocusFrames.count) }
+            else if !verifying { autofocusState = .measuring(position: position, frames: autofocusFrames.count) }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        throw AutofocusError.noStar
+    }
+
+    private func receiveAutofocusFrame(timestamp: Date, metric: FocusMetric?) {
+        guard isAutofocusing, timestamp > autofocusAcceptAfter, timestamp > autofocusLastTimestamp,
+              autofocusFrames.count < AutofocusPlan.framesPerPosition,
+              let metric, metric.hfr.isFinite, metric.hfr > 0,
+              hypot(metric.sensorX - autofocusAnchorX, metric.sensorY - autofocusAnchorY) < 64 else { return }
+        autofocusLastTimestamp = timestamp
+        autofocusFrames.append((timestamp, metric))
+    }
+
+    private func finishAutofocus(state: AutofocusState) {
+        autofocusCancellation?.cancel()
+        autofocusCancellation = nil
+        autofocusID = nil
+        autofocusTask = nil
+        isAutofocusing = false
+        autofocusAcceptAfter = .distantFuture
+        autofocusFrames = []
+        autofocusState = state
+        applyPipelineConfig()
+    }
+
+    private func cancelAutofocus() {
+        guard isAutofocusing else { return }
+        autofocusTask?.cancel()
+        finishAutofocus(state: .cancelled)
+        Log.info("Autofocus cancelled")
     }
 
     public func refreshFocuserPorts() {
@@ -989,6 +1170,7 @@ public final class CollimationEngine {
     }
 
     public func disconnectFocuser() {
+        cancelAutofocus()
         focuserGeneration &+= 1
         focuserPollTask?.cancel()
         focuserPollTask = nil
@@ -1030,6 +1212,7 @@ public final class CollimationEngine {
 
     public func stopFocuser() {
         guard canStopFocuser else { return }
+        cancelAutofocus()
         // Invalidate any pending move/poll result. Stop is queued after the
         // current short transaction, never after waiting for travel to finish.
         focuserGeneration &+= 1
@@ -1076,7 +1259,7 @@ public final class CollimationEngine {
     }
 
     private func pollFocuser() {
-        guard isFocuserConnected, !isFocuserBusy, focuserPollID == nil else { return }
+        guard !isAutofocusing, isFocuserConnected, !isFocuserBusy, focuserPollID == nil else { return }
         let pollID = UUID()
         focuserPollID = pollID
         let generation = focuserGeneration
@@ -1119,6 +1302,7 @@ public final class CollimationEngine {
     }
 
     public func connectMount() {
+        guard canConnectMount else { return }
         errorMessage = nil
         refreshSerialPorts()
         let path = selectedSerialPort
@@ -1194,6 +1378,7 @@ public final class CollimationEngine {
     }
 
     public func connectFilterWheel() {
+        guard canConnectFilterWheel else { return }
         errorMessage = nil
         refreshFilterWheels()
         guard let descriptor = filterWheels.first(where: { $0.id == selectedFilterWheelID }) ?? filterWheels.first else {
@@ -1254,7 +1439,7 @@ public final class CollimationEngine {
     }
 
     public func gotoFilter(_ position: Int) {
-        guard isFilterWheelConnected, !isFilterWheelMoving else { return }
+        guard canSelectFilter else { return }
         guard filterSlots.contains(where: { $0.position == position }) else { return }
         if hardwareFilterPosition == position { return }
         selectedFilterPosition = position
@@ -1314,13 +1499,13 @@ public final class CollimationEngine {
     }
 
     public func calibrateMount() {
-        guard !isMountBusy, !isStacking else { return }
+        guard canCalibrateMount else { return }
         mountTask?.cancel()
         mountTask = Task { await self.runCalibration() }
     }
 
     public func centerStar() {
-        guard !isMountBusy, !isStacking else { return }
+        guard canCenterStar else { return }
         mountTask?.cancel()
         mountTask = Task { await self.runCentering() }
     }
@@ -1791,7 +1976,8 @@ public final class CollimationEngine {
             holdROI: holdsROI,
             optics: optics,
             roiAlignment: roiAlignment,
-            searchBinning: searchBinning
+            searchBinning: searchBinning,
+            measureFocus: isAutofocusing
         )
         session.setHoldROI(holdsROI)
     }

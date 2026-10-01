@@ -158,7 +158,48 @@ rather than crashing.
   should disable new focus moves; active focus movement should disable new
   stacks, auto exposure and mount calibration/centering.
 
-Physical movement and unplug/quit acceptance are still pending.
+Physical movement was subsequently exercised through the autofocus scan
+below. Manual Stop, unplug and quit acceptance on real hardware remain pending.
+
+### Autofocus
+
+- Read-only COM4 check on 1 October 2026: ESATTO30136, position
+  319000 / 731000 steps, stopped; identity and repeated status/position polls
+  succeeded with the native application driver.
+- With a real camera tracking an unsaturated artificial star, choose an
+  **Autofocus step** that changes HFR visibly and exceeds backlash. Confirm
+  there is room for five inward and four outward steps. Start Autofocus.
+- Confirm five initial frames precede motion, nine positions are sampled
+  outward, the fitted target is approached outward, and final HFR is within
+  15% of the scan minimum. Check the logged samples and inspect the star.
+- Stop during a move and during frame collection; no later scan moves may
+  follow. Repeat with camera disconnect, focuser disconnect, USB removal and
+  quitting. Confirm reconnect permits a new run.
+- Cover the camera and overexpose it: autofocus must report a measurement
+  failure. A flat curve or a minimum at the scan edge must fail clearly.
+- Confirm manual focus, exposure/gain, stacking, mount work and filter moves
+  are blocked throughout autofocus, including its frame-collection periods.
+
+On 1 October 2026, the shared engine completed an optical autofocus run on the
+Xena 585M (`poa-0`) and ESATTO30136 on COM4, using the artificial star confirmed
+by the user. Exposure 0.5 ms, gain 0, autofocus step 1000. The scan covered
+309967–317967 steps with nine five-frame medians; final verification placed
+the focuser at **315969 steps**, HFR **1.049 sensor pixels**, down from 2.182.
+The scan minimum was 1.083 pixels at 315967; both surrounding samples were
+1.335–1.336. The headless command exited successfully and sent Stop on close.
+
+Earlier attempts exercised two failure paths: the native controller returned
+`BUSY=0` during `MST=dec`, requiring the driver to wait for the non-stop phase;
+and the star clipped as focus improved at 5 ms, correctly aborting frame
+measurement. The final run used shorter exposure to keep the whole scan
+unsaturated. No calibration, speed or controller backlash settings changed.
+
+Windows release build and all 127 core tests passed. The portable sidebar
+rendered at 1280×1000 with no widget conflicts. Full optical acceptance used
+the same engine through `capture-cli`; clicking the autofocus control and
+unplug/quit testing during autofocus remain manual acceptance items. The
+macOS sidebar is wired to the same commands but could not be built or run
+on this Windows host.
 
 ## 7. The filter wheel
 

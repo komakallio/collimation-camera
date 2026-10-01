@@ -21,7 +21,7 @@ They drive the same engine and take every label, shortcut, and HUD from the same
 - Simulator camera so you can develop and test without hardware
 - Player One and ZWO cameras through one device list, both loaded at run time
 - Player One Phoenix filter wheel: connect, read on-wheel aliases, and move to a slot
-- PrimaLuceLab ESATTO focuser over USB: position feedback, In/Out step moves, absolute targets, and Stop
+- PrimaLuceLab ESATTO focuser over USB: manual moves and automatic star-based focusing
 
 ## ESATTO focuser
 
@@ -40,6 +40,39 @@ during movement; disconnecting and quitting attempt to stop the motor before
 closing the port. New focus moves are disabled during stacking or mount work,
 and new stacks, auto exposure and mount calibration/centering wait for focus
 movement to finish. Focus control also works without a connected camera.
+
+For **Autofocus**, connect a real camera and track a single, unsaturated star
+that fits completely inside the live ROI. Set **Autofocus step** (motor steps;
+1000 by default) and press **Autofocus**. The application checks five fresh
+frames before moving, scans nine positions from four steps inward to four
+outward, fits the minimum of the star's half-flux radius (HFR), and verifies
+the result with five more frames. Each scan point uses a five-frame median.
+HFR is measured on raw camera pixels; display stretch does not affect focus.
+
+The first point and final target are approached outward from one step below,
+so allow five steps of inward travel and four outward from the starting
+position. The step should exceed mechanical backlash and produce a visible
+change in star size. A flat curve needs a larger step; a scan-edge minimum
+needs a different starting position or wider scan. Travel never expands
+automatically. **Stop**, focuser **Disconnect**, or camera **Disconnect**
+cancels autofocus and attempts to stop the motor. Failure leaves it at the
+current position and reports the reason. Exposure/gain changes, manual focus,
+stacking, mount work and filter moves are locked during a run. Autofocus is
+disabled with the built-in simulators, which do not respond to real motor
+movement. Progress and the final position/HFR appear in the Focuser panel;
+scan measurements also go to the log.
+
+See [AUTOFOCUS.md](AUTOFOCUS.md) for the implementation and validation plan.
+
+To run the same autofocus engine without a window (this **moves the motor**):
+
+```powershell
+scripts\run-win.ps1 -Product capture-cli -Configuration release --autofocus COM4 --device poa-0 --focus-step 1000 --exposure 5
+```
+
+Use `capture-cli --list` for camera IDs. The command requires a real camera,
+waits for a tracked unsaturated star, logs the scan, and exits non-zero on
+failure. It uses a separate settings domain from the graphical app.
 
 For a read-only connection check using the application's native driver:
 
