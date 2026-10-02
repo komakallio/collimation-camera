@@ -125,6 +125,39 @@ closes the port without sending a motor command. It writes to the normal app
 log. The protocol implementation follows the
 [INDI ESATTO command definitions](https://github.com/indilib/indi/blob/master/drivers/focuser/primalucacommandset.cpp).
 
+## Imaging-system tilt
+
+Connect the camera, ESATTO and mount, acquire a single star, and calibrate the
+mount. Choose the existing **Autofocus step** and stack count, then select
+**Measure Tilt…** in the Focuser panel and choose a TIFF destination.
+
+The app moves the same star through C, N, NE, E, SE, S, SW, W and NW and
+autofocuses each position. Every mosaic image uses the initial centre focus,
+exposure and gain, so differences in sharpness can be compared directly.
+Autofocus may tune exposure independently for its measurements. At the end,
+the star returns to centre, autofocus repeats, and the focuser stays at the
+new centre optimum. The centre drift is reported without correction.
+
+Results show each optimal focus and its signed offset from initial centre
+focus. A fit separates a directional plane from a simple radial focus term.
+Tilt spread is in motor steps over the sampled footprint; direction points
+towards increasing optimal focus, clockwise from sensor right. Radial offset
+and residual RMS are also reported. These are system focus measurements, not
+a calibrated physical angle or adjustment-screw instructions.
+
+Outer optical failures are skipped. A fit requires centre plus at least six
+outer measurements and is labelled partial when points are missing. Device
+faults abort; **Cancel Tilt**, **Stop**, or disconnecting the camera, mount,
+focuser or filter wheel stops the sequence. No return motion follows an abort.
+Completed readings are saved to a uniquely named partial TIFF when available.
+All competing controls remain locked throughout the sequence; Stop and
+Disconnect remain available.
+
+The 768×768 float TIFF embeds the versioned measurements, accepted focus
+curves, image outcomes, equipment settings and drift check. **Open
+Constellation…** restores them with the images. Existing constellation TIFFs
+remain compatible; damaged measurement metadata does not hide the image.
+
 ## Requirements
 
 ### macOS

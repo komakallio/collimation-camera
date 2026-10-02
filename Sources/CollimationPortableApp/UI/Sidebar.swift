@@ -69,6 +69,10 @@ enum Sidebar {
                 display: MetricText.constellationZoom(engine.constellationZoom),
                 onChange: { engine.constellationZoom = engine.clampedConstellationZoom($0) }, onCommit: {})
             command(CommandCatalog.ID.constellationFit, engine: engine, host: host)
+            if let report = engine.constellationResult?.tiltReport {
+                for line in TiltText.summary(report) { secondary(line) }
+            }
+            if let warning = engine.constellationResult?.metadataWarning { secondary(warning) }
         }
     }
 
@@ -242,6 +246,10 @@ enum Sidebar {
             enabled: engine.canEditAutofocus, help: HelpText.autofocusStep
         ) { engine.autofocusStepSize = $0 }
         command(CommandCatalog.ID.focuserAutofocus, engine: engine, host: host)
+        command(CommandCatalog.ID.focuserMeasureTilt, engine: engine, host: host)
+        command(CommandCatalog.ID.focuserCancelTilt, engine: engine, host: host)
+        if engine.isMeasuringTilt { secondary(TiltText.progress(engine.tiltProgress)) }
+        else if let report = engine.tiltReport { for line in TiltText.summary(report) { secondary(line) } }
         secondary(MetricText.autofocus(engine.autofocusState, samples: engine.autofocusSamples.count))
     }
 

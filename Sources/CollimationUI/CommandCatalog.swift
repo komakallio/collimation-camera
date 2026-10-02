@@ -84,6 +84,8 @@ public enum CommandCatalog {
         public static let focuserGoto = "focuser.goto"
         public static let focuserStop = "focuser.stop"
         public static let focuserAutofocus = "focuser.autofocus"
+        public static let focuserMeasureTilt = "focuser.measureTilt"
+        public static let focuserCancelTilt = "focuser.cancelTilt"
         public static let viewOverlay = "view.overlay"
         public static let viewSensorMarks = "view.sensorMarks"
         public static let viewFitToWindow = "view.fitToWindow"
@@ -97,6 +99,22 @@ public enum CommandCatalog {
 
     @MainActor
     public static let all: [Command] = [
+        Command(
+            id: ID.focuserMeasureTilt, menu: .focuser, title: "Measure Tilt…",
+            help: "Autofocus the same star at nine constellation positions. Save images at centre focus, focus offsets and a tilt fit. Requires a calibrated mount. Repeat centre focus to report drift.",
+            isEnabled: { $0.canMeasureTilt },
+            perform: { engine, host in
+                save(engine, host, ("Save tilt constellation", "Moves the mount and focuser. Saves nine common-focus star images and focus measurements in one TIFF.", engine.suggestedTiltName())) {
+                    $0.startTiltMeasurement(to: $1)
+                }
+            }
+        ),
+        Command(
+            id: ID.focuserCancelTilt, menu: .focuser, title: "Cancel Tilt",
+            help: "Stop both motors and save completed measurements as a partial constellation.",
+            isEnabled: { $0.isMeasuringTilt },
+            perform: { engine, _ in engine.cancelTiltMeasurement() }
+        ),
         Command(
             id: ID.focuserAutofocus,
             menu: .focuser,

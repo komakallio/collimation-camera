@@ -20,8 +20,9 @@ public enum MonoTIFF {
         try write(pixels: frame.pixels, width: frame.width, height: frame.height, to: url)
     }
 
-    public static func write(_ image: StackedImage, to url: URL) throws {
-        try write(floats: image.pixels, width: image.width, height: image.height, to: url)
+    public static func write(_ image: StackedImage, to url: URL, imageDescription: Data? = nil) throws {
+        let data = try encode(floats: image.pixels, width: image.width, height: image.height, imageDescription: imageDescription)
+        try data.write(to: url, options: .atomic)
     }
 
     public static func write(pixels: [UInt16], width: Int, height: Int, to url: URL) throws {
@@ -46,7 +47,7 @@ public enum MonoTIFF {
         return encodeStrip(strip, width: width, height: height, bitsPerSample: 16, sampleFormat: 1)
     }
 
-    public static func encode(floats: [Float], width: Int, height: Int) throws -> Data {
+    public static func encode(floats: [Float], width: Int, height: Int, imageDescription: Data? = nil) throws -> Data {
         guard width > 0, height > 0, floats.count == width * height else {
             throw CameraError.unsupported("Frame size \(width)×\(height) does not match \(floats.count) pixels.")
         }
@@ -56,7 +57,18 @@ public enum MonoTIFF {
             var bits = value.bitPattern.littleEndian
             withUnsafeBytes(of: &bits) { strip.append(contentsOf: $0) }
         }
-        return encodeStrip(strip, width: width, height: height, bitsPerSample: 32, sampleFormat: 3)
+        var description: Data?
+        if let imageDescription {
+            guard imageDescription.count <= 256 * 1024, let text = String(data: imageDescription, encoding: .utf8) else {
+                throw CameraError.unsupported("Invalid TIFF image description.")
+            }
+            // JSON Unicode escapes keep TIFF's ASCII tag valid, including
+            // camera names and errors containing non-ASCII characters.
+            let ascii = text.utf16.map { $0 < 128 ? String(UnicodeScalar($0)!) : String(format: "\\u%04x", Int($0)) }.joined()
+            description = Data(ascii.utf8) + Data([0])
+            guard description!.count <= 256 * 1024 else { throw CameraError.unsupported("Tilt metadata is too large.") }
+        }
+        return encodeStrip(strip, width: width, height: height, bitsPerSample: 32, sampleFormat: 3, description: description)
     }
 
     /// `sampleFormat`: 1 = unsigned integer, 3 = IEEE floating point.
@@ -65,11 +77,12 @@ public enum MonoTIFF {
         width: Int,
         height: Int,
         bitsPerSample: UInt32,
-        sampleFormat: UInt32
+        sampleFormat: UInt32,
+        description: Data? = nil
     ) -> Data {
         let pixelBytes = strip.count
         let headerSize = 8
-        let ifdCount = 10
+        let ifdCount = description == nil ? 10 : 11
         let stripOffset = UInt32(headerSize)
         let ifdOffset = UInt32(headerSize + pixelBytes)
 
@@ -86,12 +99,24 @@ public enum MonoTIFF {
         appendEntry(&data, tag: 258, type: .short, value: bitsPerSample)
         appendEntry(&data, tag: 259, type: .short, value: 1)
         appendEntry(&data, tag: 262, type: .short, value: 1)
+        if let description {
+            appendUInt16(&data, 270)
+            appendUInt16(&data, 2)
+            appendUInt32(&data, UInt32(description.count))
+            if description.count <= 4 {
+                data.append(description)
+                data.append(contentsOf: repeatElement(UInt8(0), count: 4 - description.count))
+            } else {
+                appendUInt32(&data, ifdOffset + UInt32(2 + ifdCount * 12 + 4))
+            }
+        }
         appendEntry(&data, tag: 273, type: .long, value: stripOffset)
         appendEntry(&data, tag: 277, type: .short, value: 1)
         appendEntry(&data, tag: 278, type: .long, value: UInt32(height))
         appendEntry(&data, tag: 279, type: .long, value: UInt32(pixelBytes))
         appendEntry(&data, tag: 339, type: .short, value: sampleFormat)
         appendUInt32(&data, 0)
+        if let description, description.count > 4 { data.append(description) }
         return data
     }
 

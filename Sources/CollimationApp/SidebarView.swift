@@ -111,6 +111,14 @@ struct SidebarView: View {
                         set: { engine.constellationZoom = engine.clampedConstellationZoom(LogSlider.value($0)) }
                     ), range: LogSlider.range(1...8), format: MetricText.constellationZoom(engine.constellationZoom))
                     button(CommandCatalog.ID.constellationFit)
+                    if let report = engine.constellationResult?.tiltReport {
+                        ForEach(Array(TiltText.summary(report).enumerated()), id: \.offset) { _, line in
+                            Text(line).font(.caption.monospacedDigit())
+                        }
+                    }
+                    if let warning = engine.constellationResult?.metadataWarning {
+                        Text(warning).font(.caption).foregroundStyle(.orange)
+                    }
                 }
             }
         }
@@ -224,6 +232,15 @@ struct SidebarView: View {
                     .disabled(!engine.canEditAutofocus)
                     .help(HelpText.autofocusStep)
                 button(CommandCatalog.ID.focuserAutofocus)
+                button(CommandCatalog.ID.focuserMeasureTilt)
+                button(CommandCatalog.ID.focuserCancelTilt)
+                if engine.isMeasuringTilt {
+                    Text(TiltText.progress(engine.tiltProgress)).font(.caption)
+                } else if let report = engine.tiltReport {
+                    ForEach(Array(TiltText.summary(report).enumerated()), id: \.offset) { _, line in
+                        Text(line).font(.caption.monospacedDigit())
+                    }
+                }
                 Text(MetricText.autofocus(engine.autofocusState, samples: engine.autofocusSamples.count))
                     .font(.caption).foregroundStyle(.secondary)
             }

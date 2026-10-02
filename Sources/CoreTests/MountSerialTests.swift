@@ -120,7 +120,7 @@ enum SerialLogText {
 // MARK: - Scripts
 
 /// An EQDIR motor board: answers `:e1` and the initialization inquiries.
-private func skyWatcherScript() -> ScriptedSerialPortDriver {
+func skyWatcherScript() -> ScriptedSerialPortDriver {
     ScriptedSerialPortDriver(ascii: [
         ":e1\r": "=020300\r",     // version inquiry, the probe
         ":F1\r": "=\r",           // initialize axis 1

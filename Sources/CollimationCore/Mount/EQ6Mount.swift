@@ -4,6 +4,16 @@ public protocol PulseGuider: AnyObject, Sendable {
     func pulse(_ direction: GuideDirection, milliseconds: Int) async throws
 }
 
+public protocol MountDevice: PulseGuider {
+    var isConnected: Bool { get }
+    var protocolName: String { get }
+    var calibrationRAMultiple: Double { get }
+    func connect(path: String, baud: Int) throws
+    func disconnect()
+    func haltMotions()
+    func applyNudge(_ nudge: SlewNudge?) async throws
+}
+
 public enum EQ6Protocol: String, Equatable, Sendable {
     case lx200 = "LX200 pulse guide"
     case synScan = "SynScan"
@@ -11,7 +21,7 @@ public enum EQ6Protocol: String, Equatable, Sendable {
 }
 
 /// EQ6 pulse-guide client. Auto-detects SynScan handset, LX200 `:Mg`, or SkyWatcher motor (EQDIR).
-public final class EQ6Mount: PulseGuider, @unchecked Sendable {
+public final class EQ6Mount: MountDevice, @unchecked Sendable {
     private let lock = NSLock()
     private let port: SerialPortDriver
     private var proto: EQ6Protocol?
@@ -105,18 +115,28 @@ public final class EQ6Mount: PulseGuider, @unchecked Sendable {
     }
 
     private func serial(_ work: @escaping @Sendable () throws -> Void) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            DispatchQueue.global(qos: .userInitiated).async { [self] in
-                self.lock.lock()
-                defer { self.lock.unlock() }
-                do {
-                    try work()
-                    continuation.resume()
-                } catch {
-                    continuation.resume(throwing: error)
+        try Task.checkCancellation()
+        let cancellation = AutofocusCancellation()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                DispatchQueue.global(qos: .userInitiated).async { [self] in
+                    self.lock.lock()
+                    defer { self.lock.unlock() }
+                    do {
+                        // A cancelled slew can be waiting behind a stalled
+                        // transaction. Never start it after that transaction ends.
+                        try cancellation.check()
+                        try work()
+                        continuation.resume()
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
                 }
             }
+        } onCancel: {
+            cancellation.cancel()
         }
+        try Task.checkCancellation()
     }
 
     private func pulseSync(_ direction: GuideDirection, milliseconds: Int) throws {

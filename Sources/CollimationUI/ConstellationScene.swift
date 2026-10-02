@@ -50,7 +50,16 @@ public enum ConstellationScene {
                   color: .white, size: 13, monospaced: false, weight: .regular)
         ])]
         for cell in cells(result: result, size: size, zoom: state.zoom) {
-            if !cell.tile.centerDetected {
+            if let report = result.tiltReport,
+               let point = report.points.first(where: { $0.row == cell.tile.row && $0.column == cell.tile.column }) {
+                let caption = TiltText.point(point, reference: report.commonFocus) + (point.imageCaptured ? "" : " · no image")
+                output.append(.clipped(origin: cell.origin, size: cell.size, cornerRadius: 0, primitives: [
+                    .fillRect(origin: cell.origin, size: SIMD2(cell.size.x, 26), color: .black.opacity(0.8), cornerRadius: 0),
+                    .text(caption, at: cell.origin + SIMD2(6, 6), anchor: .topLeading,
+                          color: point.focus == nil || !point.imageCaptured ? .systemYellow : .white,
+                          size: 12, monospaced: true, weight: .regular)
+                ]))
+            } else if !cell.tile.centerDetected {
                 output.append(.clipped(origin: cell.origin, size: cell.size, cornerRadius: 0, primitives: [
                     .fillRect(origin: cell.origin, size: SIMD2(min(cell.size.x, 150), 24), color: .black.opacity(0.75), cornerRadius: 0),
                     .text(SidebarText.centerNotDetected, at: cell.origin + SIMD2(6, 6), anchor: .topLeading,

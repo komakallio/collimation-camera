@@ -89,7 +89,7 @@ public final class CollimationEngine {
     public var constellationStretch = StretchParams.default {
         didSet { updateConstellationDisplay() }
     }
-    public var canOpenConstellation: Bool { !isLoadingConstellation && !isStacking }
+    public var canOpenConstellation: Bool { !isLoadingConstellation && !isStacking && !isMeasuringTilt }
     public var canShowConstellation: Bool { constellationResult != nil }
     public var displayStretch: StretchParams {
         get { showingConstellation ? constellationStretch : stretch }
@@ -245,6 +245,19 @@ public final class CollimationEngine {
     public private(set) var autofocusSamples: [AutofocusSample] = []
     public private(set) var autofocusExposureRetries = 0
     public private(set) var autofocusRecenters = 0
+    public private(set) var isMeasuringTilt = false
+    public private(set) var tiltProgress = TiltProgress()
+    public private(set) var tiltReport: TiltMeasurementReport?
+    public private(set) var tiltSavedURL: URL?
+    @ObservationIgnored private var tiltTask: Task<Void, Never>?
+    @ObservationIgnored private var tiltCancellation: AutofocusCancellation?
+    @ObservationIgnored private var tiltID: UUID?
+    @ObservationIgnored private var tiltLastStar: MountCentroidSample?
+    public var canMeasureTilt: Bool {
+        guard !isMeasuringTilt, canAutofocus, canSaveConstellation else { return false }
+        let points = ConstellationCapture.positions(sensorWidth: sensorWidth, sensorHeight: sensorHeight)
+        return Set(points.map { "\($0.sensorPoint.x),\($0.sensorPoint.y)" }).count == 9
+    }
     @ObservationIgnored private var autofocusTask: Task<Void, Never>?
     @ObservationIgnored private var autofocusID: UUID?
     @ObservationIgnored private var autofocusCancellation: AutofocusCancellation?
@@ -265,8 +278,8 @@ public final class CollimationEngine {
               let star = tracking.detection, star.snr >= 6 else { return false }
         return (try? AutofocusPlan(position: state.position, maximum: state.maxPosition, step: autofocusStepSize)) != nil
     }
-    public var canEditAutofocus: Bool { !isAutofocusing }
-    public var canAdjustCamera: Bool { !isAutofocusing }
+    public var canEditAutofocus: Bool { !isAutofocusing && !isMeasuringTilt }
+    public var canAdjustCamera: Bool { !isAutofocusing && !isMeasuringTilt }
 
     public var canConnectFocuser: Bool {
         isFocuserConnected || isFocuserBusy || !selectedFocuserPort.isEmpty
@@ -274,7 +287,7 @@ public final class CollimationEngine {
     public var canSelectFocuserPort: Bool { !isFocuserConnected && !isFocuserBusy }
     public var canRefreshFocuserPorts: Bool { canSelectFocuserPort }
     public var canMoveFocuser: Bool {
-        isFocuserConnected && !isFocuserBusy && focuserSnapshot?.isMoving == false && !isStacking && !isMountBusy && mountTask == nil && !isAutoExposing && !isAutofocusing
+        isFocuserConnected && !isFocuserBusy && focuserSnapshot?.isMoving == false && !isStacking && !isMountBusy && mountTask == nil && !isAutoExposing && !isAutofocusing && !isMeasuringTilt
     }
     public var canMoveFocuserIn: Bool {
         canMoveFocuser && focuserStepSize > 0 && focuserStepSize <= (focuserSnapshot?.position ?? 0)
@@ -289,7 +302,7 @@ public final class CollimationEngine {
     }
     /// Stop and disconnect remain available during commands and failed polls.
     public var canStopFocuser: Bool { isFocuserConnected }
-    private var focuserIsWorking: Bool { isAutofocusing || isFocuserBusy || focuserSnapshot?.isMoving == true }
+    private var focuserIsWorking: Bool { isMeasuringTilt || isAutofocusing || isFocuserBusy || focuserSnapshot?.isMoving == true }
 
     /// Folder the last snapshot was written to. Both apps remember it here so
     /// the save panel and the portable app's dialog agree.
@@ -317,17 +330,17 @@ public final class CollimationEngine {
     public var canRefreshDevices: Bool { !isConnected }
     public var canSelectDevice: Bool { !isConnected }
     public var canAutoExpose: Bool { isConnected && !isAutoExposing && !isStacking && !isMountBusy && !focuserIsWorking }
-    public var canSaveSnapshot: Bool { isConnected && !isStacking }
+    public var canSaveSnapshot: Bool { isConnected && !isStacking && !isMeasuringTilt }
     public var canSaveStacked: Bool {
         isConnected && !isStacking && !isMountBusy && !focuserIsWorking && tracking.state == .tracking
     }
-    public var canSelectStackCount: Bool { !isStacking }
+    public var canSelectStackCount: Bool { !isStacking && !isMeasuringTilt }
     public var canCalibrateMount: Bool {
         isMountConnected && isConnected && !isMountBusy && !isStacking && !focuserIsWorking && tracking.state == .tracking
     }
     public var canCenterStar: Bool { canCalibrateMount && isMountCalibrated }
     public var canSaveConstellation: Bool { canCenterStar && !isLoadingConstellation }
-    public var canConnectMount: Bool { (isMountConnected || (!serialPorts.isEmpty && !isAutofocusing)) && !isMountBusy }
+    public var canConnectMount: Bool { isMountConnected || (!serialPorts.isEmpty && !isAutofocusing && !isMeasuringTilt && !isMountBusy) }
     public var canSelectSerialPort: Bool { !isMountConnected && !isMountBusy }
     public var canRefreshSerialPorts: Bool { canSelectSerialPort }
     /// Disconnect is always allowed; only connecting waits for a move to end.
@@ -351,16 +364,16 @@ public final class CollimationEngine {
     }
 
     public var canConnectFilterWheel: Bool {
-        if !isFilterWheelConnected && isAutofocusing { return false }
+        if !isFilterWheelConnected && (isAutofocusing || isMeasuringTilt) { return false }
         return Self.canConnectFilterWheel(
             isConnected: isFilterWheelConnected,
             hasWheels: !filterWheels.isEmpty,
             isMoving: isFilterWheelMoving
         )
     }
-    public var canSelectFilterWheel: Bool { !isFilterWheelConnected && !isFilterWheelMoving && !isAutofocusing }
+    public var canSelectFilterWheel: Bool { !isFilterWheelConnected && !isFilterWheelMoving && !isAutofocusing && !isMeasuringTilt }
     public var canRefreshFilterWheels: Bool { canSelectFilterWheel }
-    public var canSelectFilter: Bool { isFilterWheelConnected && !isFilterWheelMoving && !isAutofocusing }
+    public var canSelectFilter: Bool { isFilterWheelConnected && !isFilterWheelMoving && !isAutofocusing && !isMeasuringTilt }
 
     /// Lower zoom bound. Full-frame centering/constellation slews must go
     /// below `minZoom` or the live view still clips stars near the edges.
@@ -372,7 +385,7 @@ public final class CollimationEngine {
     nonisolated private let pipeline = FramePipeline()
     nonisolated private let coalescer = FrameCoalescer(label: "collimation.process")
     nonisolated private let fpsMeter = FPSMeter()
-    nonisolated private let mount = EQ6Mount()
+    nonisolated private let mount: any MountDevice
     nonisolated private let filterWheel = PhoenixWheel()
     nonisolated private let focuser: any FocuserDevice
     nonisolated private let focuserQueue = DispatchQueue(label: "collimation.focuser")
@@ -408,6 +421,7 @@ public final class CollimationEngine {
     @ObservationIgnored private let serialPortPaths: () -> [String]
     @ObservationIgnored private let cameraFactory: (String) throws -> any CameraDevice
     @ObservationIgnored private let autofocusTiming: AutofocusTiming
+    @ObservationIgnored private let mountSettleMilliseconds: Int
     /// Search binning before a camera is connected, and the ceiling once one is.
     public static let defaultSearchBinning = 4
     private static let serialPortDefaultsKey = "mount.serialPort"
@@ -419,14 +433,19 @@ public final class CollimationEngine {
         defaults: UserDefaults = .standard,
         serialPortPaths: @escaping () -> [String] = SerialPortScanner.availablePaths,
         focuser: any FocuserDevice = EsattoFocuser(),
+        mount: any MountDevice = EQ6Mount(),
         cameraFactory: @escaping (String) throws -> any CameraDevice = { try DeviceCatalog.makeDevice(id: $0) },
-        autofocusTiming: AutofocusTiming = AutofocusTiming()
+        autofocusTiming: AutofocusTiming = AutofocusTiming(),
+        initialCalibration: GuideCalibration? = nil,
+        mountSettleMilliseconds: Int = MountGuide.settleMilliseconds
     ) {
         self.defaults = defaults
         self.serialPortPaths = serialPortPaths
         self.focuser = focuser
+        self.mount = mount
         self.cameraFactory = cameraFactory
         self.autofocusTiming = autofocusTiming
+        self.mountSettleMilliseconds = max(0, mountSettleMilliseconds)
         refreshDevices()
         selectedDeviceID = DeviceCatalog.preferredDeviceID(in: devices)
         // The remembered port is read before refreshSerialPorts() so the
@@ -442,7 +461,7 @@ public final class CollimationEngine {
         if let path = defaults.string(forKey: Self.snapshotDirectoryDefaultsKey), !path.isEmpty {
             snapshotDirectory = URL(fileURLWithPath: path, isDirectory: true)
         }
-        if let calibration = GuideCalibrationStore.load(), calibration.isValid {
+        if let calibration = initialCalibration ?? GuideCalibrationStore.load(), calibration.isValid {
             guideCalibration = calibration
             mountStatus = "Calibrated — connect the mount to center"
         }
@@ -798,6 +817,7 @@ public final class CollimationEngine {
     }
 
     public func disconnect() {
+        if isMeasuringTilt { cancelTiltMeasurement() }
         if isAutofocusing { stopFocuser() }
         stackTask?.cancel()
         stackTask = nil
@@ -1106,60 +1126,331 @@ public final class CollimationEngine {
         } catch { presentError(error) }
     }
 
-    private func runAutofocus(plan initialPlan: AutofocusPlan, maximum: Int, id: UUID, cancellation: AutofocusCancellation) async {
-        var plan = initialPlan
-        var search = AutofocusSearch()
+    public func suggestedTiltName() -> String {
+        MonoTIFF.suggestedFileName(width: 768, height: 768, label: "tilt")
+    }
+
+    public func startTiltMeasurement(to url: URL) {
+        guard canMeasureTilt, let camera = device?.descriptor, let focus = focuserSnapshot,
+              let calibration = guideCalibration, let star = tracking.centroidOnSensor else { return }
+        let report = TiltMeasurementReport(camera: camera, focuserSerial: focus.serialNumber,
+            mountProtocol: mount.protocolName, autofocusStep: autofocusStepSize,
+            stackCount: FrameStacker.clampedCount(stackFrameCount), gain: Int(gain.rounded()),
+            filterPosition: hardwareFilterPosition)
+        let cancellation = AutofocusCancellation()
+        tiltReport = report; tiltID = report.id; tiltCancellation = cancellation
+        tiltSavedURL = nil; tiltLastStar = MountCentroidSample(star)
+        isMeasuringTilt = true; errorMessage = nil
+        showingConstellation = false
+        focuserGeneration &+= 1
+        setTiltProgress(.moving, index: 1, label: "C")
+        applyPipelineConfig()
+        Log.info("Tilt start: \(report.id), \(camera.name), \(focus.serialNumber), step \(report.autofocusStep)")
+        tiltTask = Task { await self.runTiltMeasurement(to: url, id: report.id,
+            calibration: calibration, cancellation: cancellation) }
+    }
+
+    public func cancelTiltMeasurement() {
+        guard isMeasuringTilt, let cancellation = tiltCancellation, !cancellation.isCancelled else { return }
+        cancellation.cancel()
+        tiltTask?.cancel()
+        stackCapture.cancel()
+        tiltProgress.phase = .cancelled
+        autofocusAcceptAfter = .distantFuture
+        // Stop is queued after the short in-flight focuser transaction; queued
+        // autofocus work checks the cancelled token before touching the device.
+        let focus = focuser, mount = mount
+        focuserQueue.async { _ = try? focus.stop() }
+        Task.detached { mount.haltMotions() }
+        Log.info("Tilt cancellation requested")
+    }
+
+    private func setTiltProgress(_ phase: TiltPhase, index: Int, label: String, collected: Int = 0, target: Int = 0) {
+        tiltProgress.phase = phase; tiltProgress.index = index; tiltProgress.label = label
+        tiltProgress.collected = collected; tiltProgress.target = target
+        statusText = "Tilt \(index)/9 — \(label): \(phase.rawValue)"
+    }
+
+    private func checkTilt(_ id: UUID, _ cancellation: AutofocusCancellation) throws {
+        try Task.checkCancellation(); try cancellation.check()
+        guard tiltID == id, isConnected, isMountConnected, isFocuserConnected else { throw CancellationError() }
+    }
+
+    private func prepareTiltFocus(anchor: MountCentroidSample) {
+        autofocusSamples = []; autofocusExposureRetries = 0; autofocusRecenters = 0
+        autofocusFrames = []; autofocusExposureFrames = []; autofocusHasSaturation = false
+        autofocusDiscardFrames = 0; autofocusExposureFlushSeconds = 0
+        autofocusAnchorX = anchor.x; autofocusAnchorY = anchor.y
+        autofocusAcceptAfter = .distantFuture; autofocusLastTimestamp = .distantPast
+        isAutofocusing = true
+        applyPipelineConfig()
+    }
+
+    private func endTiltFocus() {
+        isAutofocusing = false; autofocusAcceptAfter = .distantFuture
+        autofocusFrames = []; autofocusExposureFrames = []; autofocusHasSaturation = false
+        applyPipelineConfig()
+    }
+
+    private func tiltFocus(cancellation: AutofocusCancellation) async throws -> AutofocusResult {
+        guard let state = focuserSnapshot, let anchor = tracking.centroidOnSensor else { throw AutofocusError.noStar }
+        prepareTiltFocus(anchor: MountCentroidSample(anchor))
+        defer { endTiltFocus() }
+        let plan = try AutofocusPlan(position: state.position, maximum: state.maxPosition, step: tiltReport!.autofocusStep)
+        let result = try await autofocusMinimum(plan: plan, maximum: state.maxPosition, cancellation: cancellation)
+        autofocusState = .complete(position: result.position, hfr: result.hfr)
+        return result
+    }
+
+    private func placeTiltStar(x: Double, y: Double, calibration: GuideCalibration) async throws {
+        let expected = showFullFramePreview()
+        try await waitForCaptureWindow(expected, reference: tiltLastStar)
+        try await moveStar(to: MountCentroidSample(SIMD2(x, y)), calibration: calibration)
+        guard tracking.state == .tracking, let reached = tracking.centroidOnSensor else { throw MountError.noStar }
+        let anchor = MountCentroidSample(reached)
+        tiltLastStar = anchor
+        guard MountGuide.isCentered(errorPixels: reached - SIMD2(x, y)) else { throw MountError.targetNotReached }
+        try await prepareStackWindow(around: anchor)
+    }
+
+    /// Restoration uses the same increasing approach as autofocus. The common
+    /// image exposure is never retuned: that would change the mosaic comparison.
+    private func restoreTiltImageSettings(cancellation: AutofocusCancellation) async throws {
+        guard let report = tiltReport, let target = report.commonFocus,
+              let exposure = report.commonExposureMicroseconds else { throw AutofocusError.noStar }
+        guard let anchor = tracking.centroidOnSensor else { throw AutofocusError.noStar }
+        prepareTiltFocus(anchor: MountCentroidSample(anchor))
+        defer { endTiltFocus() }
+        try await autofocusMove(to: target - report.autofocusStep, cancellation: cancellation)
+        try await autofocusMove(to: target, cancellation: cancellation)
+        try autofocusSetExposure(exposure, cancellation: cancellation)
+        let deadline = autofocusPrepareFrames()
+        while autofocusExposureFrames.count < AutofocusPlan.framesPerPosition {
+            try Task.checkCancellation(); try cancellation.check()
+            guard isConnected, isFocuserConnected else { throw CancellationError() }
+            guard Date() < deadline else { throw AutofocusError.noStar }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        guard !autofocusHasSaturation else { throw AutofocusError.exposureLimit }
+        guard autofocusExposureFrames.allSatisfy({ $0.detected && $0.snr >= 6 }) else { throw AutofocusError.noStar }
+        autofocusAcceptAfter = .distantFuture
+    }
+
+    public static func isRecoverableTiltOpticalError(_ error: Error) -> Bool {
+        switch error {
+        case AutofocusError.noStar, AutofocusError.invalidRange, AutofocusError.minimumNotBracketed,
+             AutofocusError.flatCurve, AutofocusError.verificationFailed, AutofocusError.exposureLimit,
+             AutofocusError.unstableExposure, AutofocusError.invalidSlope, AutofocusError.searchTravelLimit,
+             AutofocusError.searchNotImproving, MountError.noStar, MountError.targetNotReached,
+             MountError.starChangedDuringFrameSwitch:
+            return true
+        default: return false
+        }
+    }
+
+    private func stopTiltDevices(cancellation: AutofocusCancellation) async throws {
+        await haltMotionsOffActor()
+        _ = try await autofocusOperation(cancellation: cancellation) { try $0.stop() }
+        let deadline = Date().addingTimeInterval(autofocusTiming.motionTimeout)
+        while true {
+            let state = try await autofocusOperation(cancellation: cancellation) { try $0.snapshot() }
+            if !state.isMoving { return }
+            guard Date() < deadline else { throw AutofocusError.motionTimeout }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
+    private func runTiltMeasurement(to url: URL, id: UUID, calibration: GuideCalibration,
+                                    cancellation: AutofocusCancellation) async {
+        var tiles: [(row: Int, column: Int, image: StackedImage)] = []
+        var terminal: TiltRunStatus = .complete
         do {
-            try Task.checkCancellation()
-            try cancellation.check()
-            try await autofocusSelectExposure(cancellation: cancellation)
-            while true {
+            try checkTilt(id, cancellation)
+            try beginMountWork("Measuring tilt…", holdROI: true, work: .centering)
+            for index in 0..<9 {
+                try checkTilt(id, cancellation)
+                let point = tiltReport!.points[index]
+                var placed = false
+                tiltReport!.points[index].startedAt = Date()
                 do {
-                    if autofocusExposureRetries > 0 || autofocusRecenters > 0 {
-                        // Recheck the baseline after exposure or range changes,
-                        // using the same approach as every scan and final move.
-                        try await autofocusMove(to: plan.positions[4] - plan.step, cancellation: cancellation)
-                        try await autofocusMove(to: plan.positions[4], recentering: autofocusRecenters > 0, cancellation: cancellation)
+                    setTiltProgress(.moving, index: index + 1, label: point.label)
+                    try await placeTiltStar(x: point.targetX, y: point.targetY, calibration: calibration)
+                    placed = true
+                    try checkTilt(id, cancellation)
+                    setTiltProgress(.focusing, index: index + 1, label: point.label)
+                    let result = try await tiltFocus(cancellation: cancellation)
+                    try checkTilt(id, cancellation)
+                    tiltReport!.points[index].focus = result
+                    tiltLastStar = MountCentroidSample(SIMD2(result.sensorX, result.sensorY))
+                    if index == 0 {
+                        tiltReport!.commonFocus = result.position
+                        tiltReport!.commonExposureMicroseconds = result.exposureMicroseconds
                     }
-                    let initialHFR = try await autofocusMeasure(at: plan.positions[4], verifying: false,
-                                                               checkingStar: true, cancellation: cancellation)
-                    Log.info(String(format: "Autofocus initial HFR: %.3f px", initialHFR))
-                    try await autofocusMove(to: plan.preloadPosition, cancellation: cancellation)
-                    for position in plan.positions {
-                        try await autofocusMove(to: position, cancellation: cancellation)
-                        let hfr = try await autofocusMeasure(at: position, verifying: false, cancellation: cancellation)
-                        autofocusSamples.append(AutofocusSample(position: position, hfr: hfr,
-                                                               exposureMicroseconds: Int(exposureMicroseconds.rounded())))
-                        Log.info(String(format: "Autofocus sample: %d, HFR %.3f px", position, hfr))
-                    }
-                    let target = try plan.solution(samples: autofocusSamples)
-                    try await autofocusMove(to: target - plan.step, cancellation: cancellation)
-                    try await autofocusMove(to: target, cancellation: cancellation)
-                    let hfr = try await autofocusMeasure(at: target, verifying: true, cancellation: cancellation)
-                    try AutofocusPlan.verify(hfr: hfr, samples: autofocusSamples)
-                    try AutofocusPlan.verify(hfr: hfr, samples: [AutofocusSample(position: plan.positions[4], hfr: initialHFR)])
-                    try cancellation.check()
-                    guard autofocusID == id else { return }
-                    finishAutofocus(state: .complete(position: target, hfr: hfr))
-                    Log.info(String(format: "Autofocus complete: %d, HFR %.3f px, exposure %.3f ms", target, hfr, exposureMicroseconds / 1000))
-                    return
-                } catch is AutofocusExposureChanged {
-                    autofocusExposureRetries += 1
-                    search.exposureChanged()
-                    autofocusSamples = []
-                    Log.info("Autofocus restarting curve after saturation (\(autofocusExposureRetries)/\(AutofocusExposureControl.maximumRestarts))")
-                } catch AutofocusError.minimumNotBracketed {
-                    plan = try search.recenter(plan: plan, samples: autofocusSamples, maximum: maximum)
-                    autofocusRecenters += 1
-                    autofocusSamples = []
-                    Log.info("Autofocus re-centering \(autofocusRecenters): center \(plan.positions[4]), scan \(plan.positions.first!)–\(plan.positions.last!)")
+                    Log.info("Tilt \(point.label): focus \(result.position), HFR \(result.hfr)")
+                } catch {
+                    try checkTilt(id, cancellation)
+                    guard index > 0, Self.isRecoverableTiltOpticalError(error) else { throw error }
+                    try await stopTiltDevices(cancellation: cancellation)
+                    tiltReport!.points[index].focusError = error.localizedDescription
+                    Log.info("Tilt \(point.label) skipped: \(error.localizedDescription)")
                 }
+                // A failed curve can still have a useful common-focus image.
+                do {
+                    guard placed else { throw MountError.targetNotReached }
+                    setTiltProgress(.restoringFocus, index: index + 1, label: point.label)
+                    try await restoreTiltImageSettings(cancellation: cancellation)
+                    setTiltProgress(.stacking, index: index + 1, label: point.label)
+                    let image = try await captureStackedImage(frameCount: tiltReport!.stackCount) { count, target in
+                        self.setTiltProgress(.stacking, index: index + 1, label: point.label, collected: count, target: target)
+                    }
+                    try checkTilt(id, cancellation)
+                    tiles.append((point.row, point.column, image))
+                    tiltReport!.points[index].imageCaptured = true
+                } catch {
+                    try checkTilt(id, cancellation)
+                    guard Self.isRecoverableTiltOpticalError(error) else { throw error }
+                    try await stopTiltDevices(cancellation: cancellation)
+                    tiltReport!.points[index].imageError = error.localizedDescription
+                }
+                tiltReport!.points[index].finishedAt = Date()
             }
+            setTiltProgress(.moving, index: 9, label: "C")
+            let center = tiltReport!.points[0]
+            try await placeTiltStar(x: center.targetX, y: center.targetY, calibration: calibration)
+            setTiltProgress(.checkingDrift, index: 9, label: "C")
+            do {
+                tiltReport!.finalCenter = try await tiltFocus(cancellation: cancellation)
+            } catch {
+                try checkTilt(id, cancellation)
+                guard Self.isRecoverableTiltOpticalError(error) else { throw error }
+                try await stopTiltDevices(cancellation: cancellation)
+                tiltReport!.warning = "Centre drift check failed: \(error.localizedDescription)"
+                // Even a weak star must not prevent a safe absolute restoration.
+                let target = tiltReport!.commonFocus!, step = tiltReport!.autofocusStep
+                try await autofocusMove(to: target - step, cancellation: cancellation)
+                try await autofocusMove(to: target, cancellation: cancellation)
+            }
+            try checkTilt(id, cancellation)
+            if tiltReport!.validOuterCount < 8 || tiltReport!.points.contains(where: { !$0.imageCaptured }) || tiltReport!.warning != nil {
+                terminal = .partial
+            }
+        } catch {
+            terminal = error is CancellationError ? .cancelled : .failed
+            if terminal == .failed {
+                tiltReport?.warning = error.localizedDescription
+                noteMountFailure(error)
+                presentError(error)
+            }
+            cancellation.cancel()
+            let focus = focuser
+            let generation = focuserGeneration
+            let stopped: FocuserSnapshot? = await withCheckedContinuation { continuation in
+                focuserQueue.async { continuation.resume(returning: try? focus.stop()) }
+            }
+            if let stopped, isFocuserConnected, focuserGeneration == generation { publishFocuser(stopped) }
+        }
+        await haltMotionsOffActor()
+        guard tiltID == id else { return }
+        endTiltFocus()
+        if terminal == .cancelled { autofocusState = .cancelled }
+        else if terminal == .failed { autofocusState = .failed }
+        tiltReport!.status = terminal; tiltReport!.finishedAt = Date()
+        tiltProgress.phase = .saving
+        let useful = tiltReport!.points.contains { $0.focus != nil || $0.imageCaptured }
+        if useful {
+            let output = terminal == .failed || terminal == .cancelled
+                ? url.deletingLastPathComponent().appendingPathComponent("\(url.deletingPathExtension().lastPathComponent)-partial-\(id.uuidString).tif") : url
+            do {
+                let report = tiltReport!
+                let cell = CaptureLayout.stackingCropSize
+                for point in report.points where !point.imageCaptured {
+                    tiles.append((point.row, point.column, StackedImage(width: cell, height: cell,
+                        pixels: Array(repeating: 0, count: cell * cell), roi: ROI(x: 0, y: 0, width: cell, height: cell))))
+                }
+                let savedTiles = tiles
+                let result = try await Task.detached(priority: .userInitiated) {
+                    let mosaic = try ConstellationCapture.mosaic(savedTiles)
+                    try MonoTIFF.write(mosaic, to: output, imageDescription: report.encoded())
+                    return try ConstellationResult(tiles: savedTiles.map {
+                        ConstellationTile(row: $0.row, column: $0.column, image: $0.image)
+                    }, sourceURL: output, tiltReport: report)
+                }.value
+                tiltSavedURL = output
+                displayConstellation(result)
+            } catch { presentError(error) }
+        }
+        tiltCancellation = nil; tiltTask = nil; tiltID = nil; tiltLastStar = nil
+        isMeasuringTilt = false
+        finishMountWork("Tilt \(terminal.rawValue)")
+        tiltProgress.phase = terminal == .cancelled ? .cancelled : terminal == .failed ? .failed : .complete
+        statusText = "Tilt \(terminal.rawValue)\(tiltSavedURL.map { " — saved \($0.lastPathComponent)" } ?? "")"
+        Log.info(statusText)
+    }
+
+    private func runAutofocus(plan: AutofocusPlan, maximum: Int, id: UUID, cancellation: AutofocusCancellation) async {
+        do {
+            let result = try await autofocusMinimum(plan: plan, maximum: maximum, cancellation: cancellation)
+            guard autofocusID == id else { return }
+            finishAutofocus(state: .complete(position: result.position, hfr: result.hfr))
         } catch {
             guard autofocusID == id else { return }
             finishAutofocus(state: error is CancellationError ? .cancelled : .failed)
             stopFocuser()
             presentError(error)
+        }
+    }
+
+    private func autofocusMinimum(plan initialPlan: AutofocusPlan, maximum: Int,
+                                  cancellation: AutofocusCancellation) async throws -> AutofocusResult {
+        var plan = initialPlan
+        var search = AutofocusSearch()
+        try Task.checkCancellation()
+        try cancellation.check()
+        try await autofocusSelectExposure(cancellation: cancellation)
+        while true {
+            do {
+                if autofocusExposureRetries > 0 || autofocusRecenters > 0 {
+                    // Recheck the baseline after exposure or range changes,
+                    // using the same approach as every scan and final move.
+                    try await autofocusMove(to: plan.positions[4] - plan.step, cancellation: cancellation)
+                    try await autofocusMove(to: plan.positions[4], recentering: autofocusRecenters > 0, cancellation: cancellation)
+                }
+                let initialHFR = try await autofocusMeasure(at: plan.positions[4], verifying: false,
+                                                           checkingStar: true, cancellation: cancellation)
+                Log.info(String(format: "Autofocus initial HFR: %.3f px", initialHFR))
+                try await autofocusMove(to: plan.preloadPosition, cancellation: cancellation)
+                for position in plan.positions {
+                    try await autofocusMove(to: position, cancellation: cancellation)
+                    let hfr = try await autofocusMeasure(at: position, verifying: false, cancellation: cancellation)
+                    autofocusSamples.append(AutofocusSample(position: position, hfr: hfr,
+                                                           exposureMicroseconds: Int(exposureMicroseconds.rounded())))
+                    Log.info(String(format: "Autofocus sample: %d, HFR %.3f px", position, hfr))
+                }
+                let target = try plan.solution(samples: autofocusSamples)
+                try await autofocusMove(to: target - plan.step, cancellation: cancellation)
+                try await autofocusMove(to: target, cancellation: cancellation)
+                let hfr = try await autofocusMeasure(at: target, verifying: true, cancellation: cancellation)
+                try AutofocusPlan.verify(hfr: hfr, samples: autofocusSamples)
+                try AutofocusPlan.verify(hfr: hfr, samples: [AutofocusSample(position: plan.positions[4], hfr: initialHFR)])
+                try cancellation.check()
+                Log.info(String(format: "Autofocus complete: %d, HFR %.3f px, exposure %.3f ms", target, hfr, exposureMicroseconds / 1000))
+                let count = Double(autofocusFrames.count)
+                return AutofocusResult(position: target, hfr: hfr,
+                    sensorX: autofocusFrames.reduce(0) { $0 + $1.metric.sensorX } / count,
+                    sensorY: autofocusFrames.reduce(0) { $0 + $1.metric.sensorY } / count,
+                    exposureMicroseconds: Int(exposureMicroseconds.rounded()), samples: autofocusSamples,
+                    exposureRetries: autofocusExposureRetries, recenters: autofocusRecenters)
+            } catch is AutofocusExposureChanged {
+                autofocusExposureRetries += 1
+                search.exposureChanged()
+                autofocusSamples = []
+                Log.info("Autofocus restarting curve after saturation (\(autofocusExposureRetries)/\(AutofocusExposureControl.maximumRestarts))")
+            } catch AutofocusError.minimumNotBracketed {
+                plan = try search.recenter(plan: plan, samples: autofocusSamples, maximum: maximum)
+                autofocusRecenters += 1
+                autofocusSamples = []
+                Log.info("Autofocus re-centering \(autofocusRecenters): center \(plan.positions[4]), scan \(plan.positions.first!)–\(plan.positions.last!)")
+            }
         }
     }
 
@@ -1358,6 +1649,7 @@ public final class CollimationEngine {
     }
 
     public func disconnectFocuser() {
+        cancelTiltMeasurement()
         cancelAutofocus()
         focuserGeneration &+= 1
         focuserPollTask?.cancel()
@@ -1399,6 +1691,7 @@ public final class CollimationEngine {
     }
 
     public func stopFocuser() {
+        cancelTiltMeasurement()
         guard canStopFocuser else { return }
         cancelAutofocus()
         // Invalidate any pending move/poll result. Stop is queued after the
@@ -1505,7 +1798,7 @@ public final class CollimationEngine {
         Task {
             do {
                 let name = try await Task.detached {
-                    try mount.connect(path: path)
+                    try mount.connect(path: path, baud: 9600)
                     return mount.protocolName
                 }.value
                 isMountConnected = true
@@ -1525,6 +1818,7 @@ public final class CollimationEngine {
     }
 
     public func disconnectMount() {
+        cancelTiltMeasurement()
         mountTask?.cancel()
         mountTask = nil
         // Off the actor for the same reason as `haltMotionsOffActor`: closing
@@ -1614,6 +1908,7 @@ public final class CollimationEngine {
     }
 
     public func disconnectFilterWheel() {
+        cancelTiltMeasurement()
         filterWheelTask?.cancel()
         filterWheelTask = nil
         filterWheel.disconnect()
@@ -2123,7 +2418,7 @@ public final class CollimationEngine {
     }
 
     private func waitForSettledCentroid() async throws -> MountCentroidSample {
-        try await sleepMilliseconds(MountGuide.settleMilliseconds)
+        try await sleepMilliseconds(mountSettleMilliseconds)
         return try await waitForCentroid(minNewFrames: 2, timeout: 10)
     }
 

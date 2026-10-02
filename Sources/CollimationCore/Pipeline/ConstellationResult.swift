@@ -35,8 +35,10 @@ public struct ConstellationResult: Sendable {
     public let tiles: [ConstellationTile]
     public let sourceURL: URL
     public let histogram: Histogram
+    public let tiltReport: TiltMeasurementReport?
+    public let metadataWarning: String?
 
-    public init(tiles: [ConstellationTile], sourceURL: URL) throws {
+    public init(tiles: [ConstellationTile], sourceURL: URL, tiltReport: TiltMeasurementReport? = nil, metadataWarning: String? = nil) throws {
         let cell = CaptureLayout.stackingCropSize
         guard tiles.count == 9, Set(tiles.map { $0.row * 3 + $0.column }).count == 9,
               tiles.allSatisfy({
@@ -49,19 +51,25 @@ public struct ConstellationResult: Sendable {
         }
         self.tiles = tiles.sorted { $0.row * 3 + $0.column < $1.row * 3 + $1.column }
         self.sourceURL = sourceURL
+        self.tiltReport = tiltReport
+        self.metadataWarning = metadataWarning
         var bins = [UInt32](repeating: 0, count: Histogram.binCount)
         var peak: Float = 0
+        var samples = 0
         for tile in tiles {
+            if let point = tiltReport?.points.first(where: { $0.row == tile.row && $0.column == tile.column }), !point.imageCaptured { continue }
+            samples += cell * cell
             for value in tile.image.pixels {
                 bins[Int(min(value, 65535) / 256)] += 1
                 peak = max(peak, value)
             }
         }
-        histogram = Histogram(bins: bins, sampleCount: 9 * cell * cell, maxADU: UInt16(min(peak.rounded(), 65535)))
+        histogram = Histogram(bins: bins, sampleCount: samples, maxADU: UInt16(min(peak.rounded(), 65535)))
     }
 
     public static func load(from url: URL) throws -> ConstellationResult {
-        let mosaic = try MonoTIFF.readConstellation(from: url)
+        let document = try MonoTIFF.readConstellationWithMetadata(from: url)
+        let mosaic = document.image
         let cell = CaptureLayout.stackingCropSize
         var tiles: [ConstellationTile] = []
         for row in 0..<3 {
@@ -78,7 +86,7 @@ public struct ConstellationResult: Sendable {
                 )))
             }
         }
-        return try ConstellationResult(tiles: tiles, sourceURL: url)
+        return try ConstellationResult(tiles: tiles, sourceURL: url, tiltReport: document.report, metadataWarning: document.warning)
     }
 }
 

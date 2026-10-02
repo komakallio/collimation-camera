@@ -3,11 +3,48 @@ import Foundation
 extension MonoTIFF {
     /// Read the single-strip float format written by Save Constellation.
     public static func readConstellation(from url: URL) throws -> StackedImage {
+        try readConstellationWithMetadata(from: url).image
+    }
+
+    public static func readConstellationWithMetadata(from url: URL) throws -> (image: StackedImage, report: TiltMeasurementReport?, warning: String?) {
         let limit = 4 * 1024 * 1024
         if let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > limit {
             throw CameraError.unsupported("Constellation TIFF is too large; expected a 768×768 float mosaic.")
         }
-        return try decodeConstellation(Data(contentsOf: url, options: .mappedIfSafe))
+        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+        let image = try decodeConstellation(data)
+        let metadata = decodeTiltMetadata(data)
+        return (image, metadata.report, metadata.warning)
+    }
+
+    /// Metadata failure never hides an otherwise valid constellation image.
+    public static func decodeTiltMetadata(_ data: Data) -> (report: TiltMeasurementReport?, warning: String?) {
+        let bytes = [UInt8](data)
+        func u16(_ offset: Int) -> UInt16? {
+            guard offset >= 0, offset <= bytes.count - 2 else { return nil }
+            return UInt16(bytes[offset]) | UInt16(bytes[offset + 1]) << 8
+        }
+        func u32(_ offset: Int) -> UInt32? {
+            guard offset >= 0, offset <= bytes.count - 4 else { return nil }
+            return UInt32(bytes[offset]) | UInt32(bytes[offset + 1]) << 8 | UInt32(bytes[offset + 2]) << 16 | UInt32(bytes[offset + 3]) << 24
+        }
+        let invalid = "Tilt metadata could not be read; the constellation image is still available."
+        guard let rawIFD = u32(4) else { return (nil, nil) }
+        let ifd = Int(rawIFD)
+        guard let count = u16(ifd), count <= 64 else { return (nil, nil) }
+        var description: Data?
+        for i in 0..<Int(count) {
+            let at = ifd + 2 + i * 12
+            guard u16(at) == 270 else { continue }
+            guard description == nil, u16(at + 2) == 2, let size = u32(at + 4), size > 0, size <= 256 * 1024,
+                  let rawOffset = u32(at + 8) else { return (nil, invalid) }
+            let start = size <= 4 ? at + 8 : Int(rawOffset)
+            guard start >= 8, start <= bytes.count - Int(size), bytes[start + Int(size) - 1] == 0 else { return (nil, invalid) }
+            description = Data(bytes[start..<(start + Int(size) - 1)])
+        }
+        guard let description else { return (nil, nil) }
+        do { return (try TiltMeasurementReport.decode(description), nil) }
+        catch { return (nil, "Tilt metadata unavailable: \(error.localizedDescription)") }
     }
 
     public static func decodeConstellation(_ data: Data) throws -> StackedImage {

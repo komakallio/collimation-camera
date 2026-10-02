@@ -32,13 +32,36 @@ public enum AutofocusError: Error, LocalizedError, Sendable {
     }
 }
 
-public struct AutofocusSample: Equatable, Sendable {
+public struct AutofocusSample: Equatable, Sendable, Codable {
     public let position: Int
     /// Half-flux radius in unbinned sensor pixels, measured on raw ADU.
     public let hfr: Double
     public let exposureMicroseconds: Int?
     public init(position: Int, hfr: Double, exposureMicroseconds: Int? = nil) {
         self.position = position; self.hfr = hfr; self.exposureMicroseconds = exposureMicroseconds
+    }
+}
+
+/// A verified minimum, including the final accepted curve and the star's
+/// measured location. Scalars are intentional across Windows async boundaries.
+public struct AutofocusResult: Equatable, Sendable, Codable {
+    public let position: Int
+    public let hfr: Double
+    public let sensorX: Double
+    public let sensorY: Double
+    public let timestamp: Date
+    public let exposureMicroseconds: Int
+    public let samples: [AutofocusSample]
+    public let exposureRetries: Int
+    public let recenters: Int
+
+    public init(position: Int, hfr: Double, sensorX: Double, sensorY: Double,
+                timestamp: Date = Date(), exposureMicroseconds: Int,
+                samples: [AutofocusSample], exposureRetries: Int = 0, recenters: Int = 0) {
+        self.position = position; self.hfr = hfr
+        self.sensorX = sensorX; self.sensorY = sensorY; self.timestamp = timestamp
+        self.exposureMicroseconds = exposureMicroseconds; self.samples = samples
+        self.exposureRetries = exposureRetries; self.recenters = recenters
     }
 }
 
@@ -289,6 +312,7 @@ public struct FocusMetricEstimator: Sendable {
 final class AutofocusCancellation: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
+    var isCancelled: Bool { lock.withLock { cancelled } }
     func cancel() { lock.withLock { cancelled = true } }
     func check() throws { try lock.withLock { if cancelled { throw CancellationError() } } }
 }

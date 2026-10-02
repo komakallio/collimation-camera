@@ -7,6 +7,14 @@ struct CoreTests {
     // isolated. Nonisolated test bodies still convert to the closure type.
     @MainActor
     static func main() async {
+        do {
+            if try await runFocusStabilityHardwareIfRequested() { return }
+            if try await runBacklashHardwareIfRequested() { return }
+            if try await runTiltHardwareIfRequested() { return }
+        } catch {
+            print("Hardware acceptance failed: \(error)")
+            exit(1)
+        }
         if CommandLine.arguments.contains("--constellation-only") {
             var failures = 0
             failures += run("constellation TIFF reading", testConstellationTIFFReading)
@@ -22,6 +30,15 @@ struct CoreTests {
             exit(failures == 0 ? 0 : 1)
         }
         var failures = 0
+        failures += run("tilt plane and curvature fit", testTiltFit)
+        failures += run("tilt TIFF metadata", testTiltTIFFMetadata)
+        failures += await runAsync("mount queued cancellation", testMountQueuedCancellation)
+        failures += await runAsync("tilt optical sequence and partial results", testTiltEngineSequence)
+        failures += await runAsync("tilt cancellation and faults", testTiltCancellationAndFaults)
+        if CommandLine.arguments.contains("--tilt-only") {
+            print(failures == 0 ? "All tilt tests passed." : "\(failures) test(s) failed.")
+            exit(failures == 0 ? 0 : 1)
+        }
         failures += run("autofocus HFR metric", testFocusMetric)
         failures += run("autofocus bounded curve", testAutofocusPlan)
         failures += run("autofocus re-centering slope policy", testAutofocusRecenterPolicy)

@@ -27,7 +27,10 @@ public enum StatusChip {
 
     @MainActor
     public static func model(_ engine: CollimationEngine) -> Model {
-        model(
+        if engine.isMeasuringTilt {
+            return Model(label: "TILT \(engine.tiltProgress.index)/9 \(engine.tiltProgress.label)", color: busyColor)
+        }
+        return model(
             stackWork: engine.stackWork,
             mountWork: engine.mountWork,
             isAutoExposing: engine.isAutoExposing,

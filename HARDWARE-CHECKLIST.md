@@ -239,6 +239,318 @@ unplug/quit testing during autofocus remain manual acceptance items. The
 macOS sidebar is wired to the same commands but could not be built or run
 on this Windows host.
 
+### Imaging-system tilt
+
+Connect the camera, focuser and calibrated mount. Choose **Measure Tilt…**
+and a TIFF destination. Confirm the star visits C, N, NE, E, SE, S, SW, W,
+NW; each location records a verified autofocus minimum and a stack captured
+at the initial centre focus, exposure and gain. Confirm the final centre
+autofocus leaves the motor at its new optimum and reports drift separately.
+Reopen the TIFF and check the focus captions, fit and drift are restored.
+
+Cancel during autofocus and during a mount move. Both motors must stop;
+no return-to-centre motion follows cancellation. Completed measurements
+should survive in a uniquely named partial TIFF. Test a weak outer star,
+camera/focuser/mount/filter-wheel disconnect, USB removal, quit, insufficient
+valid outer points and an unwritable destination. Stop and Disconnect must
+remain available while other camera, focus, mount and filter controls are
+locked throughout the sequence.
+
+On 2 October 2026, preflight identified Xena 585M (`poa-0`, 3856×2180),
+ESATTO30136 on **COM4**, and an **EQDIR motor** mount on **COM10**. It used
+the mount calibration recorded earlier that day. A real autofocus
+cancellation after two samples stopped COM4 at **312413 steps**. A separate
+cancellation during the first outer-position mount move stopped both
+devices, left COM4 at **316215 steps**, and saved the completed centre
+measurement and image to a partial TIFF. That TIFF reopened in the portable
+results viewer with its cancelled status, focus caption and missing-image
+placeholders; the 1280×1000 offscreen render exited cleanly.
+After the user reported audible motor noise, explicit Stop commands were
+acknowledged on both axes. Read-only status queries returned `=301` for RA
+and `=101` for Dec (both stopped); position counters were unchanged over two
+seconds. The user also confirmed no visible movement. COM4 remained stopped.
+
+The first complete traversal used a 1000-step autofocus scan and 100-frame
+stacks. All nine common-focus images were captured; seven outer autofocus
+readings passed verification. SW was correctly skipped when final HFR was
+worse than the accepted scan minimum. The partial TIFF reopened with all
+images and annotations. It reported **103.5 steps** of directional spread,
+**−244.4 steps** radial offset, **52.2 steps** residual RMS, and uncorrected
+centre drift of **+195 steps**. Initial centre focus was 316078; the return
+autofocus finished at **316273 steps**, stopped. The acceptance harness
+returned nonzero because it requires all eight valid outer readings for its
+full-pass condition; the application's partial-result path completed normally.
+
+A repeat with 500-step sampling also captured all nine images and accepted
+seven outer readings, this time skipping NE on the same verification check.
+It reported **654.6 steps** spread, **−508.2 steps** radial offset,
+**205.1 steps** RMS and **−73 steps** centre drift. Initial centre was
+316249; final centre focus was **316176 steps**. Both reports reopened with
+their annotations. These fits differ substantially, so precise optical
+repeatability and an all-eight-readings hardware pass remain unverified.
+The software retained the quality checks and labelled both reports partial.
+
+After the final run, independent native-driver polls confirmed COM4 stopped
+at 316176. COM10 status queries reported both axes stopped (`=101` / `=301`),
+with unchanged position counters over two seconds. The portable Focuser
+controls rendered at 1280×1200 and the saved reports at 1280×1000; all renders
+exited cleanly. No hardware test process remained running.
+
+The Windows release build and all **154 core tests** passed. The final binary
+also passed all tilt tests after its cancellation-status update. Tests cover
+complete and partial optical sequences, fit geometry/curvature, metadata
+round trips, queued mount cancellation, Stop/disconnect, communication faults,
+and retaining an in-memory result when file writing fails.
+
+The opt-in acceptance harness runs the shared application engine:
+
+```powershell
+core-tests.exe --tilt-hardware --device poa-0 --focuser-port COM4 --mount-port COM10 --calibration-file "C:\path\guide-calibration.json" --exposure 0.5 --focus-step 1000 --stack-count 100 --tilt-output "C:\path\tilt.tif"
+```
+
+Use `--tilt-hardware-check` instead for preflight without focus or slew moves.
+Add `--tilt-cancel-test focus` or `--tilt-cancel-test mount` for automated
+Stop acceptance. Normal core tests never open real devices. Physical USB
+removal, quit during movement, clicking the controls, and macOS acceptance
+remain manual checks.
+
+### Centre-star backlash diagnostic
+
+On 2 October 2026, a separate diagnostic kept COM10 stopped and scanned the
+centre star with ESATTO30136 on COM4. Five passes alternated outward, inward,
+outward, inward, outward over **313750–318750 steps**, with **250-step**
+sampling. Each pass started with a separate **4000-step** directional take-up
+move. Every sample waited for the exact position and stopped motor, settled
+for one second, restarted capture, discarded three frames and measured the
+median of 15 fresh frames. Exposure stayed at **0.5 ms**, gain at zero. The
+star remained central and unsaturated throughout the **1605 measured frames**.
+
+The analysis matched equal-HFR crossings on both defocused flanks and
+interpolated between the outward scans surrounding each inward scan to
+account for linear drift. Giving both flank medians equal weight yielded
+inward-minus-outward offsets of **669.0** and **815.5 steps**: an effective
+optical backlash/hysteresis estimate of **742.3 steps**, best reported as
+roughly **750 steps**. The individual flank medians ranged from 598.2 to
+849.7 steps. Frame bootstrap intervals were 648.3–701.8 and 787.1–845.1;
+they cover frame noise only, not curve changes or nonlinear drift. The
+146.5-step difference between repeats limits the precision of the estimate.
+
+The existing 500-step autofocus take-up is below this measured offset.
+However, even with 4000-step take-up, returning to the last scan's measured
+minimum at **316750 steps** gave HFR **1.104**, versus **0.935** during that
+scan, an 18% increase that exceeds the usual 15% verification limit. The
+experiment therefore supports backlash as a contributor without proving
+that it explains all autofocus verification failures. No application or
+controller compensation settings were changed. Independent final polls
+confirmed COM4 stopped at 316750 and both COM10 axes stopped, with unchanged
+mount position counters over two seconds.
+
+The opt-in diagnostic harness saves raw frames' measurements and each point
+incrementally; normal core tests do not run it:
+
+```powershell
+core-tests.exe --backlash-hardware --device poa-0 --focuser-port COM4 --mount-port COM10 --focus-step 250 --half-span 2500 --preload 4000 --exposure 0.5 --backlash-output "C:\path\backlash.json"
+python scripts\analyze-backlash.py "C:\path\backlash.json"
+```
+
+Create `<output>.stop` to cancel before the next motion or during polling;
+cancellation stops the focuser and preserves completed samples. Analysis
+saves a CSV and an analysis JSON beside the raw JSON. It also produces focus
+curve plots when Matplotlib is installed. Its synthetic checks recover zero,
+positive and negative offsets with linear drift. The Windows release build,
+synthetic checks and the real diagnostic run passed. This is a diagnostic
+tool, not an application calibration command.
+
+### HFR variability with focus held fixed
+
+A follow-up on 2 October 2026 recorded **1800 consecutive frames over 60
+seconds** at **316750 steps**, the last backlash scan's measured minimum.
+It issued no focuser move commands and kept COM10 stopped. The camera used
+the same centre 512-pixel ROI, **0.5 ms** exposure and gain zero. Every frame
+produced an unsaturated valid HFR measurement. The motor was stopped at the
+same position before and after recording; independent mount status/counter
+queries also confirmed both axes remained stopped and their counters unchanged.
+
+Individual-frame HFR averaged **1.030 pixels**, with sample standard
+deviation **0.103 pixels (10.0%)** and a 5th–95th percentile interval of
+**0.883–1.165 pixels**. Disjoint groups of five consecutive frames, using the
+same median aggregation as autofocus, had standard deviation **0.080 pixels
+(7.7%)** and 5th–95th percentiles **0.926–1.139**. Fifteen-frame medians still
+had standard deviation **0.079 pixels (7.6%)**, with percentiles
+**0.930–1.129**. Ten-second median HFR values varied from 0.936 to 1.119;
+longer blocks therefore did not remove all variation in this recording.
+
+Of 359 adjacent five-frame block comparisons, **14 (3.9%)** increased by
+more than 15%, despite the unchanged motor position. This demonstrates that
+the existing final-verification threshold can be exceeded without a focuser
+move; it does not establish the cause of every earlier autofocus failure.
+The measured spread includes image/optical variation as well as estimator
+noise. The star centroid spanned 1.33 pixels in X and 1.59 in Y while the
+mount counters stayed fixed. No autofocus or compensation settings changed.
+
+The opt-in fixed-focus diagnostic and analysis are reproducible with:
+
+```powershell
+core-tests.exe --focus-stability-hardware --device poa-0 --focuser-port COM4 --mount-port COM10 --expected-position 316750 --seconds 60 --exposure 0.5 --stability-output "C:\path\focus-stability.json"
+python scripts\analyze-focus-stability.py "C:\path\focus-stability.json"
+```
+
+The recording saves all frame measurements, including rejection reasons,
+incrementally; create `<output>.stop` to cancel. Analysis writes a CSV and
+JSON report beside the recording. The Windows release build, summary sanity
+checks and real recording passed. Normal core tests do not run this diagnostic.
+
+### HFR from a 15-frame pixel stack
+
+Two further 60-second recordings compared three measurements on each exact
+group of 15 consecutive frames: median individual-frame HFR, HFR measured
+once on an unaligned pixel-average image, and HFR measured once on the app's
+centroid-registered pixel-average image. All measurements used the existing
+HFR estimator. The registered stack used bilinear shifts onto the first
+frame's centroid. Float averages stayed at the original ADU scale and were
+rounded to UInt16 for the estimator. COM4 remained stopped at **316750**;
+COM10 stayed stopped with unchanged counters. Exposure was **0.5 ms**, gain
+zero and the centre ROI 512 pixels. No autofocus settings changed.
+
+The first recording captured 1690 valid frames, giving **112 paired groups**;
+the repeat captured 1793 valid frames, giving **119 paired groups**. The
+10 and 8 trailing frames were omitted from the stack comparison. All
+individual and stacked measurements were unsaturated and valid.
+
+| Measurement | First recording: mean HFR / SD / relative SD | Repeat: mean HFR / SD / relative SD |
+|---|---|---|
+| Median of 15 HFR readings | 0.949 / 0.021 px / **2.23%** | 1.133 / 0.018 px / **1.57%** |
+| HFR of unaligned 15-frame mean | 0.943 / 0.063 px / **6.65%** | 1.137 / 0.019 px / **1.64%** |
+| HFR of registered 15-frame mean | 1.217 / 0.170 px / **13.99%** | 1.202 / 0.049 px / **4.05%** |
+
+In the first recording, 0 of 111 adjacent median-HFR comparisons increased
+by more than 15%, versus 4 unaligned-stack and 25 registered-stack
+comparisons. None exceeded 15% in the repeat. The registered stacks also
+increased average HFR relative to the individual-frame median by 28.3% and
+6.1%. These results do not support switching autofocus to the current pixel
+stacking method. They establish repeatability at a held motor position,
+not the precision of a best-focus estimate. The median HFR changed by about
+19% between recordings while the motor stayed fixed; this also limits
+comparisons between separate acquisition sessions. Both stack kernels were
+checked against independent arithmetic-mean and bilinear references; the
+saved example TIFFs retained their 512-pixel size and original ADU scale.
+
+Add `--compare-stacks` to the fixed-focus diagnostic command. Analysis
+validates that each stack's individual-HFR median matches its source frames
+and writes an additional `-stack-comparison.csv`, alongside the normal CSV
+and analysis JSON. The first group's raw image, pixel mean and registered
+mean are saved as example TIFFs. The Windows release build, paired analysis
+checks, kernel reference checks and both real recordings passed.
+
+### HFR stability on both defocused flanks
+
+The next hardware test held the focuser at **314250** and **319250 steps**,
+2500 steps either side of the 316750 focus reference, for **120 seconds per
+position**. Both targets were reached with an outward approach after
+**4000 steps** of take-up. Recording began only after the exact target and
+stopped motor were verified, one second of settling and three discarded
+startup frames. No motor moves occurred during either recording. Exposure
+stayed at **0.5 ms**, gain zero and the centre ROI 512 pixels. The final
+return to 316750 used the same outward approach and recorded a further
+**60-second focus control**. The reference is the last scan's measured
+minimum; no new autofocus was performed.
+
+| Held position | Frames / duration | Mean HFR | Individual-frame SD / relative SD | Five-frame median SD / relative SD | Fifteen-frame median SD / relative SD |
+|---|---|---|---|---|---|
+| 314250 (−2500) | 3595 / 120 s | 2.250 px | 0.071 px / **3.15%** | 0.063 px / **2.80%** | 0.061 px / **2.70%** |
+| 319250 (+2500) | 3597 / 120 s | 3.234 px | 0.064 px / **1.99%** | 0.057 px / **1.76%** | 0.056 px / **1.73%** |
+| Restored reference, 316750 | 1800 / 60 s | 1.129 px | 0.046 px / **4.05%** | 0.034 px / **3.03%** | 0.033 px / **2.90%** |
+
+All **8992 measurements** were valid and unsaturated. Neither defocused
+recording had an increase above 15% between successive five-frame medians
+(0 of 718 comparisons on each flank). The focus control also had no such
+increase (0 of 359). Median HFR changed by **+2.08%** and **−1.35%** between
+the first and second one-minute halves on the low and high flanks,
+respectively, so variation over time remains present without motion.
+
+The out-of-focus measurements had lower relative variability, especially
+on the high side, but their **absolute** HFR scatter was higher than the
+restored-focus control. These observations support using the defocused
+flanks as useful measurements, without establishing that near-focus HFR is
+always unreliable. The previous focused recordings varied more, indicating
+that acquisition time and image variation also matter.
+
+Paired 15-frame pixel stacks again gave no improvement over median HFR:
+unaligned-stack relative SD was **3.12% / 2.18%** on the low/high flanks,
+and registered-stack SD was **3.42% / 2.16%**, versus **2.70% / 1.73%** for
+the paired individual-frame medians. Both stack methods and medians used
+the exact same 15-frame blocks. No autofocus algorithm or controller
+compensation settings were changed.
+
+To prepare a defocused held position, add `--focus-position <steps>` and
+`--preload 4000` to the fixed-focus diagnostic command. `--expected-position`
+checks the connected starting position before setup. Analysis records
+60-second summaries as well as frame/block variability. Setup moves have
+travel checks, a 60-second motion timeout, exact-position/idle verification
+and stop-file cancellation. The original mode still performs no setup moves
+unless a target is explicitly supplied.
+
+Independent final driver polls confirmed COM4 stopped at **316750** and
+both COM10 axes stopped with unchanged counters over two seconds. The
+Windows release build, analysis regression check and all three hardware
+recordings passed. No test process remained controlling a device.
+
+### Five-frame HFR repeatability after alternating jumps
+
+The next experiment alternated **314250 / 319250 steps** (−2500 / +2500
+relative to 316750) for **20 visits per location**. Each target was approached
+outward from 4000 steps below it, keeping the final approach direction and
+take-up distance consistent. Every move was verified at the exact target
+with BUSY zero and motor phase stopped; acquisition then waited one second,
+restarted capture, discarded three startup frames and measured **exactly five
+consecutive valid frames**. A missing star, invalid metric or clipped frame
+would abort the jump experiment rather than replace a frame silently.
+Exposure stayed at **0.5 ms**, gain zero and the centre ROI 512 pixels.
+COM10 remained stopped throughout.
+
+The 40 target acquisitions spanned **165.2 seconds** and used **200 frames**.
+All measurements were valid and unsaturated; maximum target peak was 10560
+ADU. Variability below is the sample standard deviation **across the 20
+five-frame medians at each location**, not across pooled individual frames:
+
+| Target | Mean HFR | SD across returns | Relative SD | Range of five-frame medians |
+|---|---|---|---|---|
+| 314250 (−2500) | **2.331 px** | **0.058 px** | **2.47%** | 2.214–2.419 px |
+| 319250 (+2500) | **3.188 px** | **0.055 px** | **1.73%** | 3.098–3.322 px |
+
+Average individual-frame SD within each five-frame visit was 0.039 and
+0.032 pixels on the low/high targets. Mean HFR changed by +0.58% / −0.17%
+between the first and last ten visits at each target. No successive return
+to the same target increased HFR by more than 15%; the largest increases
+were 7.85% and 5.56%. The return-to-return spread was comparable to the
+earlier held-position five-frame medians (2.80% / 1.76%), although those
+recordings were taken at a different time. This experiment includes image
+variation, focus drift and mechanical return repeatability and does not
+isolate those contributions.
+
+The opt-in diagnostic reuses the stopped-position and fresh-frame checks
+from the backlash harness:
+
+```powershell
+core-tests.exe --focus-jump-hardware --device poa-0 --focuser-port COM4 --mount-port COM10 --focus-reference 316750 --half-span 2500 --preload 4000 --visits-per-position 20 --exposure 0.5 --jump-output "C:\path\focus-jumps.json"
+python scripts\analyze-focus-jumps.py "C:\path\focus-jumps.json"
+```
+
+The reference must match the stopped starting position. The experiment
+saves each visit incrementally and checks `<output>.stop` during motion and
+acquisition. Cancellation stops the focuser and does not start a return
+move. Successful completion returns to the reference with the same outward
+take-up and saves a final five-frame measurement. The analysis verifies the
+alternating sequence, target positions and five-frame medians, and writes
+per-visit and per-location summary CSVs plus an analysis JSON. Normal core
+tests do not run this diagnostic.
+
+The Windows release build, independent per-location summary checks and real
+40-visit experiment passed. No autofocus or controller compensation settings
+were changed. Independent native-driver polls confirmed COM4 stopped at
+**316750** and both COM10 axes stopped with unchanged position counters over
+two seconds. No device-controlling test process remained running.
+
 ## 7. The filter wheel
 
 Connect a Phoenix wheel, read the aliases stored on it, and move to a slot.

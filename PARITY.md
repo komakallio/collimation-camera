@@ -20,6 +20,7 @@ see Not yet verified at the end.
 | Exposure and gain | ✅ | ✅ | 100 µs to 100 ms. |
 | Auto exposure | ✅ | ✅ | `canAutoExpose`. |
 | ESATTO autofocus | ✅ | ✅ | Automatic exposure and saturation recovery; scan re-centering along a valid improving slope within calibrated travel; nine-point HFR scan at one exposure, five fresh frames per position, consistent-direction approach, verified minimum, Stop/disconnect cancellation. Windows simulation and real COM4/Xena optical run passed. macOS interface is wired but not executed here; acceptance details in `HARDWARE-CHECKLIST.md`. |
+| Imaging-system tilt | ✅ | ✅ | Shared nine-position autofocus sequence, common-centre-focus mosaic, six-point minimum tilt/radial fit, embedded TIFF report, separate centre drift, partial results, whole-run interlocks and cancellation. Hardware acceptance details in `HARDWARE-CHECKLIST.md`. |
 | Auto stretch | ✅ | ✅ | Always enabled. |
 | MTF and arcsinh curves | ✅ | ✅ | Shader math must match `StretchParams.apply`; `stretch shader math` keeps the maths in step and `stretch shader copies` keeps the two MSL strings — `MetalRenderer.shaderSource` for this app, `ShaderSource.metal` for the portable one — from drifting apart. HLSL has no `asinh` and uses the log form. |
 | Zoom and fit | ✅ | ✅ | One factor per scroll event by sign, not per tick. |
