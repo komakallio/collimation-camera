@@ -90,6 +90,18 @@ Start it, pick the camera, connect. Then, in order:
   at the camera's unlimited rate, faster than the live view.
 - Leave it running for ten minutes and read the heartbeat lines in the log: one
   a minute, with the rate, the tracking state, the zoom, and the ROI.
+- With a tightly focused star, check that the collimation circles and arrow
+  remain present and follow the core rather than jumping out into the sky.
+
+On 2 October 2026, a headless comparison on the Xena 585M (`poa-0`), at
+0.546 ms exposure and gain 0 with focus unchanged, fed the same 300 frames to
+the old and corrected coma analyzers. Tracking succeeded in every frame.
+The old analyzer returned usable collimation measurements in **72/300**;
+the corrected analyzer returned **300/300**, with footprint radii of
+**2.25–3.25 pixels**. The fix accepts compact cores, requires a visible ring
+rise near the core before selecting an Airy minimum, and verifies that an
+inferred secondary shadow has a dark interior. This tested the shared
+analysis; the window overlay was not visually inspected during this run.
 
 ## 5. Unplug it (§7.8)
 

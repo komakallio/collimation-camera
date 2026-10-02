@@ -51,6 +51,10 @@ public struct ComaAnalyzer: Sendable {
     public var kSigma: Double
     public var sectorCount: Int
 
+    // A resolved compact core can cover fewer than 30 pixels. Keep enough
+    // spatial support to reject hot pixels without requiring a defocused star.
+    private static let minimumFocusedPixels = 9
+
     public init(kSigma: Double = 4.0, sectorCount: Int = 16) {
         self.kSigma = kSigma
         self.sectorCount = sectorCount
@@ -80,6 +84,7 @@ public struct ComaAnalyzer: Sendable {
             mask: mask,
             outer: outer,
             background: stats.median,
+            noiseSigma: stats.sigma,
             snr: snr
         )
     }
@@ -131,25 +136,25 @@ public struct ComaAnalyzer: Sendable {
         mask: [UInt8],
         outer: FittedCircle,
         background: Double,
+        noiseSigma: Double,
         snr: Double
     ) -> ComaResult? {
+        guard snr > 8 else { return nil }
         let shape = geometricCentroid(mask: mask, width: frame.width, height: frame.height)
             ?? outer.center
         let maxRadius = min(
             Double(min(frame.width, frame.height)) / 2 - 1,
             max(outer.radius * 8, 96)
         )
-        let footprint = firstVisibleMinimum(
+        let profile = radialProfile(
             frame: frame,
             center: shape,
             background: background,
             maxRadius: maxRadius
-        ) ?? coreRadiusFallback(
-            frame: frame,
-            center: shape,
-            background: background,
-            maxRadius: maxRadius
-        ) ?? outer.radius
+        )
+        let coreRadius = coreRadiusFallback(profile) ?? outer.radius
+        let footprint = firstVisibleMinimum(profile, coreRadius: coreRadius, noiseSigma: noiseSigma)
+            ?? coreRadius
         let radius = max(footprint, 2)
 
         let width = frame.width
@@ -177,7 +182,7 @@ public struct ComaAnalyzer: Sendable {
                 flux += weight
             }
         }
-        guard n >= 30, flux > 1e-3 else { return nil }
+        guard n >= Self.minimumFocusedPixels, flux > 1e-3 else { return nil }
         let brightness = SIMD2(fluxX / flux, fluxY / flux)
         let vector = brightness - shape
         let magnitude = simdLength(vector)
@@ -225,17 +230,10 @@ public struct ComaAnalyzer: Sendable {
     /// Azimuthally averaged first dark ring after the core, confirmed by a rise
     /// into the first diffraction ring. Ignores wiggles still inside the bright core.
     private func firstVisibleMinimum(
-        frame: Frame,
-        center: SIMD2<Double>,
-        background: Double,
-        maxRadius: Double
+        _ profile: [(radius: Double, intensity: Double)],
+        coreRadius: Double,
+        noiseSigma: Double
     ) -> Double? {
-        let profile = radialProfile(
-            frame: frame,
-            center: center,
-            background: background,
-            maxRadius: maxRadius
-        )
         let smooth = smoothedRadial(profile)
         guard smooth.count >= 12 else { return nil }
         guard let peakIndex = smooth.indices.max(by: { smooth[$0].intensity < smooth[$1].intensity }) else {
@@ -245,13 +243,15 @@ public struct ComaAnalyzer: Sendable {
         guard peak > 20 else { return nil }
         let coreFloor = peak * 0.08
 
-        var i = peakIndex + 1
+        var i = max(2, peakIndex + 1)
         while i < smooth.count, smooth[i].intensity > coreFloor {
             i += 1
         }
-        guard i < smooth.count - 3, smooth[i].radius >= 3 else { return nil }
+        guard i < smooth.count - 3 else { return nil }
 
-        while i < smooth.count - 3 {
+        // The first minimum belongs near the core's falloff. Searching the
+        // whole crop can pick a distant sky dip when the star has no visible ring.
+        while i < smooth.count - 3, smooth[i].radius <= coreRadius * 2 {
             let cur = smooth[i].intensity
             let windowLow = min(
                 smooth[i - 2].intensity,
@@ -271,12 +271,8 @@ public struct ComaAnalyzer: Sendable {
                     ringPeak = max(ringPeak, smooth[j].intensity)
                     j += 1
                 }
-                let rise = max(20.0, 0.004 * peak)
+                let rise = max(20.0, noiseSigma, 0.004 * peak)
                 if ringPeak > cur + rise, ringPeak > cur * 1.25 {
-                    return r
-                }
-                // Dark floor with no usable first ring: still the first large minimum.
-                if cur < peak * 0.04, r < maxRadius * 0.85 {
                     return r
                 }
             }
@@ -304,17 +300,8 @@ public struct ComaAnalyzer: Sendable {
 
     /// If the first Airy ring is not visible, stop at the core's outer falloff.
     private func coreRadiusFallback(
-        frame: Frame,
-        center: SIMD2<Double>,
-        background: Double,
-        maxRadius: Double
+        _ profile: [(radius: Double, intensity: Double)]
     ) -> Double? {
-        let profile = radialProfile(
-            frame: frame,
-            center: center,
-            background: background,
-            maxRadius: maxRadius
-        )
         guard let peakIndex = profile.indices.max(by: { profile[$0].intensity < profile[$1].intensity }) else {
             return nil
         }
@@ -445,7 +432,7 @@ public struct ComaAnalyzer: Sendable {
                         }
                     }
                 }
-                if area > bestArea, area >= 30 {
+                if area > bestArea, area >= Self.minimumFocusedPixels {
                     bestArea = area
                     bestMask = mask
                 }
@@ -505,6 +492,26 @@ public struct ComaAnalyzer: Sendable {
         guard n > 8 else { return nil }
         let center = SIMD2(sumX / Double(n), sumY / Double(n))
         let radius = sqrt(Double(n) / .pi)
+        // A focused core's faint outskirts can form a dark annulus whose
+        // centroid lies on the bright peak. A secondary shadow must instead
+        // be dark through most of its interior; allow a small central spot.
+        let interiorRadius = radius * 0.5
+        var interiorPixels = 0
+        var darkPixels = 0
+        let x0 = max(0, Int(floor(center.x - interiorRadius)))
+        let x1 = min(width - 1, Int(ceil(center.x + interiorRadius)))
+        let y0 = max(0, Int(floor(center.y - interiorRadius)))
+        let y1 = min(height - 1, Int(ceil(center.y + interiorRadius)))
+        for y in y0...y1 {
+            for x in x0...x1 {
+                let dx = Double(x) - center.x
+                let dy = Double(y) - center.y
+                if dx * dx + dy * dy > interiorRadius * interiorRadius { continue }
+                interiorPixels += 1
+                if Double(frame.pixels[y * width + x]) < darkCut { darkPixels += 1 }
+            }
+        }
+        guard interiorPixels > 0, darkPixels * 2 > interiorPixels else { return nil }
         return Hole(center: center, radius: max(radius, 1), pixelCount: n)
     }
 
@@ -573,8 +580,8 @@ public struct ComaAnalyzer: Sendable {
     private func inFocusQuality(pixelCount: Int, radius: Double, frame: Frame, snr: Double) -> Double {
         let minDim = Double(min(frame.width, frame.height))
         var q = 0.0
-        if pixelCount >= 30 { q += 0.4 }
-        if radius > 2 && radius < minDim * 0.4 { q += 0.2 }
+        if pixelCount >= Self.minimumFocusedPixels { q += 0.4 }
+        if radius >= 2 && radius < minDim * 0.4 { q += 0.2 }
         if snr > 8 { q += 0.2 }
         return q
     }
