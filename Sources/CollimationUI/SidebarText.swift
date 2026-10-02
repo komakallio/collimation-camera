@@ -23,6 +23,13 @@ public enum SidebarText {
     public static let roiSection = "ROI & zoom"
     public static let stabilizationSection = "Image stabilization"
     public static let stretchSection = "Stretch"
+    public static let resultsSection = "Constellation results"
+    public static let openConstellation = "Open Constellation…"
+    public static let resultsStretchSection = "Results stretch"
+    public static let resultsZoom = "Results zoom"
+    public static let centerNotDetected = "Centre not detected"
+    public static let loadingConstellation = "Loading constellation…"
+    public static let constellationEmpty = "Open a saved constellation or save a new capture."
     public static let collimationSection = "Collimation"
 
     /// In the order both sidebars lay them out, so a test can check that.

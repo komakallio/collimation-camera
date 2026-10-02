@@ -77,20 +77,43 @@ struct SidebarView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                equipmentSection
-                focuserSection
-                cameraSection
-                filterWheelSection
-                mountSection
-                roiSection
-                stabilizationSection
-                stretchSection
-                collimationSection
+                resultsSection
+                if engine.showingConstellation {
+                    stretchSection
+                } else {
+                    equipmentSection
+                    focuserSection
+                    cameraSection
+                    filterWheelSection
+                    mountSection
+                    roiSection
+                    stabilizationSection
+                    stretchSection
+                    collimationSection
+                }
             }
             .padding(14)
         }
         .frame(minWidth: 280, idealWidth: 300, maxWidth: 340)
         .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    private var resultsSection: some View {
+        GroupBox(SidebarText.resultsSection) {
+            VStack(alignment: .leading, spacing: 8) {
+                button(CommandCatalog.ID.viewCamera)
+                button(CommandCatalog.ID.viewConstellation)
+                button(CommandCatalog.ID.viewOpenConstellation)
+                if engine.isLoadingConstellation { Text(SidebarText.loadingConstellation).font(.caption) }
+                if engine.showingConstellation {
+                    CommitSlider(title: SidebarText.resultsZoom, value: Binding(
+                        get: { LogSlider.position(engine.constellationZoom, in: 1...8) },
+                        set: { engine.constellationZoom = engine.clampedConstellationZoom(LogSlider.value($0)) }
+                    ), range: LogSlider.range(1...8), format: MetricText.constellationZoom(engine.constellationZoom))
+                    button(CommandCatalog.ID.constellationFit)
+                }
+            }
+        }
     }
 
     private var equipmentSection: some View {
@@ -330,31 +353,31 @@ struct SidebarView: View {
     }
 
     private var stretchSection: some View {
-        GroupBox(SidebarText.stretchSection) {
+        GroupBox(engine.showingConstellation ? SidebarText.resultsStretchSection : SidebarText.stretchSection) {
             VStack(alignment: .leading, spacing: 8) {
-                HistogramView(histogram: engine.histogram, stretch: engine.stretch)
+                HistogramView(histogram: engine.displayHistogram, stretch: engine.displayStretch)
                     .frame(height: 56)
-                Picker("Curve", selection: $engine.stretch.curve) {
+                Picker("Curve", selection: $engine.displayStretch.curve) {
                     ForEach(StretchCurve.allCases) { curve in
                         Text(curve.label).tag(curve)
                     }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                CommitSlider(title: SidebarText.black, value: $engine.stretch.black, range: StretchParams.blackRange, format: MetricText.percent(engine.stretch.black))
-                CommitSlider(title: SidebarText.white, value: $engine.stretch.white, range: 0...1, format: MetricText.percent(engine.stretch.white))
-                if engine.stretch.curve == .mtf {
-                    CommitSlider(title: SidebarText.midtones, value: $engine.stretch.midtones, range: StretchParams.midtonesRange, format: MetricText.midtones(engine.stretch.midtones))
+                CommitSlider(title: SidebarText.black, value: $engine.displayStretch.black, range: StretchParams.blackRange, format: MetricText.percent(engine.displayStretch.black))
+                CommitSlider(title: SidebarText.white, value: $engine.displayStretch.white, range: 0...1, format: MetricText.percent(engine.displayStretch.white))
+                if engine.displayStretch.curve == .mtf {
+                    CommitSlider(title: SidebarText.midtones, value: $engine.displayStretch.midtones, range: StretchParams.midtonesRange, format: MetricText.midtones(engine.displayStretch.midtones))
                 } else {
                     CommitSlider(
                         title: SidebarText.arcsinhFactor,
                         value: logArcsinhBinding,
                         range: logArcsinhRange,
-                        format: MetricText.arcsinhFactor(engine.stretch.arcsinh)
+                        format: MetricText.arcsinhFactor(engine.displayStretch.arcsinh)
                     )
                     .help(HelpText.arcsinh)
                 }
-                button(CommandCatalog.ID.cameraAutoStretch, appliesShortcut: true)
+                button(engine.showingConstellation ? CommandCatalog.ID.constellationAutoStretch : CommandCatalog.ID.cameraAutoStretch, appliesShortcut: true)
             }
         }
     }
@@ -431,8 +454,8 @@ struct SidebarView: View {
 
     private var logArcsinhBinding: Binding<Double> {
         Binding(
-            get: { LogSlider.position(engine.stretch.arcsinh, in: StretchParams.arcsinhRange) },
-            set: { engine.stretch.arcsinh = LogSlider.value($0) }
+            get: { LogSlider.position(engine.displayStretch.arcsinh, in: StretchParams.arcsinhRange) },
+            set: { engine.displayStretch.arcsinh = LogSlider.value($0) }
         )
     }
 }

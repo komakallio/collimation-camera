@@ -7,6 +7,20 @@ struct CoreTests {
     // isolated. Nonisolated test bodies still convert to the closure type.
     @MainActor
     static func main() async {
+        if CommandLine.arguments.contains("--constellation-only") {
+            var failures = 0
+            failures += run("constellation TIFF reading", testConstellationTIFFReading)
+            failures += run("constellation centred zoom", testConstellationCenteredZoom)
+            failures += await runAsync("constellation viewer state", testConstellationViewerState)
+            failures += run("saved constellation files", testSavedConstellationFiles)
+            failures += await runAsync("constellation connected mount", testConstellationMountIfRequested)
+            failures += run("command catalog coverage", testCommandCatalogCoverage)
+            failures += run("command reachability", testCommandReachability)
+            failures += run("shortcut uniqueness", testShortcutUniqueness)
+            failures += run("ui glyph coverage", testUIGlyphCoverage)
+            print(failures == 0 ? "All constellation tests passed." : "\(failures) test(s) failed.")
+            exit(failures == 0 ? 0 : 1)
+        }
         var failures = 0
         failures += run("autofocus HFR metric", testFocusMetric)
         failures += run("autofocus bounded curve", testAutofocusPlan)
@@ -75,6 +89,11 @@ struct CoreTests {
         failures += run("stack seed async transfer", testStackSeedAsyncTransfer)
         failures += run("constellation stack crops at sensor edges", testConstellationStackCrops)
         failures += run("constellation layout", testConstellationLayout)
+        failures += run("constellation TIFF reading", testConstellationTIFFReading)
+        failures += run("constellation centred zoom", testConstellationCenteredZoom)
+        failures += await runAsync("constellation viewer state", testConstellationViewerState)
+        failures += run("saved constellation files", testSavedConstellationFiles)
+        failures += await runAsync("constellation connected mount", testConstellationMountIfRequested)
         failures += run("mount frame switch gate", testMountFrameGate)
         failures += run("sensor center overlay", testSensorCenterOverlay)
         failures += run("auto exposure", testAutoExposure)

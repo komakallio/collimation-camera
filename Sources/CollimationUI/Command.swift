@@ -23,6 +23,7 @@ public enum CommandMenu: String, Equatable, Sendable, CaseIterable {
 /// Platform services a command may need. Each app supplies one.
 @MainActor
 public protocol UIHost: AnyObject {
+    func presentOpenConstellationDialog(directory: URL?, completion: @escaping @MainActor (URL?) -> Void)
     /// Presents a save dialog. Must ignore the call while one is already open,
     /// so a repeated shortcut cannot stack two dialogs. `completion` runs on
     /// the main actor with nil when the user cancels.

@@ -65,6 +65,11 @@ public enum CommandCatalog {
         public static let cameraSaveTIFF = "camera.saveTIFF"
         public static let cameraSaveStacked = "camera.saveStacked"
         public static let cameraSaveConstellation = "camera.saveConstellation"
+        public static let viewOpenConstellation = "view.openConstellation"
+        public static let viewCamera = "view.camera"
+        public static let viewConstellation = "view.constellation"
+        public static let constellationFit = "constellation.fit"
+        public static let constellationAutoStretch = "constellation.autoStretch"
         public static let cameraStabilize = "camera.stabilize"
         public static let mountConnect = "mount.connect"
         public static let mountRefreshPorts = "mount.refreshPorts"
@@ -231,6 +236,35 @@ public enum CommandCatalog {
             shortTitle: "Stabilize view",
             help: "Nudge the live 512×512 crop so the detected centroid stays still. Off while the full sensor is shown (search or centering).",
             shortcuts: [.primary("l")]
+        ),
+        Command(
+            id: ID.viewOpenConstellation, menu: .view, title: SidebarText.openConstellation,
+            help: "Open a saved 3×3 float constellation TIFF", shortcuts: [.primaryShift("o")],
+            isEnabled: { $0.canOpenConstellation },
+            perform: { engine, host in
+                host.presentOpenConstellationDialog(directory: engine.snapshotDirectory) { url in
+                    if let url { engine.openConstellation(from: url) }
+                }
+            }
+        ),
+        Command(
+            id: ID.viewCamera, menu: .view, title: "Camera",
+            perform: { engine, _ in engine.showingConstellation = false }
+        ),
+        Command(
+            id: ID.viewConstellation, menu: .view, title: "Constellation Results",
+            isEnabled: { $0.canShowConstellation },
+            perform: { engine, _ in engine.showingConstellation = true }
+        ),
+        Command(
+            id: ID.constellationFit, menu: nil, title: "Fit", shortTitle: "Fit",
+            isEnabled: { $0.canShowConstellation },
+            perform: { engine, _ in engine.constellationZoom = 1 }
+        ),
+        Command(
+            id: ID.constellationAutoStretch, menu: nil, title: "Auto stretch", shortTitle: "Auto stretch",
+            isEnabled: { $0.canShowConstellation },
+            perform: { engine, _ in engine.autoStretchConstellation() }
         ),
         Command(
             id: ID.mountConnect,

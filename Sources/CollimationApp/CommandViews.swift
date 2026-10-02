@@ -115,6 +115,19 @@ private struct HelpModifier: ViewModifier {
 final class MacUIHost: UIHost {
     private var dialogOpen = false
 
+    func presentOpenConstellationDialog(directory: URL?, completion: @escaping @MainActor (URL?) -> Void) {
+        guard !dialogOpen else { return }
+        dialogOpen = true
+        defer { dialogOpen = false }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.tiff]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.title = SidebarText.openConstellation
+        panel.directoryURL = directory
+        completion(panel.runModal() == .OK ? panel.url : nil)
+    }
+
     func presentSaveDialog(
         title: String,
         message: String,

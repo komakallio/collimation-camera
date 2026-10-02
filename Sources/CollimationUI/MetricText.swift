@@ -6,6 +6,9 @@ import Foundation
 /// A view never spells a format specifier of its own. The em dash placeholder
 /// is the same one the pre-port sidebar used for a missing measurement.
 public enum MetricText {
+    public static func constellationZoom(_ zoom: Double) -> String {
+        String(format: "%.2f×", zoom)
+    }
     public static func autofocus(_ state: AutofocusState, samples: Int) -> String {
         switch state {
         case .idle: return "Autofocus ready"

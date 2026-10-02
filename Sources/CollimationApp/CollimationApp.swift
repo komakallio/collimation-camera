@@ -131,8 +131,12 @@ struct ContentView: View {
             SidebarView(engine: engine, host: host)
         } detail: {
             ZStack {
-                LiveView(engine: engine)
-                liveChrome
+                if engine.showingConstellation {
+                    ConstellationView(engine: engine)
+                } else {
+                    LiveView(engine: engine)
+                    liveChrome
+                }
             }
             .background(Color.black)
         }

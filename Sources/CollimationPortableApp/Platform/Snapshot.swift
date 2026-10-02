@@ -127,6 +127,8 @@ enum Snapshot {
             return false
         }
         prepareImGui(commandBuffer)
+        let constellation = engine.showingConstellation ? engine.constellationRenderSlot.peek() : nil
+        renderer.prepareConstellation(constellation, commandBuffer: commandBuffer)
         renderer.renderScene(
             commandBuffer: commandBuffer,
             colorTarget: colorTarget,
@@ -134,6 +136,7 @@ enum Snapshot {
             liveRect: liveRect,
             windowSize: windowSize,
             targetPixels: SIMD2(Double(width), Double(height)),
+            constellation: constellation,
             drawImGui: drawImGui
         )
 

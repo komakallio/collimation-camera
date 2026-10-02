@@ -52,6 +52,19 @@ final class PortableUIHost: UIHost {
     private var dialogOpen = false
     private var pending: ((URL?) -> Void)?
 
+    func presentOpenConstellationDialog(directory: URL?, completion: @escaping @MainActor (URL?) -> Void) {
+        guard !dialogOpen else { return }
+        dialogOpen = true
+        pending = completion
+        Self.active = self
+        (directory?.path ?? "").withCString { location in
+            Self.filters.withUnsafeBufferPointer { filters in
+                SDL_ShowOpenFileDialog(portableDialogCallback, nil, window, filters.baseAddress,
+                    Int32(filters.count), location, false)
+            }
+        }
+    }
+
     init(window: OpaquePointer) {
         self.window = window
     }

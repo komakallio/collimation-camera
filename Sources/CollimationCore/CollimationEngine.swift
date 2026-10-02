@@ -79,6 +79,75 @@ public enum StackWork: Equatable, Sendable {
 public final class CollimationEngine {
     nonisolated public let frameSlot = FrameSlot()
     nonisolated public let renderStateSlot = RenderStateSlot()
+    nonisolated public let constellationRenderSlot = ConstellationRenderSlot()
+    public private(set) var constellationResult: ConstellationResult?
+    public var showingConstellation = false
+    public private(set) var isLoadingConstellation = false
+    public var constellationZoom: Double = 1 {
+        didSet { updateConstellationDisplay() }
+    }
+    public var constellationStretch = StretchParams.default {
+        didSet { updateConstellationDisplay() }
+    }
+    public var canOpenConstellation: Bool { !isLoadingConstellation && !isStacking }
+    public var canShowConstellation: Bool { constellationResult != nil }
+    public var displayStretch: StretchParams {
+        get { showingConstellation ? constellationStretch : stretch }
+        set {
+            if showingConstellation { constellationStretch = newValue } else { stretch = newValue }
+        }
+    }
+    public var displayHistogram: Histogram { showingConstellation ? (constellationResult?.histogram ?? Histogram()) : histogram }
+
+    public func clampedConstellationZoom(_ value: Double) -> Double {
+        value.isFinite ? min(max(value, 1), 8) : 1
+    }
+
+    private func updateConstellationDisplay() {
+        constellationRenderSlot.store(ConstellationRenderState(
+            result: constellationResult,
+            zoom: clampedConstellationZoom(constellationZoom), stretch: constellationStretch
+        ))
+    }
+
+    public func autoStretchConstellation() {
+        guard let result = constellationResult else { return }
+        constellationStretch = StretchParams.auto(from: result.histogram, curve: constellationStretch.curve)
+    }
+
+    public func displayConstellation(_ result: ConstellationResult) {
+        constellationResult = result
+        constellationZoom = 1
+        constellationStretch = StretchParams.auto(from: result.histogram, curve: stretch.curve)
+        showingConstellation = true
+        updateConstellationDisplay()
+    }
+
+    public func openConstellation(from url: URL, zoom: Double = 1, curve: StretchCurve? = nil) {
+        guard canOpenConstellation else { return }
+        errorMessage = nil
+        // Set the busy flag synchronously so repeated commands cannot queue loads.
+        isLoadingConstellation = true
+        Task { await loadConstellation(from: url, zoom: zoom, curve: curve) }
+    }
+
+    private func loadConstellation(from url: URL, zoom: Double, curve: StretchCurve?) async {
+        defer { isLoadingConstellation = false }
+        do {
+            let result = try await Task.detached(priority: .userInitiated) {
+                try ConstellationResult.load(from: url)
+            }.value
+            displayConstellation(result)
+            constellationZoom = clampedConstellationZoom(zoom)
+            if let curve {
+                constellationStretch.curve = curve
+                autoStretchConstellation()
+            }
+            snapshotDirectory = url.deletingLastPathComponent()
+        } catch {
+            presentError(error)
+        }
+    }
     /// Live-view size in points. Fed by the app's resize hook, not by a view
     /// body, so it is not observed.
     @ObservationIgnored public var viewWidth = 800.0
@@ -257,7 +326,7 @@ public final class CollimationEngine {
         isMountConnected && isConnected && !isMountBusy && !isStacking && !focuserIsWorking && tracking.state == .tracking
     }
     public var canCenterStar: Bool { canCalibrateMount && isMountCalibrated }
-    public var canSaveConstellation: Bool { canCenterStar }
+    public var canSaveConstellation: Bool { canCenterStar && !isLoadingConstellation }
     public var canConnectMount: Bool { (isMountConnected || (!serialPorts.isEmpty && !isAutofocusing)) && !isMountBusy }
     public var canSelectSerialPort: Bool { !isMountConnected && !isMountBusy }
     public var canRefreshSerialPorts: Bool { canSelectSerialPort }
@@ -573,6 +642,7 @@ public final class CollimationEngine {
         let frameCount = FrameStacker.clampedCount(stackFrameCount)
         let steps = ConstellationCapture.positionCount
         var startedMount = false
+        var completedResult: ConstellationResult?
         defer {
             finishStacking()
             if startedMount {
@@ -586,6 +656,7 @@ public final class CollimationEngine {
             } else {
                 restoreTrackingDisplay()
             }
+            if let completedResult { displayConstellation(completedResult) }
         }
         do {
             guard let calibration = guideCalibration, calibration.isValid else {
@@ -646,6 +717,12 @@ public final class CollimationEngine {
             statusText = "Combining constellation…"
             let mosaic = try ConstellationCapture.mosaic(tiles)
             try MonoTIFF.write(mosaic, to: url)
+            completedResult = try await Task.detached(priority: .userInitiated) {
+                try ConstellationResult(
+                    tiles: tiles.map { ConstellationTile(row: $0.row, column: $0.column, image: $0.image) },
+                    sourceURL: url
+                )
+            }.value
             statusText = "Saved \(url.lastPathComponent)"
         } catch is CancellationError {
             statusText = "Constellation cancelled"

@@ -53,6 +53,7 @@ final class MainLoop {
     /// run is the only place that check can fail a build rather than a user.
     var exitStatus: Int32 {
         guard snapshotPath != nil else { return 0 }
+        if CommandLine.arguments.contains("--open-constellation") && engine.constellationResult == nil { return 1 }
         return snapshotSucceeded && !Diagnostics.sawIDConflict ? 0 : 1
     }
 
@@ -159,7 +160,14 @@ final class MainLoop {
             height: Double(windowHeight) - MenuBar.height,
             pointScale: pointScale
         )
-        LiveChrome.draw(engine: engine, liveRect: live, pointScale: pointScale)
+        if engine.showingConstellation {
+            if let list = igGetBackgroundDrawList(nil) {
+                HUDDrawList.draw(ConstellationScene.primitives(state: engine.constellationRenderSlot.peek(), size: live.size),
+                    on: list, origin: live.origin * pointScale, pointScale: pointScale)
+            }
+        } else {
+            LiveChrome.draw(engine: engine, liveRect: live, pointScale: pointScale)
+        }
         ErrorDialog.draw(engine: engine)
 
         // The engine lays out in view points, like the macOS app.
@@ -185,7 +193,7 @@ final class MainLoop {
         // `--snapshot`: one offscreen frame to a file, then quit. Taken here
         // rather than after the loop because the ImGui draw data is only valid
         // between igRender and the next igNewFrame.
-        if let snapshotPath, Date().timeIntervalSince(startedAt) >= snapshotAfter {
+        if let snapshotPath, !engine.isLoadingConstellation, Date().timeIntervalSince(startedAt) >= snapshotAfter {
             snapshotSucceeded = Snapshot.write(
                 to: snapshotPath,
                 device: device,
@@ -209,6 +217,7 @@ final class MainLoop {
             window: window,
             liveRect: live,
             windowSize: windowSizeInPoints(),
+            constellation: engine.showingConstellation ? engine.constellationRenderSlot.peek() : nil,
             drawImGui: drawImGui,
             prepareImGui: prepareImGui
         )

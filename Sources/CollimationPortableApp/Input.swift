@@ -41,6 +41,10 @@ enum Input {
             guard let io = igGetIO_Nil(), !io.pointee.WantCaptureMouse else { return false }
             guard event.wheel.y != 0 else { return false }
             let factor = event.wheel.y > 0 ? zoomIn : zoomOut
+            if engine.showingConstellation {
+                engine.constellationZoom = engine.clampedConstellationZoom(engine.constellationZoom * factor)
+                return false
+            }
             engine.zoom = engine.clampedZoom(engine.zoom * factor)
             engine.updateStabilization()
             return false

@@ -17,11 +17,43 @@ They drive the same engine and take every label, shortcut, and HUD from the same
 - ROI sizes 256 / 512 / 1024 / 2048 / full, plus display zoom (25%–800%, pinch/scroll)
 - Auto-center the ROI on the star; full-frame binned search if it leaves the ROI
 - Manual and auto stretch (histogram percentiles)
+- Constellation results: nine star stacks with shared, star-centred zoom and independent display stretch; reopen saved float TIFF mosaics
 - Numeric coma: concentricity of the outer ring vs. the secondary shadow, plus sector asymmetry
 - Simulator camera so you can develop and test without hardware
 - Player One and ZWO cameras through one device list, both loaded at run time
 - Player One Phoenix filter wheel: connect, read on-wheel aliases, and move to a slot
 - PrimaLuceLab ESATTO focuser over USB: manual moves and automatic star-based focusing
+
+## Constellation results
+
+After **Save Constellation** succeeds, the app displays the nine stacks in their
+sensor layout, without position labels. Use **Camera** and **Constellation Results**
+at the top of the sidebar to switch views. Camera capture continues while
+reviewing results, and disconnecting preserves the current result.
+
+**Open Constellation…** (Ctrl+Shift+O on Windows, ⌘⇧O on macOS) opens an existing
+768×768, uncompressed 32-bit float mono constellation TIFF saved by this app.
+Each new result starts fitted, with an automatic stretch. The shared **Results
+zoom** slider magnifies all nine stars from 1× to 8× around their own centres;
+**Fit** resets it. The wheel, and pinch on macOS, update that same zoom.
+
+The results histogram and MTF/Arcsinh, black, white, midtones/factor and auto
+stretch controls apply the same stretch to all nine original float images.
+These settings are independent of the camera. A cell whose star cannot be
+detected uses the crop midpoint and displays **Centre not detected**.
+
+For a repeatable Windows screenshot without connecting a camera:
+
+```powershell
+scripts\run-win.ps1 CollimationCamera -Configuration release -Arguments @('--open-constellation','"C:\path with spaces\constellation.tif"','--constellation-zoom','4','--snapshot','"C:\path\results.png"')
+```
+
+`--constellation-arcsinh` selects and automatically adjusts the Arcsinh curve.
+The core test runner also supports `--constellation-only`. Set
+`COLLIMATION_CONSTELLATION_TEST_DIR` to a directory of saved constellation TIFFs
+to include them in the checks. The optional `--mount-port COM10` connects the
+mount and verifies that viewing results leaves it idle; it uses the normal
+mount connection, which stops tracking, and does not slew or capture a new mosaic.
 
 ## ESATTO focuser
 

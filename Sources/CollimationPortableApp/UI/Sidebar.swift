@@ -42,6 +42,11 @@ enum Sidebar {
         }
         defer { igEnd() }
 
+        resultsSection(engine: engine, host: host)
+        if engine.showingConstellation {
+            stretchSection(engine: engine, host: host)
+            return
+        }
         equipmentSection(engine: engine, host: host)
         focuserSection(engine: engine, host: host)
         cameraSection(engine: engine, host: host)
@@ -51,6 +56,20 @@ enum Sidebar {
         stabilizationSection(engine: engine, host: host)
         stretchSection(engine: engine, host: host)
         collimationSection(engine: engine, host: host)
+    }
+
+    private static func resultsSection(engine: CollimationEngine, host: any UIHost) {
+        guard header(SidebarText.resultsSection) else { return }
+        command(CommandCatalog.ID.viewCamera, engine: engine, host: host)
+        command(CommandCatalog.ID.viewConstellation, engine: engine, host: host)
+        command(CommandCatalog.ID.viewOpenConstellation, engine: engine, host: host)
+        if engine.isLoadingConstellation { secondary(SidebarText.loadingConstellation) }
+        if engine.showingConstellation {
+            logSlider(label: SidebarText.resultsZoom, value: engine.constellationZoom, bounds: 1...8,
+                display: MetricText.constellationZoom(engine.constellationZoom),
+                onChange: { engine.constellationZoom = engine.clampedConstellationZoom($0) }, onCommit: {})
+            command(CommandCatalog.ID.constellationFit, engine: engine, host: host)
+        }
     }
 
     // MARK: - Sections
@@ -262,55 +281,55 @@ enum Sidebar {
     }
 
     private static func stretchSection(engine: CollimationEngine, host: any UIHost) {
-        guard header(SidebarText.stretchSection) else { return }
+        guard header(engine.showingConstellation ? SidebarText.resultsStretchSection : SidebarText.stretchSection) else { return }
 
         let histogramSize = SIMD2(width - 24, 56.0)
         histogram(engine: engine, size: histogramSize)
 
         for curve in StretchCurve.allCases {
-            if igRadioButton_Bool(curve.label, engine.stretch.curve == curve) {
-                engine.stretch.curve = curve
+            if igRadioButton_Bool(curve.label, engine.displayStretch.curve == curve) {
+                engine.displayStretch.curve = curve
             }
             if curve != StretchCurve.allCases.last { igSameLine(0, -1) }
         }
 
         slider(
             label: SidebarText.black,
-            value: engine.stretch.black,
+            value: engine.displayStretch.black,
             bounds: StretchParams.blackRange,
-            display: MetricText.percent(engine.stretch.black),
-            onChange: { engine.stretch.black = $0 },
+            display: MetricText.percent(engine.displayStretch.black),
+            onChange: { engine.displayStretch.black = $0 },
             onCommit: {}
         )
         slider(
             label: SidebarText.white,
-            value: engine.stretch.white,
+            value: engine.displayStretch.white,
             bounds: 0...1,
-            display: MetricText.percent(engine.stretch.white),
-            onChange: { engine.stretch.white = $0 },
+            display: MetricText.percent(engine.displayStretch.white),
+            onChange: { engine.displayStretch.white = $0 },
             onCommit: {}
         )
-        if engine.stretch.curve == .mtf {
+        if engine.displayStretch.curve == .mtf {
             slider(
                 label: SidebarText.midtones,
-                value: engine.stretch.midtones,
+                value: engine.displayStretch.midtones,
                 bounds: StretchParams.midtonesRange,
-                display: MetricText.midtones(engine.stretch.midtones),
-                onChange: { engine.stretch.midtones = $0 },
+                display: MetricText.midtones(engine.displayStretch.midtones),
+                onChange: { engine.displayStretch.midtones = $0 },
                 onCommit: {}
             )
         } else {
             logSlider(
                 label: SidebarText.arcsinhFactor,
-                value: engine.stretch.arcsinh,
+                value: engine.displayStretch.arcsinh,
                 bounds: StretchParams.arcsinhRange,
-                display: MetricText.arcsinhFactor(engine.stretch.arcsinh),
-                onChange: { engine.stretch.arcsinh = $0 },
+                display: MetricText.arcsinhFactor(engine.displayStretch.arcsinh),
+                onChange: { engine.displayStretch.arcsinh = $0 },
                 onCommit: {},
                 help: HelpText.arcsinh
             )
         }
-        command(CommandCatalog.ID.cameraAutoStretch, engine: engine, host: host)
+        command(engine.showingConstellation ? CommandCatalog.ID.constellationAutoStretch : CommandCatalog.ID.cameraAutoStretch, engine: engine, host: host)
     }
 
     private static func collimationSection(engine: CollimationEngine, host: any UIHost) {
@@ -504,8 +523,8 @@ enum Sidebar {
                 color: HistogramScene.background,
                 cornerRadius: HistogramScene.cornerRadius
             )] + HistogramScene.primitives(
-                histogram: engine.histogram,
-                stretch: engine.stretch,
+                histogram: engine.displayHistogram,
+                stretch: engine.displayStretch,
                 size: size
             ),
             on: igGetWindowDrawList(),

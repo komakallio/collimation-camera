@@ -171,7 +171,8 @@ public struct FrameStackAccumulator: Sendable {
             height: height,
             pixels: pixels,
             roi: roi,
-            timestamp: timestamp
+            timestamp: timestamp,
+            referenceCentroid: referenceCentroid
         )
     }
 }
@@ -182,13 +183,15 @@ public struct StackedImage: Sendable {
     public var pixels: [Float]
     public var roi: ROI
     public var timestamp: Date
+    public var referenceCentroid: SIMD2<Double>?
 
-    public init(width: Int, height: Int, pixels: [Float], roi: ROI, timestamp: Date = Date()) {
+    public init(width: Int, height: Int, pixels: [Float], roi: ROI, timestamp: Date = Date(), referenceCentroid: SIMD2<Double>? = nil) {
         self.width = width
         self.height = height
         self.pixels = pixels
         self.roi = roi
         self.timestamp = timestamp
+        self.referenceCentroid = referenceCentroid
     }
 }
 

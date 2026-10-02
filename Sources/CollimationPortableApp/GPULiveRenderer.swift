@@ -1,5 +1,6 @@
 import CSDL3
 import CollimationCore
+import CollimationUI
 import Foundation
 
 /// The live view on SDL3 GPU, mirroring `MetalRenderer` one to one.
@@ -17,6 +18,7 @@ final class GPULiveRenderer {
     private var transferCapacity = 0
     private var lastSequence: UInt64 = .max
     private var lastStabilizedSequence: UInt64 = .max
+    private let constellationRenderer: GPUConstellationRenderer
 
     /// Background behind the image, the same colour the Metal view clears to.
     static let clearColor = SDL_FColor(r: 0.04, g: 0.045, b: 0.055, a: 1)
@@ -27,6 +29,8 @@ final class GPULiveRenderer {
             return nil
         }
         self.pipeline = pipeline
+        guard let results = GPUConstellationRenderer(device: device, colorFormat: colorFormat) else { return nil }
+        constellationRenderer = results
     }
 
     deinit {
@@ -75,6 +79,7 @@ final class GPULiveRenderer {
         /// Both in view points, with the window's top-left as the origin.
         liveRect: (origin: SIMD2<Double>, size: SIMD2<Double>),
         windowSize: SIMD2<Double>,
+        constellation: ConstellationRenderState? = nil,
         drawImGui: (OpaquePointer, OpaquePointer) -> Void,
         prepareImGui: (OpaquePointer) -> Void
     ) {
@@ -110,6 +115,7 @@ final class GPULiveRenderer {
         if let frame = pendingUpload {
             upload(frame, commandBuffer: commandBuffer)
         }
+        prepareConstellation(constellation, commandBuffer: commandBuffer)
 
         prepareImGui(commandBuffer)
 
@@ -130,6 +136,7 @@ final class GPULiveRenderer {
             liveRect: liveRect,
             windowSize: windowSize,
             targetPixels: SIMD2(Double(width), Double(height)),
+            constellation: constellation,
             drawImGui: drawImGui
         )
         _ = SDL_SubmitGPUCommandBuffer(commandBuffer)
@@ -148,6 +155,7 @@ final class GPULiveRenderer {
         /// The colour target's real size, for the scissor. Points are what the
         /// layout is in; the scissor is in pixels.
         targetPixels: SIMD2<Double>,
+        constellation: ConstellationRenderState? = nil,
         drawImGui: (OpaquePointer, OpaquePointer) -> Void
     ) {
         var target = SDL_GPUColorTargetInfo()
@@ -177,13 +185,18 @@ final class GPULiveRenderer {
             h: Int32(region.height)
         )
         SDL_SetGPUScissor(pass, &live)
-        drawImage(
-            pass: pass,
-            commandBuffer: commandBuffer,
-            renderState: renderState,
-            liveRect: liveRect,
-            windowSize: windowSize
-        )
+        if let constellation {
+            constellationRenderer.draw(state: constellation, pass: pass, commandBuffer: commandBuffer,
+                origin: liveRect.origin, size: liveRect.size, windowSize: windowSize)
+        } else {
+            drawImage(
+                pass: pass,
+                commandBuffer: commandBuffer,
+                renderState: renderState,
+                liveRect: liveRect,
+                windowSize: windowSize
+            )
+        }
         // ImGui sets a scissor per draw command, but it is only ever narrowed
         // from whatever is current, so hand it back the whole target.
         var whole = SDL_Rect(x: 0, y: 0, w: Int32(targetPixels.x), h: Int32(targetPixels.y))
@@ -362,12 +375,17 @@ final class GPULiveRenderer {
 
     // MARK: - Pipeline
 
-    private static func makePipeline(
+    func prepareConstellation(_ state: ConstellationRenderState?, commandBuffer: OpaquePointer) {
+        if let state { constellationRenderer.prepare(state, commandBuffer: commandBuffer) }
+    }
+
+    static func makePipeline(
         device: OpaquePointer,
-        colorFormat: SDL_GPUTextureFormat
+        colorFormat: SDL_GPUTextureFormat,
+        constellation: Bool = false
     ) -> OpaquePointer? {
-        guard let vertex = makeShader(device: device, stage: SDL_GPU_SHADERSTAGE_VERTEX),
-              let fragment = makeShader(device: device, stage: SDL_GPU_SHADERSTAGE_FRAGMENT) else {
+        guard let vertex = makeShader(device: device, stage: SDL_GPU_SHADERSTAGE_VERTEX, constellation: constellation),
+              let fragment = makeShader(device: device, stage: SDL_GPU_SHADERSTAGE_FRAGMENT, constellation: constellation) else {
             return nil
         }
         defer {
@@ -396,12 +414,13 @@ final class GPULiveRenderer {
 
     private static func makeShader(
         device: OpaquePointer,
-        stage: SDL_GPUShaderStage
+        stage: SDL_GPUShaderStage,
+        constellation: Bool
     ) -> OpaquePointer? {
         let isVertex = stage == SDL_GPU_SHADERSTAGE_VERTEX
 
 #if os(macOS)
-        return ShaderSource.metal.withCString { source in
+        return (constellation ? ConstellationShader.metal : ShaderSource.metal).withCString { source in
             var info = SDL_GPUShaderCreateInfo()
             info.code = UnsafeRawPointer(source).assumingMemoryBound(to: UInt8.self)
             info.code_size = strlen(source)
@@ -417,7 +436,9 @@ final class GPULiveRenderer {
         }
 #elseif os(Windows)
         guard let blob = HLSLCompiler.compile(
-            source: isVertex ? ShaderSource.hlslVertex : ShaderSource.hlslFragment,
+            source: constellation
+                ? (isVertex ? ConstellationShader.hlslVertex : ConstellationShader.hlslFragment)
+                : (isVertex ? ShaderSource.hlslVertex : ShaderSource.hlslFragment),
             entryPoint: "main",
             target: isVertex ? "vs_5_1" : "ps_5_1"
         ) else {

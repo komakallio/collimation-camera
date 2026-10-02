@@ -164,7 +164,22 @@ guard let renderer = GPULiveRenderer(device: device, colorFormat: swapchainForma
 let engine = CollimationEngine()
 let host = PortableUIHost(window: window)
 // Same as ContentView.onAppear on macOS.
-engine.connect()
+if let openIndex = CommandLine.arguments.firstIndex(of: "--open-constellation") {
+    guard openIndex + 1 < CommandLine.arguments.count,
+          !CommandLine.arguments[openIndex + 1].hasPrefix("--") else {
+        Log.info("--open-constellation needs a TIFF file path")
+        Diagnostics.stop()
+        exit(2)
+    }
+    var resultZoom = 1.0
+    if let zoomIndex = CommandLine.arguments.firstIndex(of: "--constellation-zoom"),
+       zoomIndex + 1 < CommandLine.arguments.count,
+       let zoom = Double(CommandLine.arguments[zoomIndex + 1]) { resultZoom = zoom }
+    engine.openConstellation(from: URL(fileURLWithPath: CommandLine.arguments[openIndex + 1]),
+        zoom: resultZoom, curve: CommandLine.arguments.contains("--constellation-arcsinh") ? .arcsinh : nil)
+} else {
+    engine.connect()
+}
 
 let loop = MainLoop(
     window: window,
