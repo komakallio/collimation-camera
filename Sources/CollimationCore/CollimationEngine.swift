@@ -240,6 +240,9 @@ public final class CollimationEngine {
     public var focuserStepSize = 1000
     public var focuserTargetPosition = 0
     public var autofocusStepSize = 1000
+    public var autofocusTakeUpSteps = 4000
+    public private(set) var autofocusResult: AutofocusResult?
+    public private(set) var autofocusDiagnostics: AutofocusDiagnostics?
     public private(set) var isAutofocusing = false
     public private(set) var autofocusState: AutofocusState = .idle
     public private(set) var autofocusSamples: [AutofocusSample] = []
@@ -262,6 +265,11 @@ public final class CollimationEngine {
     @ObservationIgnored private var autofocusID: UUID?
     @ObservationIgnored private var autofocusCancellation: AutofocusCancellation?
     @ObservationIgnored private var autofocusFrames: [(timestamp: Date, metric: FocusMetric)] = []
+    @ObservationIgnored private var autofocusReadings: [AutofocusReading] = []
+    @ObservationIgnored private var autofocusRejectedFrames = 0
+    @ObservationIgnored private var autofocusStaleFrames = 0
+    @ObservationIgnored private var autofocusBlockStarted = Date.distantPast
+    @ObservationIgnored private var autofocusRunSettings = AutofocusSettings()
     @ObservationIgnored private var autofocusExposureFrames: [FocusExposureReading] = []
     @ObservationIgnored private var autofocusHasSaturation = false
     @ObservationIgnored private var autofocusDiscardFrames = 0
@@ -276,9 +284,15 @@ public final class CollimationEngine {
               !isAutoExposing, !isFilterWheelMoving, tracking.centroidOnSensor != nil,
               tracking.state == .tracking, let state = focuserSnapshot,
               let star = tracking.detection, star.snr >= 6 else { return false }
-        return (try? AutofocusPlan(position: state.position, maximum: state.maxPosition, step: autofocusStepSize)) != nil
+        return (try? AutofocusPlan(position: state.position, maximum: state.maxPosition, step: autofocusStepSize,
+                                  takeUp: autofocusComparisonPolicy == .legacy ? autofocusStepSize : autofocusTakeUpSteps)) != nil
     }
     public var canEditAutofocus: Bool { !isAutofocusing && !isMeasuringTilt }
+    public var autofocusRangeWarning: String? {
+        guard let state = focuserSnapshot, canEditAutofocus else { return nil }
+        return (try? AutofocusPlan(position: state.position, maximum: state.maxPosition, step: autofocusStepSize,
+                                  takeUp: autofocusTakeUpSteps)) == nil ? AutofocusError.invalidRange.localizedDescription : nil
+    }
     public var canAdjustCamera: Bool { !isAutofocusing && !isMeasuringTilt }
 
     public var canConnectFocuser: Bool {
@@ -421,6 +435,7 @@ public final class CollimationEngine {
     @ObservationIgnored private let serialPortPaths: () -> [String]
     @ObservationIgnored private let cameraFactory: (String) throws -> any CameraDevice
     @ObservationIgnored private let autofocusTiming: AutofocusTiming
+    @ObservationIgnored private let autofocusComparisonPolicy: AutofocusComparisonPolicy
     @ObservationIgnored private let mountSettleMilliseconds: Int
     /// Search binning before a camera is connected, and the ceiling once one is.
     public static let defaultSearchBinning = 4
@@ -436,6 +451,7 @@ public final class CollimationEngine {
         mount: any MountDevice = EQ6Mount(),
         cameraFactory: @escaping (String) throws -> any CameraDevice = { try DeviceCatalog.makeDevice(id: $0) },
         autofocusTiming: AutofocusTiming = AutofocusTiming(),
+        autofocusComparisonPolicy: AutofocusComparisonPolicy = .production,
         initialCalibration: GuideCalibration? = nil,
         mountSettleMilliseconds: Int = MountGuide.settleMilliseconds
     ) {
@@ -445,6 +461,7 @@ public final class CollimationEngine {
         self.mount = mount
         self.cameraFactory = cameraFactory
         self.autofocusTiming = autofocusTiming
+        self.autofocusComparisonPolicy = autofocusComparisonPolicy
         self.mountSettleMilliseconds = max(0, mountSettleMilliseconds)
         refreshDevices()
         selectedDeviceID = DeviceCatalog.preferredDeviceID(in: devices)
@@ -1100,7 +1117,12 @@ public final class CollimationEngine {
         guard canAutofocus, let state = focuserSnapshot,
               let anchor = tracking.centroidOnSensor else { return }
         do {
-            let plan = try AutofocusPlan(position: state.position, maximum: state.maxPosition, step: autofocusStepSize)
+            autofocusRunSettings = snapshotAutofocusSettings()
+            let plan = try AutofocusPlan(position: state.position, maximum: state.maxPosition,
+                                         step: autofocusRunSettings.step, takeUp: autofocusRunSettings.takeUp)
+            autofocusResult = nil
+            autofocusDiagnostics = AutofocusDiagnostics(settings: autofocusRunSettings,
+                verificationPolicy: autofocusComparisonPolicy == .legacy ? "legacy-minimum-15-percent" : "curve-fit-position-only")
             let id = UUID()
             let cancellation = AutofocusCancellation()
             focuserGeneration &+= 1
@@ -1130,6 +1152,15 @@ public final class CollimationEngine {
         MonoTIFF.suggestedFileName(width: 768, height: 768, label: "tilt")
     }
 
+    private func snapshotAutofocusSettings() -> AutofocusSettings {
+        AutofocusSettings(step: autofocusStepSize,
+            takeUp: autofocusComparisonPolicy == .legacy ? autofocusStepSize : autofocusTakeUpSteps,
+            settleSeconds: autofocusComparisonPolicy == .legacy ? 0.3 : autofocusTiming.settleSeconds,
+            discardFrames: autofocusComparisonPolicy == .legacy ? 0 : 3,
+            verificationInterval: autofocusTiming.verificationInterval, gain: Int(gain.rounded()),
+            frameTimeout: autofocusTiming.frameTimeout, motionTimeout: autofocusTiming.motionTimeout)
+    }
+
     public func startTiltMeasurement(to url: URL) {
         guard canMeasureTilt, let camera = device?.descriptor, let focus = focuserSnapshot,
               let calibration = guideCalibration, let star = tracking.centroidOnSensor else { return }
@@ -1138,7 +1169,9 @@ public final class CollimationEngine {
             stackCount: FrameStacker.clampedCount(stackFrameCount), gain: Int(gain.rounded()),
             filterPosition: hardwareFilterPosition)
         let cancellation = AutofocusCancellation()
-        tiltReport = report; tiltID = report.id; tiltCancellation = cancellation
+        tiltReport = report; tiltReport!.autofocusSettings = snapshotAutofocusSettings()
+        tiltReport!.schemaVersion = 2
+        tiltID = report.id; tiltCancellation = cancellation
         tiltSavedURL = nil; tiltLastStar = MountCentroidSample(star)
         isMeasuringTilt = true; errorMessage = nil
         showingConstellation = false
@@ -1177,6 +1210,8 @@ public final class CollimationEngine {
     }
 
     private func prepareTiltFocus(anchor: MountCentroidSample) {
+        autofocusRunSettings = tiltReport?.autofocusSettings ?? snapshotAutofocusSettings()
+        autofocusDiagnostics = AutofocusDiagnostics(settings: autofocusRunSettings)
         autofocusSamples = []; autofocusExposureRetries = 0; autofocusRecenters = 0
         autofocusFrames = []; autofocusExposureFrames = []; autofocusHasSaturation = false
         autofocusDiscardFrames = 0; autofocusExposureFlushSeconds = 0
@@ -1196,7 +1231,8 @@ public final class CollimationEngine {
         guard let state = focuserSnapshot, let anchor = tracking.centroidOnSensor else { throw AutofocusError.noStar }
         prepareTiltFocus(anchor: MountCentroidSample(anchor))
         defer { endTiltFocus() }
-        let plan = try AutofocusPlan(position: state.position, maximum: state.maxPosition, step: tiltReport!.autofocusStep)
+        let plan = try AutofocusPlan(position: state.position, maximum: state.maxPosition,
+                                     step: autofocusRunSettings.step, takeUp: autofocusRunSettings.takeUp)
         let result = try await autofocusMinimum(plan: plan, maximum: state.maxPosition, cancellation: cancellation)
         autofocusState = .complete(position: result.position, hfr: result.hfr)
         return result
@@ -1221,12 +1257,12 @@ public final class CollimationEngine {
         guard let anchor = tracking.centroidOnSensor else { throw AutofocusError.noStar }
         prepareTiltFocus(anchor: MountCentroidSample(anchor))
         defer { endTiltFocus() }
-        try await autofocusMove(to: target - report.autofocusStep, cancellation: cancellation)
-        try await autofocusMove(to: target, cancellation: cancellation)
+        try await autofocusApproach(target: target, maximum: focuserSnapshot!.maxPosition, cancellation: cancellation)
         try autofocusSetExposure(exposure, cancellation: cancellation)
-        let deadline = autofocusPrepareFrames()
+        let deadline = try await autofocusPrepareFreshFrames(cancellation: cancellation)
         while autofocusExposureFrames.count < AutofocusPlan.framesPerPosition {
             try Task.checkCancellation(); try cancellation.check()
+            guard autofocusRejectedFrames < autofocusRunSettings.maximumRejectedFrames else { throw AutofocusError.noStar }
             guard isConnected, isFocuserConnected else { throw CancellationError() }
             guard Date() < deadline else { throw AutofocusError.noStar }
             try await Task.sleep(for: .milliseconds(20))
@@ -1241,7 +1277,8 @@ public final class CollimationEngine {
         case AutofocusError.noStar, AutofocusError.invalidRange, AutofocusError.minimumNotBracketed,
              AutofocusError.flatCurve, AutofocusError.verificationFailed, AutofocusError.exposureLimit,
              AutofocusError.unstableExposure, AutofocusError.invalidSlope, AutofocusError.searchTravelLimit,
-             AutofocusError.searchNotImproving, MountError.noStar, MountError.targetNotReached,
+             AutofocusError.searchNotImproving, AutofocusError.unstableFit, AutofocusError.recoveryFailed,
+             MountError.noStar, MountError.targetNotReached,
              MountError.starChangedDuringFrameSwitch:
             return true
         default: return false
@@ -1286,12 +1323,14 @@ public final class CollimationEngine {
                         tiltReport!.commonFocus = result.position
                         tiltReport!.commonExposureMicroseconds = result.exposureMicroseconds
                     }
-                    Log.info("Tilt \(point.label): focus \(result.position), HFR \(result.hfr)")
+                    Log.info("Tilt \(point.label): focus \(result.position), diagnostic HFR \(result.hfr.map { String($0) } ?? "unavailable")")
                 } catch {
                     try checkTilt(id, cancellation)
                     guard index > 0, Self.isRecoverableTiltOpticalError(error) else { throw error }
                     try await stopTiltDevices(cancellation: cancellation)
                     tiltReport!.points[index].focusError = error.localizedDescription
+                    autofocusDiagnostics?.failure = error.localizedDescription
+                    tiltReport!.points[index].focusDiagnostics = autofocusDiagnostics
                     Log.info("Tilt \(point.label) skipped: \(error.localizedDescription)")
                 }
                 // A failed curve can still have a useful common-focus image.
@@ -1326,9 +1365,8 @@ public final class CollimationEngine {
                 try await stopTiltDevices(cancellation: cancellation)
                 tiltReport!.warning = "Centre drift check failed: \(error.localizedDescription)"
                 // Even a weak star must not prevent a safe absolute restoration.
-                let target = tiltReport!.commonFocus!, step = tiltReport!.autofocusStep
-                try await autofocusMove(to: target - step, cancellation: cancellation)
-                try await autofocusMove(to: target, cancellation: cancellation)
+                let target = tiltReport!.commonFocus!
+                try await autofocusApproach(target: target, maximum: focuserSnapshot!.maxPosition, cancellation: cancellation)
             }
             try checkTilt(id, cancellation)
             if tiltReport!.validOuterCount < 8 || tiltReport!.points.contains(where: { !$0.imageCaptured }) || tiltReport!.warning != nil {
@@ -1391,9 +1429,11 @@ public final class CollimationEngine {
         do {
             let result = try await autofocusMinimum(plan: plan, maximum: maximum, cancellation: cancellation)
             guard autofocusID == id else { return }
+            autofocusResult = result
             finishAutofocus(state: .complete(position: result.position, hfr: result.hfr))
         } catch {
             guard autofocusID == id else { return }
+            autofocusDiagnostics?.failure = error.localizedDescription
             finishAutofocus(state: error is CancellationError ? .cancelled : .failed)
             stopFocuser()
             presentError(error)
@@ -1402,6 +1442,135 @@ public final class CollimationEngine {
 
     private func autofocusMinimum(plan initialPlan: AutofocusPlan, maximum: Int,
                                   cancellation: AutofocusCancellation) async throws -> AutofocusResult {
+        if autofocusComparisonPolicy == .legacy {
+            return try await autofocusLegacyMinimum(plan: initialPlan, maximum: maximum, cancellation: cancellation)
+        }
+        var plan = initialPlan
+        var search = AutofocusSearch()
+        let connected = try await autofocusOperation(cancellation: cancellation) { try $0.snapshot() }
+        guard !connected.isMoving, connected.maxPosition == maximum,
+              connected.position == initialPlan.positions[4] else { throw AutofocusError.positionMismatch }
+        try await autofocusSelectExposure(cancellation: cancellation)
+        // Separate bounds for search, exposure retries and final diagnostics.
+        // No uncertainty estimate can extend any of these budgets.
+        for _ in 0..<24 {
+            do {
+                try await autofocusApproach(target: plan.positions[4], maximum: maximum, cancellation: cancellation)
+                let baseline = try await autofocusMeasurement(at: plan.positions[4], checkingStar: true, cancellation: cancellation)
+                autofocusDiagnostics?.baseline = baseline
+                try await autofocusMove(to: plan.preloadPosition, cancellation: cancellation)
+                for position in plan.positions {
+                    try await autofocusMove(to: position, cancellation: cancellation)
+                    let sample = try await autofocusMeasurement(at: position, cancellation: cancellation)
+                    autofocusSamples.append(sample)
+                    Log.info(String(format: "Autofocus sample: %d, HFR %.3f px, scatter %.3f", position, sample.hfr, sample.scatter ?? 0))
+                }
+                autofocusDiagnostics?.curves.append(autofocusSamples)
+                var settings = autofocusRunSettings
+                // Two returns to the same position reveal variation that five
+                // adjacent frames cannot. Do not divide this difference by sqrt(5).
+                settings.absoluteHFRFloor = max(settings.absoluteHFRFloor,
+                    abs(autofocusSamples[4].hfr - baseline.hfr))
+                let fittingSettings = settings
+                let fittingPlan = plan
+                let samples = autofocusSamples
+                // Fitting and its LOO refits need no device or actor state.
+                let fit = try await Task.detached {
+                    try fittingPlan.fit(samples: samples, settings: fittingSettings)
+                }.value
+                try Task.checkCancellation(); try cancellation.check()
+                autofocusDiagnostics?.fit = fit
+                let target = fit.position
+                try await autofocusApproach(target: target, maximum: maximum, cancellation: cancellation)
+                // Acceptance is determined by curve support, residuals and
+                // position sensitivity. Near-focus HFR cannot veto the fit,
+                // trigger a correction or restart its exposure/scan.
+                let blocks = try await autofocusRecordFinalBlocks(at: target, cancellation: cancellation)
+                let stopped = try await autofocusOperation(cancellation: cancellation) { try $0.snapshot() }
+                guard !stopped.isMoving, stopped.position == target else { throw AutofocusError.positionMismatch }
+                let hfr = blocks.isEmpty ? nil : AutofocusPlan.median(blocks.map(\.hfr))
+                autofocusDiagnostics?.finalPosition = target
+                autofocusDiagnostics?.finalHFR = hfr
+                let count = Double(autofocusFrames.count)
+                return AutofocusResult(position: target, hfr: hfr,
+                    sensorX: count > 0 ? autofocusFrames.reduce(0) { $0 + $1.metric.sensorX } / count : autofocusAnchorX,
+                    sensorY: count > 0 ? autofocusFrames.reduce(0) { $0 + $1.metric.sensorY } / count : autofocusAnchorY,
+                    exposureMicroseconds: Int(exposureMicroseconds.rounded()), samples: autofocusSamples,
+                    exposureRetries: autofocusExposureRetries, recenters: autofocusRecenters, diagnostics: autofocusDiagnostics)
+            } catch is AutofocusExposureChanged {
+                autofocusExposureRetries += 1; search.exposureChanged()
+                if !autofocusSamples.isEmpty && autofocusDiagnostics?.curves.last != autofocusSamples {
+                    autofocusDiagnostics?.curves.append(autofocusSamples)
+                }
+                autofocusSamples = []
+                autofocusDiagnostics?.fit = nil
+            } catch AutofocusError.minimumNotBracketed {
+                guard autofocusRecenters < 16 else { throw AutofocusError.searchNotImproving }
+                plan = try search.recenter(plan: plan, samples: autofocusSamples, maximum: maximum)
+                autofocusRecenters += 1; autofocusSamples = []
+            } catch {
+                if !autofocusSamples.isEmpty && autofocusDiagnostics?.curves.last != autofocusSamples {
+                    autofocusDiagnostics?.curves.append(autofocusSamples)
+                }
+                throw error
+            }
+        }
+        throw AutofocusError.searchNotImproving
+    }
+
+    private func autofocusApproach(target: Int, maximum: Int, cancellation: AutofocusCancellation) async throws {
+        let moves = try AutofocusPlan.approach(target: target, maximum: maximum, takeUp: autofocusRunSettings.takeUp)
+        for position in moves { try await autofocusMove(to: position, cancellation: cancellation) }
+    }
+
+    private func autofocusRecordFinalBlocks(at target: Int, cancellation: AutofocusCancellation) async throws -> [AutofocusSample] {
+        var blocks: [AutofocusSample] = []
+        for block in 1...3 {
+            if block > 1 {
+                try await Task.sleep(for: .seconds(autofocusRunSettings.verificationInterval))
+                try cancellation.check()
+            }
+            autofocusState = .recordingFinalHFR(position: target, block: block)
+            do {
+                let sample = try await autofocusMeasurement(at: target, verifying: true, settle: block == 1,
+                    diagnosticOnly: true, cancellation: cancellation)
+                blocks.append(sample); autofocusDiagnostics?.verification.append(sample)
+            } catch AutofocusError.noStar {
+                autofocusRecordFinalIssue(target: target, block: block, reason: "Five usable final HFR readings unavailable within acquisition bounds.")
+            } catch AutofocusError.exposureLimit {
+                autofocusRecordFinalIssue(target: target, block: block, reason: "Final HFR unavailable because frames were saturated.")
+            }
+            try Task.checkCancellation(); try cancellation.check()
+        }
+        return blocks
+    }
+
+    private func autofocusRecordFinalIssue(target: Int, block: Int, reason: String) {
+        autofocusAcceptAfter = .distantFuture
+        let issue = AutofocusFinalMeasurementIssue(position: target, block: block,
+            startedAt: autofocusBlockStarted, finishedAt: Date(), readings: autofocusReadings, reason: reason)
+        if autofocusDiagnostics?.finalMeasurementIssues == nil { autofocusDiagnostics?.finalMeasurementIssues = [] }
+        autofocusDiagnostics?.finalMeasurementIssues?.append(issue)
+        Log.info("Autofocus final diagnostic block \(block): \(reason) Fitted position retained.")
+    }
+
+    private func autofocusMeasurement(at position: Int, verifying: Bool = false, checkingStar: Bool = false,
+                                      recovery: Bool = false, settle: Bool = true,
+                                      diagnosticOnly: Bool = false,
+                                      cancellation: AutofocusCancellation) async throws -> AutofocusSample {
+        let state = try await autofocusOperation(cancellation: cancellation) { try $0.snapshot() }
+        guard !state.isMoving, state.position == position else { throw AutofocusError.positionMismatch }
+        let hfr = try await autofocusMeasure(at: position, verifying: verifying, checkingStar: checkingStar,
+                                            recovery: recovery, settle: settle, diagnosticOnly: diagnosticOnly, cancellation: cancellation)
+        var sample = AutofocusSample(position: position, hfr: hfr, exposureMicroseconds: Int(exposureMicroseconds.rounded()),
+            gain: autofocusRunSettings.gain, readings: autofocusReadings, startedAt: autofocusBlockStarted,
+            finishedAt: autofocusFrames.last?.timestamp, rejectedFrames: autofocusRejectedFrames)
+        sample.staleFrames = autofocusStaleFrames
+        return sample
+    }
+
+    private func autofocusLegacyMinimum(plan initialPlan: AutofocusPlan, maximum: Int,
+                                        cancellation: AutofocusCancellation) async throws -> AutofocusResult {
         var plan = initialPlan
         var search = AutofocusSearch()
         try Task.checkCancellation()
@@ -1415,31 +1584,38 @@ public final class CollimationEngine {
                     try await autofocusMove(to: plan.positions[4] - plan.step, cancellation: cancellation)
                     try await autofocusMove(to: plan.positions[4], recentering: autofocusRecenters > 0, cancellation: cancellation)
                 }
-                let initialHFR = try await autofocusMeasure(at: plan.positions[4], verifying: false,
-                                                           checkingStar: true, cancellation: cancellation)
+                let baseline = try await autofocusMeasurement(at: plan.positions[4], checkingStar: true, cancellation: cancellation)
+                autofocusDiagnostics?.baseline = baseline
+                let initialHFR = baseline.hfr
                 Log.info(String(format: "Autofocus initial HFR: %.3f px", initialHFR))
                 try await autofocusMove(to: plan.preloadPosition, cancellation: cancellation)
                 for position in plan.positions {
                     try await autofocusMove(to: position, cancellation: cancellation)
-                    let hfr = try await autofocusMeasure(at: position, verifying: false, cancellation: cancellation)
-                    autofocusSamples.append(AutofocusSample(position: position, hfr: hfr,
-                                                           exposureMicroseconds: Int(exposureMicroseconds.rounded())))
+                    let sample = try await autofocusMeasurement(at: position, cancellation: cancellation)
+                    let hfr = sample.hfr
+                    autofocusSamples.append(sample)
                     Log.info(String(format: "Autofocus sample: %d, HFR %.3f px", position, hfr))
                 }
-                let target = try plan.solution(samples: autofocusSamples)
+                autofocusDiagnostics?.curves.append(autofocusSamples)
+                let target = try plan.legacySolution(samples: autofocusSamples)
                 try await autofocusMove(to: target - plan.step, cancellation: cancellation)
                 try await autofocusMove(to: target, cancellation: cancellation)
-                let hfr = try await autofocusMeasure(at: target, verifying: true, cancellation: cancellation)
-                try AutofocusPlan.verify(hfr: hfr, samples: autofocusSamples)
-                try AutofocusPlan.verify(hfr: hfr, samples: [AutofocusSample(position: plan.positions[4], hfr: initialHFR)])
+                autofocusState = .verifying(position: target)
+                let verification = try await autofocusMeasurement(at: target, verifying: true, cancellation: cancellation)
+                autofocusDiagnostics?.verification.append(verification)
+                let hfr = verification.hfr
+                try AutofocusPlan.verifyLegacyHFR(hfr: hfr, samples: autofocusSamples)
+                try AutofocusPlan.verifyLegacyHFR(hfr: hfr, samples: [AutofocusSample(position: plan.positions[4], hfr: initialHFR)])
                 try cancellation.check()
                 Log.info(String(format: "Autofocus complete: %d, HFR %.3f px, exposure %.3f ms", target, hfr, exposureMicroseconds / 1000))
+                autofocusDiagnostics?.finalPosition = target
+                autofocusDiagnostics?.finalHFR = hfr
                 let count = Double(autofocusFrames.count)
                 return AutofocusResult(position: target, hfr: hfr,
                     sensorX: autofocusFrames.reduce(0) { $0 + $1.metric.sensorX } / count,
                     sensorY: autofocusFrames.reduce(0) { $0 + $1.metric.sensorY } / count,
                     exposureMicroseconds: Int(exposureMicroseconds.rounded()), samples: autofocusSamples,
-                    exposureRetries: autofocusExposureRetries, recenters: autofocusRecenters)
+                    exposureRetries: autofocusExposureRetries, recenters: autofocusRecenters, diagnostics: autofocusDiagnostics)
             } catch is AutofocusExposureChanged {
                 autofocusExposureRetries += 1
                 search.exposureChanged()
@@ -1483,7 +1659,11 @@ public final class CollimationEngine {
         autofocusAcceptAfter = .distantFuture
         autofocusState = recentering ? .recentering(position: position) : .moving(position: position)
         focuserTargetPosition = position
-        _ = try await autofocusOperation(cancellation: cancellation) { try $0.move(to: position) }
+        _ = try await autofocusOperation(cancellation: cancellation) {
+            let bounds = try $0.snapshot()
+            guard position >= 0, position <= bounds.maxPosition else { throw AutofocusError.invalidRange }
+            return try $0.move(to: position)
+        }
         let deadline = Date().addingTimeInterval(autofocusTiming.motionTimeout)
         while Date() < deadline {
             try await Task.sleep(for: .milliseconds(100))
@@ -1497,17 +1677,23 @@ public final class CollimationEngine {
     }
 
     private func autofocusMeasure(at position: Int, verifying: Bool, checkingStar: Bool = false,
+                                  recovery: Bool = false, settle: Bool = true,
+                                  diagnosticOnly: Bool = false,
                                   cancellation: AutofocusCancellation) async throws -> Double {
         try Task.checkCancellation()
         try cancellation.check()
-        let deadline = autofocusPrepareFrames()
-        autofocusState = checkingStar ? .checkingStar(frames: 0)
-            : verifying ? .verifying(position: position) : .measuring(position: position, frames: 0)
+        let deadline = try await autofocusPrepareFreshFrames(settling: settle, cancellation: cancellation)
+        if !verifying {
+            autofocusState = checkingStar ? .checkingStar(frames: 0)
+                : recovery ? .recovering(position: position) : .measuring(position: position, frames: 0)
+        }
         while Date() < deadline {
             try Task.checkCancellation()
             try cancellation.check()
             guard isConnected, isFocuserConnected else { throw CancellationError() }
+            guard autofocusRejectedFrames < autofocusRunSettings.maximumRejectedFrames else { throw AutofocusError.noStar }
             if autofocusHasSaturation {
+                if diagnosticOnly { throw AutofocusError.exposureLimit }
                 guard autofocusExposureRetries < AutofocusExposureControl.maximumRestarts else {
                     throw AutofocusError.unstableExposure
                 }
@@ -1522,7 +1708,7 @@ public final class CollimationEngine {
                 return AutofocusPlan.median(autofocusFrames.map { $0.metric.hfr })
             }
             if checkingStar { autofocusState = .checkingStar(frames: autofocusFrames.count) }
-            else if !verifying { autofocusState = .measuring(position: position, frames: autofocusFrames.count) }
+            else if !verifying && !recovery { autofocusState = .measuring(position: position, frames: autofocusFrames.count) }
             try await Task.sleep(for: .milliseconds(20))
         }
         throw AutofocusError.noStar
@@ -1530,15 +1716,27 @@ public final class CollimationEngine {
 
     /// Timestamp gates exclude frames begun during motion. After a control
     /// change also drain queued SDK frames before judging the new exposure.
-    private func autofocusPrepareFrames() -> Date {
+    private func autofocusPrepareFrames(settling: Bool = true) -> Date {
         autofocusFrames = []
+        autofocusReadings = []; autofocusRejectedFrames = 0; autofocusStaleFrames = 0; autofocusBlockStarted = Date()
         autofocusExposureFrames = []
         autofocusHasSaturation = false
         let exposureSeconds = exposureMicroseconds / 1_000_000
-        autofocusAcceptAfter = Date().addingTimeInterval(autofocusTiming.settleSeconds + exposureSeconds + autofocusExposureFlushSeconds)
-        if autofocusExposureFlushSeconds > 0 { autofocusDiscardFrames = 3 }
+        autofocusAcceptAfter = Date().addingTimeInterval((settling ? autofocusRunSettings.settleSeconds : 0) + exposureSeconds + autofocusExposureFlushSeconds)
+        autofocusDiscardFrames = autofocusRunSettings.discardFrames
+        if autofocusExposureFlushSeconds > 0 { autofocusDiscardFrames = max(3, autofocusDiscardFrames) }
         autofocusExposureFlushSeconds = 0
         return autofocusAcceptAfter.addingTimeInterval(max(autofocusTiming.frameTimeout, exposureSeconds * 12))
+    }
+
+    private func autofocusPrepareFreshFrames(settling: Bool = true, cancellation: AutofocusCancellation) async throws -> Date {
+        if autofocusComparisonPolicy == .legacy { return autofocusPrepareFrames(settling: settling) }
+        autofocusAcceptAfter = .distantFuture
+        if settling { try await Task.sleep(for: .seconds(autofocusRunSettings.settleSeconds)) }
+        try cancellation.check()
+        _ = try await session.restartForFreshFrames()
+        try cancellation.check()
+        return autofocusPrepareFrames(settling: false)
     }
 
     private func autofocusSetExposure(_ microseconds: Int, cancellation: AutofocusCancellation) throws {
@@ -1556,10 +1754,11 @@ public final class CollimationEngine {
             try cancellation.check()
             let current = Int(exposureMicroseconds.rounded())
             autofocusState = .adjustingExposure(microseconds: current)
-            let deadline = autofocusPrepareFrames()
+            let deadline = try await autofocusPrepareFreshFrames(cancellation: cancellation)
             while autofocusExposureFrames.count < AutofocusPlan.framesPerPosition {
                 try Task.checkCancellation()
                 try cancellation.check()
+                guard autofocusRejectedFrames < autofocusRunSettings.maximumRejectedFrames else { throw AutofocusError.noStar }
                 guard isConnected, isFocuserConnected else { throw CancellationError() }
                 guard Date() < deadline else { throw AutofocusError.noStar }
                 try await Task.sleep(for: .milliseconds(20))
@@ -1582,17 +1781,38 @@ public final class CollimationEngine {
     }
 
     private func receiveAutofocusFrame(timestamp: Date, metric: FocusMetric?, exposure: FocusExposureReading?) {
-        guard isAutofocusing, timestamp > autofocusAcceptAfter, timestamp > autofocusLastTimestamp,
-              let exposure,
-              !exposure.detected || hypot(exposure.sensorX - autofocusAnchorX, exposure.sensorY - autofocusAnchorY) < 64 else { return }
+        guard isAutofocusing, autofocusAcceptAfter != .distantFuture else { return }
+        guard timestamp > autofocusAcceptAfter, timestamp <= Date(), timestamp > autofocusLastTimestamp else {
+            autofocusStaleFrames += 1; return
+        }
         autofocusLastTimestamp = timestamp
-        if autofocusDiscardFrames > 0 { autofocusDiscardFrames -= 1; return }
+        if autofocusDiscardFrames > 0 {
+            autofocusDiscardFrames -= 1
+            autofocusReadings.append(AutofocusReading(timestamp: timestamp, hfr: nil, rejection: "startup discard"))
+            return
+        }
+        guard let exposure else {
+            autofocusRejectFrame(timestamp: timestamp, reason: "missing detection"); return
+        }
+        guard !exposure.detected || hypot(exposure.sensorX - autofocusAnchorX, exposure.sensorY - autofocusAnchorY) < 64 else {
+            autofocusRejectFrame(timestamp: timestamp, reason: "changed star"); return
+        }
         if exposure.peak >= StarQuality.clipADU { autofocusHasSaturation = true }
         if autofocusExposureFrames.count < AutofocusPlan.framesPerPosition { autofocusExposureFrames.append(exposure) }
         if autofocusFrames.count < AutofocusPlan.framesPerPosition, let metric, metric.hfr.isFinite, metric.hfr > 0,
            hypot(metric.sensorX - autofocusAnchorX, metric.sensorY - autofocusAnchorY) < 64 {
             autofocusFrames.append((timestamp, metric))
+            autofocusReadings.append(AutofocusReading(timestamp: timestamp, hfr: metric.hfr))
+        } else if autofocusFrames.count < AutofocusPlan.framesPerPosition {
+            autofocusRejectFrame(timestamp: timestamp, reason: exposure.peak >= StarQuality.clipADU ? "saturated" : "invalid HFR or changed star")
         }
+    }
+
+    private func autofocusRejectFrame(timestamp: Date, reason: String) {
+        autofocusRejectedFrames += 1
+        let reading = AutofocusReading(timestamp: timestamp, hfr: nil, rejection: reason)
+        if autofocusReadings.count < 40 { autofocusReadings.append(reading) }
+        if let count = autofocusDiagnostics?.rejectedReadings.count, count < 120 { autofocusDiagnostics?.rejectedReadings.append(reading) }
     }
 
     private func finishAutofocus(state: AutofocusState) {

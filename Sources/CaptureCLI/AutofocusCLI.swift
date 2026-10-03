@@ -2,7 +2,7 @@ import CollimationCore
 import Foundation
 
 /// Exercises the same engine as both GUIs, including live tracking, raw HFR,
-/// device feedback, preflight, cancellation and final verification.
+/// device feedback, preflight, cancellation and diagnostic final HFR.
 @MainActor
 enum AutofocusCLI {
     private struct Failure: Error, LocalizedError {
@@ -22,11 +22,13 @@ enum AutofocusCLI {
             throw Failure(message: "Use --autofocus <port> --device <real camera id> [--focus-step <steps>] [--exposure <ms>].")
         }
         let step = value("--focus-step").flatMap(Int.init) ?? 1000
+        let takeUp = value("--focus-take-up").flatMap(Int.init) ?? 4000
         let exposure = value("--exposure").flatMap(Double.init) ?? 20
-        guard step > 0, exposure.isFinite, (0.1...100).contains(exposure),
+        guard step > 0, takeUp > 0, exposure.isFinite, (0.1...100).contains(exposure),
+              !args.contains("--focus-take-up") || value("--focus-take-up").flatMap(Int.init) != nil,
               !args.contains("--focus-step") || value("--focus-step").flatMap(Int.init) != nil,
               !args.contains("--exposure") || value("--exposure").flatMap(Double.init) != nil else {
-            throw Failure(message: "Focus step must be a positive integer; exposure must be 0.1–100 ms.")
+            throw Failure(message: "Focus step and take-up must be positive integers; exposure must be 0.1–100 ms.")
         }
         TimerResolution.raise()
         let suite = "collimation-camera.autofocus-cli"
@@ -42,6 +44,7 @@ enum AutofocusCLI {
         engine.selectedDeviceID = cameraID
         engine.selectedFocuserPort = port
         engine.autofocusStepSize = step
+        engine.autofocusTakeUpSteps = takeUp
         engine.connect()
         // connect() loads the camera's current controls. Apply the requested
         // starting exposure afterwards; autofocus handles any clipping.
@@ -56,7 +59,7 @@ enum AutofocusCLI {
             try await Task.sleep(for: .milliseconds(40))
         }
         guard let state = engine.focuserSnapshot else { throw FocuserError.notConnected }
-        let plan = try AutofocusPlan(position: state.position, maximum: state.maxPosition, step: step)
+        let plan = try AutofocusPlan(position: state.position, maximum: state.maxPosition, step: step, takeUp: takeUp)
         print("Autofocus hardware: \(descriptor.name), \(state.serialNumber) on \(port)")
         print("Position \(state.position); scan \(plan.positions.first!)–\(plan.positions.last!); inward preload \(plan.preloadPosition); exposure \(exposure) ms")
         guard engine.canAutofocus else {
@@ -77,11 +80,22 @@ enum AutofocusCLI {
             }
             try await Task.sleep(for: .milliseconds(40))
         }
+        if let path = value("--focus-output"), let diagnostics = engine.autofocusDiagnostics {
+            let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try encoder.encode(diagnostics).write(to: URL(fileURLWithPath: path), options: .atomic)
+        }
         guard case .complete(let position, let hfr) = engine.autofocusState else {
             throw Failure(message: engine.errorMessage ?? "Autofocus cancelled or failed.")
         }
-        print(String(format: "Autofocus verified: %d steps, HFR %.3f sensor pixels, exposure %.3f ms, %d saturation restarts, %d scan re-centers",
-                     position, hfr, engine.exposureMicroseconds / 1000, engine.autofocusExposureRetries, engine.autofocusRecenters))
+        let diagnosticHFR = hfr.map { String(format: "%.3f sensor pixels", $0) } ?? "unavailable"
+        print(String(format: "Autofocus complete: %d steps, diagnostic HFR %@, exposure %.3f ms, %d saturation restarts, %d scan re-centers",
+                     position, diagnosticHFR, engine.exposureMicroseconds / 1000, engine.autofocusExposureRetries, engine.autofocusRecenters))
+        if let fit = engine.autofocusDiagnostics?.fit {
+            print(String(format: "Fit %@: %d steps, RMS %.3f px, approximate uncertainty %.1f steps, LOO maximum %.1f steps",
+                fit.model.rawValue, fit.position, fit.residualRMS, fit.uncertaintySteps, fit.leaveOneOutMaximumSteps))
+            print("Downweighted samples: \(fit.downweightedIndices); final diagnostic blocks: \(engine.autofocusDiagnostics?.verification.count ?? 0); unavailable blocks: \(engine.autofocusDiagnostics?.finalMeasurementIssues?.count ?? 0); acceptance: curve fit and stopped target position")
+        }
         return true
     }
 }

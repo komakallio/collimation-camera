@@ -10,8 +10,9 @@ public enum HelpText {
     public static let focuser = "ESATTO USB focuser. In decreases the position; Out increases it. Moves use the device's calibrated travel range."
     public static let focuserStepSize = "Distance in motor steps for each In or Out move."
     public static let focuserTarget = "Absolute position in motor steps. Enter a target, then press Go to."
-    public static let autofocus = "Choose exposure automatically, then scan nine positions using the tracked star's half-flux radius. Follow a valid slope by re-centering within calibrated travel until a minimum is bracketed. Saturation shortens exposure and restarts the scan. Stop cancels the run."
-    public static let autofocusStep = "Spacing in motor steps between autofocus samples. The scan covers four steps either side, plus one inward step for the approach. Choose a step larger than backlash. A flat curve needs a larger step."
+    public static let autofocus = "Choose exposure, then fit nine five-frame median HFR measurements on both focus flanks. Settle for one second and discard three fresh frames after each approach. Accept focus from curve support, residuals and position sensitivity. Final HFR from three separated blocks is diagnostic only; it cannot reject or change the fitted position. Report approximate position uncertainty and leave-one-out sensitivity. Saturation during the scan restarts the entire curve. Stop cancels every phase."
+    public static let autofocusStep = "Spacing in motor steps between nine curve samples, four either side. Choose enough spacing to measure both flanks. A flat curve needs a larger step. Take-up is set separately."
+    public static let autofocusTakeUp = "Outward approach distance in motor steps, independent of scan spacing. Each reversed approach moves this far below its target first. Default 4000; the entire approach must fit calibrated travel. This does not change controller backlash compensation."
     public static let stackCount = "Number of 256×256 frames to capture and average"
 
     public static let stackedSave =

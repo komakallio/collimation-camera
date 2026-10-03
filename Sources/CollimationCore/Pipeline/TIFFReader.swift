@@ -7,7 +7,7 @@ extension MonoTIFF {
     }
 
     public static func readConstellationWithMetadata(from url: URL) throws -> (image: StackedImage, report: TiltMeasurementReport?, warning: String?) {
-        let limit = 4 * 1024 * 1024
+        let limit = 6 * 1024 * 1024
         if let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > limit {
             throw CameraError.unsupported("Constellation TIFF is too large; expected a 768×768 float mosaic.")
         }
@@ -36,7 +36,7 @@ extension MonoTIFF {
         for i in 0..<Int(count) {
             let at = ifd + 2 + i * 12
             guard u16(at) == 270 else { continue }
-            guard description == nil, u16(at + 2) == 2, let size = u32(at + 4), size > 0, size <= 256 * 1024,
+            guard description == nil, u16(at + 2) == 2, let size = u32(at + 4), size > 0, size <= 2 * 1024 * 1024,
                   let rawOffset = u32(at + 8) else { return (nil, invalid) }
             let start = size <= 4 ? at + 8 : Int(rawOffset)
             guard start >= 8, start <= bytes.count - Int(size), bytes[start + Int(size) - 1] == 0 else { return (nil, invalid) }
@@ -49,7 +49,7 @@ extension MonoTIFF {
 
     public static func decodeConstellation(_ data: Data) throws -> StackedImage {
         let unsupported = CameraError.unsupported("Open an uncompressed 768×768, 32-bit float mono constellation TIFF saved by this app.")
-        guard data.count >= 8, data.count <= 4 * 1024 * 1024 else { throw unsupported }
+        guard data.count >= 8, data.count <= 6 * 1024 * 1024 else { throw unsupported }
         let bytes = [UInt8](data)
         func u16(_ offset: Int) throws -> UInt16 {
             guard offset >= 0, offset <= bytes.count - 2 else { throw unsupported }

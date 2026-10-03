@@ -8,6 +8,7 @@ struct CoreTests {
     @MainActor
     static func main() async {
         do {
+            if try await runAutofocusHardwareIfRequested() { return }
             if try await runFocusStabilityHardwareIfRequested() { return }
             if try await runBacklashHardwareIfRequested() { return }
             if try await runTiltHardwareIfRequested() { return }
@@ -30,6 +31,30 @@ struct CoreTests {
             exit(failures == 0 ? 0 : 1)
         }
         var failures = 0
+        if CommandLine.arguments.contains("--focus-recenter-only") {
+            failures += await runAsync("autofocus re-centering optical simulation", testAutofocusRecenterSuccess)
+            exit(failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--focus-verification-only") {
+            failures += await runAsync("autofocus final HFR is diagnostic only", testAutofocusVerificationEngine)
+            exit(failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--focus-metadata-only") {
+            failures += run("tilt TIFF metadata", testTiltTIFFMetadata)
+            failures += run("autofocus shared UI settings", testAutofocusUISettings)
+            exit(failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--autofocus-cancel-only") {
+            failures += await runAsync("autofocus cancellation", testAutofocusCancellation)
+            exit(failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--focus-fit-only") {
+            failures += run("autofocus full curve models and uncertainty", testAutofocusFullCurveFit)
+            failures += run("autofocus bounded curve", testAutofocusPlan)
+            failures += run("autofocus re-centering slope policy", testAutofocusRecenterPolicy)
+            exit(failures == 0 ? 0 : 1)
+        }
+        if !CommandLine.arguments.contains("--autofocus-only") {
         failures += run("tilt plane and curvature fit", testTiltFit)
         failures += run("tilt TIFF metadata", testTiltTIFFMetadata)
         failures += await runAsync("mount queued cancellation", testMountQueuedCancellation)
@@ -39,8 +64,11 @@ struct CoreTests {
             print(failures == 0 ? "All tilt tests passed." : "\(failures) test(s) failed.")
             exit(failures == 0 ? 0 : 1)
         }
+        }
         failures += run("autofocus HFR metric", testFocusMetric)
         failures += run("autofocus bounded curve", testAutofocusPlan)
+        failures += run("autofocus full curve models and uncertainty", testAutofocusFullCurveFit)
+        failures += run("autofocus shared UI settings", testAutofocusUISettings)
         failures += run("autofocus re-centering slope policy", testAutofocusRecenterPolicy)
         failures += run("autofocus search progress safeguards", testAutofocusSearchProgress)
         failures += await runAsync("autofocus re-centering optical simulation", testAutofocusRecenterSuccess)
@@ -50,13 +78,19 @@ struct CoreTests {
         failures += run("autofocus exposure policy", testAutofocusExposurePolicy)
         failures += await runAsync("autofocus exposure startup and buffered frames", testAutofocusExposureStartup)
         failures += await runAsync("autofocus exposure scan recovery", testAutofocusExposureScanRecovery)
-        failures += await runAsync("autofocus exposure verification recovery", testAutofocusExposureVerificationRecovery)
+        failures += await runAsync("autofocus final saturation is diagnostic only", testAutofocusExposureVerificationRecovery)
         failures += await runAsync("autofocus exposure limit", testAutofocusExposureLimit)
         failures += await runAsync("autofocus exposure cancellation", testAutofocusExposureCancellation)
         failures += await runAsync("autofocus engine optical simulation", testAutofocusEngineSuccess)
+        failures += await runAsync("autofocus final HFR is diagnostic only", testAutofocusVerificationEngine)
+        failures += await runAsync("autofocus phase cancellation", testAutofocusPhaseCancellation)
         failures += await runAsync("autofocus cancellation", testAutofocusCancellation)
         failures += await runAsync("autofocus failure handling", testAutofocusFailures)
         failures += await runAsync("autofocus simulator interlock", testAutofocusSimulatorInterlock)
+        if CommandLine.arguments.contains("--autofocus-only") {
+            print(failures == 0 ? "All autofocus tests passed." : "\(failures) test(s) failed.")
+            exit(failures == 0 ? 0 : 1)
+        }
         failures += run("esatto serial protocol", testEsattoProtocol)
         failures += run("esatto limits and errors", testEsattoLimitsAndErrors)
         failures += run("esatto deceleration status", testEsattoDecelerationStatus)

@@ -23,6 +23,7 @@ public struct TiltPointResult: Equatable, Sendable, Codable {
     public var finishedAt: Date?
     public var focus: AutofocusResult?
     public var focusError: String?
+    public var focusDiagnostics: AutofocusDiagnostics?
     public var imageCaptured = false
     public var imageError: String?
     public init(_ position: ConstellationPosition) {
@@ -62,6 +63,7 @@ public struct TiltMeasurementReport: Equatable, Sendable, Codable {
     public var focuserSerial: String
     public var mountProtocol: String
     public var autofocusStep: Int
+    public var autofocusSettings: AutofocusSettings?
     public var stackCount: Int
     public var gain: Int
     public var filterPosition: Int?
@@ -95,14 +97,30 @@ public struct TiltMeasurementReport: Equatable, Sendable, Codable {
     }
 
     public static func decode(_ data: Data) throws -> Self {
-        guard data.count <= 256 * 1024 else { throw CameraError.unsupported("Tilt metadata is too large.") }
+        guard data.count <= 2 * 1024 * 1024 else { throw CameraError.unsupported("Tilt metadata is too large.") }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let report = try decoder.decode(Self.self, from: data)
-        guard report.schemaVersion == 1, report.sensorWidth > 0, report.sensorHeight > 0,
+        guard (1...2).contains(report.schemaVersion), report.sensorWidth > 0, report.sensorHeight > 0,
               report.sensorWidth <= 100000, report.sensorHeight <= 100000,
               report.autofocusStep > 0, report.stackCount > 0,
               report.points.count == 9 else { throw CameraError.unsupported("Unsupported tilt metadata.") }
+        guard report.schemaVersion == 1 || report.autofocusSettings != nil else { throw CameraError.unsupported("Missing autofocus settings.") }
+        if let settings = report.autofocusSettings {
+            guard settings.step == report.autofocusStep, settings.takeUp > 0,
+                  settings.settleSeconds.isFinite, settings.settleSeconds >= 0,
+                  settings.verificationInterval.isFinite, settings.verificationInterval >= 0,
+                  settings.discardFrames >= 0, settings.discardFrames <= 10,
+                  settings.absoluteHFRFloor.isFinite, settings.absoluteHFRFloor > 0,
+                  settings.relativeHFRFloor.isFinite, settings.relativeHFRFloor > 0 else {
+                throw CameraError.unsupported("Invalid tilt autofocus settings.")
+            }
+            guard settings.framesPerPosition == 5, settings.maximumRejectedFrames > 0,
+                  settings.frameTimeout.isFinite, settings.frameTimeout > 0,
+                  settings.motionTimeout.isFinite, settings.motionTimeout > 0 else {
+                throw CameraError.unsupported("Invalid autofocus acquisition bounds.")
+            }
+        }
         let positions = ConstellationCapture.positions(sensorWidth: report.sensorWidth, sensorHeight: report.sensorHeight)
         for (point, expected) in zip(report.points, positions) {
             guard point.label == expected.label, point.row == expected.row, point.column == expected.column,
@@ -122,12 +140,40 @@ public struct TiltMeasurementReport: Equatable, Sendable, Codable {
     }
 
     private static func validate(_ focus: AutofocusResult, width: Int, height: Int) throws {
-        guard focus.position >= 0, focus.hfr.isFinite, focus.hfr > 0,
+        let validDiagnostic = focus.hfr.map { $0.isFinite && $0 > 0 }
+            ?? (focus.diagnostics?.verificationPolicy == "curve-fit-position-only" && focus.diagnostics?.fit != nil)
+        guard focus.position >= 0, validDiagnostic,
               focus.sensorX.isFinite, focus.sensorY.isFinite,
               focus.sensorX >= 0, focus.sensorX < Double(width), focus.sensorY >= 0, focus.sensorY < Double(height),
               focus.exposureMicroseconds > 0, focus.samples.count == AutofocusPlan.sampleCount,
               focus.samples.allSatisfy({ $0.position >= 0 && $0.hfr.isFinite && $0.hfr > 0 }) else {
             throw CameraError.unsupported("Invalid tilt focus measurement.")
+        }
+        if let diagnostics = focus.diagnostics {
+            if let issues = diagnostics.finalMeasurementIssues {
+                guard issues.count <= 3, issues.allSatisfy({ issue in
+                    issue.position == focus.position && (1...3).contains(issue.block)
+                        && issue.startedAt <= issue.finishedAt && issue.readings.count <= 40
+                        && issue.readings.allSatisfy { $0.hfr == nil || ($0.hfr!.isFinite && $0.hfr! > 0) }
+                }) else { throw CameraError.unsupported("Invalid final HFR diagnostic issues.") }
+            }
+            guard diagnostics.verification.count <= 30, diagnostics.recovery.count <= 3,
+                  diagnostics.curves.count <= 24,
+                  (diagnostics.verification + diagnostics.recovery).allSatisfy({ $0.position >= 0 && $0.hfr.isFinite && $0.hfr > 0 }) else {
+                throw CameraError.unsupported("Invalid tilt verification measurements.")
+            }
+            if let fit = diagnostics.fit {
+                guard fit.uncertaintySteps.isFinite, fit.uncertaintySteps >= 0,
+                      fit.residualRMS.isFinite, fit.residualRMS >= 0,
+                      fit.leaveOneOutPositions.count == 9, fit.predictions.count == 9,
+                      fit.weights.count == 9, fit.predictions.allSatisfy({ $0.isFinite && $0 > 0 }),
+                      fit.blockUncertainties.count == 9, fit.blockUncertainties.allSatisfy({ $0.isFinite && $0 > 0 }),
+                      fit.h0.isFinite, fit.h0 > 0, fit.k.isFinite, fit.k > 0,
+                      fit.tilt.isFinite, abs(fit.tilt) < fit.k, fit.center.isFinite, fit.scale.isFinite, fit.scale > 0,
+                      fit.weights.allSatisfy({ $0.isFinite && $0 > 0 && $0 <= 1 }) else {
+                    throw CameraError.unsupported("Invalid tilt focus fit.")
+                }
+            }
         }
     }
 }

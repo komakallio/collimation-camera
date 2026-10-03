@@ -18,12 +18,20 @@ public enum MetricText {
         case .moving(let position): return "Autofocus — moving to \(position)"
         case .measuring(let position, let frames): return "Focus \(samples + 1)/9 at \(position) — \(frames)/5 frames"
         case .verifying(let position): return "Verifying focus at \(position)…"
-        case .complete(let position, let hfr): return String(format: "Focused at %d — HFR %.2f px", position, hfr)
+        case .verificationBlock(let position, let block): return "Verifying \(position) — block \(block)/3"
+        case .recordingFinalHFR(let position, let block): return "Recording final HFR at \(position) — block \(block)/3"
+        case .recovering(let position): return "Checking focus bracket at \(position)"
+        case .complete(let position, let hfr):
+            guard let hfr else { return "Focused at \(position) — final HFR unavailable" }
+            return String(format: "Focused at %d — diagnostic HFR %.2f px", position, hfr)
         case .cancelled: return "Autofocus cancelled"
         case .failed: return "Autofocus failed — see error"
         }
     }
     public static let placeholder = "—"
+    public static func focusUncertainty(_ fit: AutofocusFit?) -> String? {
+        fit.map { String(format: "Fit uncertainty ~%.0f steps; LOO %.0f", $0.uncertaintySteps, $0.leaveOneOutMaximumSteps) }
+    }
 
     // MARK: - Collimation metrics
 

@@ -78,6 +78,69 @@ func testTiltTIFFMetadata() throws {
                  "loaded report excludes missing image from histogram")
     let scene = ConstellationScene.primitives(state: ConstellationRenderState(result: result), size: SIMD2(800, 700))
     try expectUI(!scene.isEmpty && TiltText.summary(result.tiltReport!).contains(where: { $0.contains("partial") }), "shared results describe partial fit")
+    var modern = tiltReportFixture()
+    modern.schemaVersion = 2
+    modern.autofocusSettings = AutofocusSettings(step: 500)
+    let focus = modern.points[0].focus!
+    let samples = focus.samples.map { AutofocusSample(position: $0.position, hfr: hypot(2, Double($0.position - focus.position) / 1000)) }
+    let fit = try AutofocusFitter.fit(samples, settings: modern.autofocusSettings!)
+    var diagnostics = AutofocusDiagnostics(settings: modern.autofocusSettings!)
+    diagnostics.fit = fit; diagnostics.curves = [samples]
+    diagnostics.verification = (0..<3).map { _ in AutofocusSample(position: focus.position, hfr: 2.01) }
+    diagnostics.recovery = [AutofocusSample(position: focus.position - 250, hfr: 2.1)]
+    modern.points[0].focus = AutofocusResult(position: focus.position, hfr: 2.01, sensorX: focus.sensorX,
+        sensorY: focus.sensorY, exposureMicroseconds: 10000, samples: samples, diagnostics: diagnostics)
+    let decodedModern = try TiltMeasurementReport.decode(modern.encoded())
+    try expectUI(decodedModern.autofocusSettings == modern.autofocusSettings && decodedModern.points[0].focus?.diagnostics == diagnostics,
+                 "new settings, fit uncertainty and separate recovery samples round trip")
+    try expectUI(decodedModern.points[0].focus!.samples.count == 9 && abs(decodedModern.fit!.xSlope - modern.fit!.xSlope) < 1e-9,
+                 "metadata does not change plane weighting or primary sample validation")
+    try expectUI(TiltText.point(decodedModern.points[0], reference: modern.commonFocus).contains("uncertainty"), "tilt presents uncertainty")
+    var previousDiagnostics = modern
+    previousDiagnostics.points[0].focus!.diagnostics!.verificationPolicy = nil
+    let previousDecoded = try TiltMeasurementReport.decode(previousDiagnostics.encoded())
+    try expectUI(previousDecoded.points[0].focus?.diagnostics?.verificationPolicy == nil
+        && previousDecoded.points[0].focus?.diagnostics?.fit == fit,
+        "reports without the optional verification policy remain readable")
+    var diagnosticOnly = modern
+    diagnosticOnly.points[0].focus = AutofocusResult(position: focus.position, hfr: nil, sensorX: focus.sensorX,
+        sensorY: focus.sensorY, exposureMicroseconds: 10000, samples: samples, diagnostics: diagnostics)
+    let decodedWithoutHFR = try TiltMeasurementReport.decode(diagnosticOnly.encoded())
+    try expectUI(decodedWithoutHFR.points[0].focus!.hfr == nil && decodedWithoutHFR.validOuterCount == modern.validOuterCount
+        && decodedWithoutHFR.fit == modern.fit,
+        "missing diagnostic final HFR neither excludes a tilt focus reading nor changes plane fitting")
+    diagnosticOnly.points[0].focus = AutofocusResult(position: focus.position, hfr: 20, sensorX: focus.sensorX,
+        sensorY: focus.sensorY, exposureMicroseconds: 10000, samples: samples, diagnostics: diagnostics)
+    let decodedHighHFR = try TiltMeasurementReport.decode(diagnosticOnly.encoded())
+    try expectUI(decodedHighHFR.points[0].focus!.hfr == 20 && decodedHighHFR.fit == modern.fit,
+                 "high final HFR is recorded without invalidating a tilt reading")
+    let detailed = samples.map { sample in
+        var point = sample
+        var readings: [AutofocusReading] = []
+        for i in 0..<24 {
+            let instant = Date(timeIntervalSince1970: 1_700_000_000.0 + Double(i) / 30.0)
+            let value: Double? = i < 19 ? nil : sample.hfr
+            let rejection: String?
+            if i < 3 { rejection = "startup discard" }
+            else if i < 19 { rejection = "invalid HFR" }
+            else { rejection = nil }
+            readings.append(AutofocusReading(timestamp: instant, hfr: value, rejection: rejection))
+        }
+        point.readings = readings
+        point.rejectedFrames = 16
+        return point
+    }
+    modern.points[0].focus!.diagnostics!.curves = Array(repeating: detailed, count: 24)
+    let largeMetadata = try modern.encoded()
+    try expectUI(largeMetadata.count > 256 * 1024, "fixture exercises diagnostics above the old metadata limit")
+    let detailedTIFF = try MonoTIFF.encode(floats: pixels, width: 768, height: 768, imageDescription: largeMetadata)
+    try expectUI(MonoTIFF.decodeTiltMetadata(detailedTIFF).report?.points[0].focus?.diagnostics?.curves.count == 24,
+                 "detailed diagnostic TIFF round trip uses bounded expanded metadata capacity")
+    try expectUI(try MonoTIFF.decodeConstellation(detailedTIFF).width == 768, "expanded metadata preserves image reading")
+    modern.points[0].focus!.diagnostics!.fit = nil
+    modern.points[0].focus!.diagnostics!.verification = Array(repeating: AutofocusSample(position: 1, hfr: 2), count: 31)
+    do { _ = try TiltMeasurementReport.decode(modern.encoded()); throw UIModelExpectation(description: "unbounded verification metadata accepted") }
+    catch is CameraError { }
 }
 
 private final class TiltTestFocuser: FocuserDevice, @unchecked Sendable {
@@ -168,7 +231,10 @@ private final class TiltTestCamera: CameraDevice, @unchecked Sendable {
         let peak = 30000 * Double(config.2) / 10000
         let roi = config.0
         var pixels = Array(repeating: UInt16(1000), count: roi.width * roi.height)
-        let cx = sx - Double(roi.x), cy = sy - Double(roi.y)
+        // The pipeline reports sensor pixel centres (index + 0.5). Evaluate
+        // the Gaussian at those centres so mount.position() is ground truth
+        // in the same coordinate system, including at the 32-pixel stop bound.
+        let cx = sx - Double(roi.x) - 0.5, cy = sy - Double(roi.y) - 0.5
         let reach = Int(ceil(sigma * 6))
         let x0 = max(0, Int(cx) - reach), x1 = min(roi.width - 1, Int(cx) + reach)
         let y0 = max(0, Int(cy) - reach), y1 = min(roi.height - 1, Int(cy) + reach)
@@ -202,7 +268,7 @@ func testTiltEngineSequence() async throws {
         let calibration = GuideCalibration(eastRate: SIMD2(0.05, 0), northRate: SIMD2(0, 0.05), sampleDurationMs: 3000)
         let engine = CollimationEngine(defaults: defaults, serialPortPaths: { ["COM4", "COM10"] },
             focuser: focus, mount: mount, cameraFactory: { _ in camera },
-            autofocusTiming: AutofocusTiming(motionTimeout: 1, frameTimeout: 2, settleSeconds: 0.01),
+            autofocusTiming: AutofocusTiming(motionTimeout: 1, frameTimeout: 2, settleSeconds: 0.01, verificationInterval: 0.01),
             initialCalibration: calibration, mountSettleMilliseconds: 30)
         let output = FileManager.default.temporaryDirectory.appendingPathComponent("tilt-engine-\(UUID()).tif")
         defer { engine.disconnect(); engine.disconnectFocuser(); engine.disconnectMount(); engine.shutdown(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: output) }
@@ -210,7 +276,12 @@ func testTiltEngineSequence() async throws {
         engine.selectedFocuserPort = "COM4"; engine.selectedSerialPort = "COM10"
         engine.connect(); engine.connectFocuser(); engine.connectMount()
         try await waitForTilt { engine.canMeasureTilt }
+        let initialStar = engine.tracking.centroidOnSensor!
+        let (initialX, initialY) = mount.position()
+        try expectUI(hypot(initialStar.x - initialX, initialStar.y - initialY) < 0.05,
+                     "tilt fixture and pipeline share sensor pixel-centre coordinates")
         engine.startTiltMeasurement(to: output)
+        engine.autofocusStepSize = 111; engine.autofocusTakeUpSteps = 222
         try expectUI(!engine.canAutofocus && !engine.canMoveFocuser && !engine.canAdjustCamera && !engine.canSaveStacked && !engine.canSelectFilter,
                      "whole sequence owns competing controls")
         try expectUI(engine.canConnectMount && engine.canConnectFocuser && engine.canStopFocuser, "escape hatches remain available")
@@ -218,12 +289,20 @@ func testTiltEngineSequence() async throws {
         guard let report = engine.tiltReport else { throw UIModelExpectation(description: "missing report") }
         try expectUI(report.status == (partial ? .partial : .complete), "sequence completes: \(report.warning ?? engine.errorMessage ?? "unknown")")
         try expectUI(report.validOuterCount == (partial ? 7 : 8), "all usable positions recorded")
+        try expectUI(report.autofocusSettings?.step == 500 && report.autofocusSettings?.takeUp == 4000
+            && report.points.compactMap(\.focus).allSatisfy { $0.diagnostics?.settings.step == 500 && $0.diagnostics?.settings.takeUp == 4000 },
+            "whole tilt run uses its original autofocus settings")
+        let focusMoves = focus.moves
+        for i in 1..<(focusMoves.count - 1) where focusMoves[i] < focusMoves[i - 1] {
+            try expectUI(focusMoves[i + 1] - focusMoves[i] == 4000,
+                         "tilt restores common focus and all reversed approaches with full take-up")
+        }
         try expectUI(report.points.allSatisfy(\.imageCaptured), "all common-focus images captured, including failed north curve")
         try expectUI(report.points.map(\.label) == ["C", "N", "NE", "E", "SE", "S", "SW", "W", "NW"], "constellation order retained")
         try expectUI(abs(report.fit!.xSlope - 200) < 40 && abs(report.fit!.ySlope + 300) < 40, "optical sequence recovers tilt")
         try expectUI(report.finalCenter != nil && focus.position == report.finalCenter!.position, "finishes at repeated centre optimum")
         let (x, y) = mount.position()
-        try expectUI(hypot(x - 511.5, y - 511.5) <= MountGuide.doneRadiusSensorPixels, "star returned to centre")
+        try expectUI(hypot(x - 511.5, y - 511.5) <= MountGuide.doneRadiusSensorPixels, "star returned to centre: \(x), \(y)")
         let reopened = try ConstellationResult.load(from: output)
         try expectUI(reopened.tiltReport?.validOuterCount == report.validOuterCount, "saved TIFF restores results")
         try expectUI(engine.canMoveFocuser && !engine.isAutofocusing && !engine.isMountBusy, "all interlocks released")
@@ -238,7 +317,7 @@ func testTiltCancellationAndFaults() async throws {
         let suite = "collimation-camera.tests.tilt-cancel.\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
         let engine = CollimationEngine(defaults: defaults, serialPortPaths: { ["COM4", "COM10"] }, focuser: focus, mount: mount,
-            cameraFactory: { _ in camera }, autofocusTiming: AutofocusTiming(motionTimeout: 1, frameTimeout: 2, settleSeconds: 0.01),
+            cameraFactory: { _ in camera }, autofocusTiming: AutofocusTiming(motionTimeout: 1, frameTimeout: 2, settleSeconds: 0.01, verificationInterval: 0.01),
             initialCalibration: GuideCalibration(eastRate: SIMD2(0.05, 0), northRate: SIMD2(0, 0.05), sampleDurationMs: 3000), mountSettleMilliseconds: 30)
         let output = FileManager.default.temporaryDirectory.appendingPathComponent("tilt-cancel-\(UUID()).tif")
         defer {

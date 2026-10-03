@@ -14,6 +14,7 @@ public final class CaptureSession: @unchecked Sendable {
     private var pendingExposure: Int?
     private var pendingGain: Int?
     private var pendingFrameLimit: Int?
+    private var freshFrameRequests: [CheckedContinuation<Date, Error>] = []
     /// When true, tracker-driven ROI changes are ignored so a full-frame
     /// centering slew cannot be snapped back to the 2048 window.
     private var holdROI = false
@@ -60,7 +61,10 @@ public final class CaptureSession: @unchecked Sendable {
         running = false
         let device = self.device
         self.device = nil
+        let fresh = freshFrameRequests
+        freshFrameRequests = []
         stateLock.unlock()
+        for request in fresh { request.resume(throwing: CancellationError()) }
 
         device?.cancelGrab()
         if shouldWait {
@@ -106,6 +110,20 @@ public final class CaptureSession: @unchecked Sendable {
         stateLock.unlock()
     }
 
+    /// SDK frames carry retrieval timestamps, not sensor exposure timestamps.
+    /// Restart on the camera worker and acknowledge only after the queue is
+    /// flushed. The caller still discards startup frames and gates timestamps.
+    public func restartForFreshFrames() async throws -> Date {
+        try Task.checkCancellation()
+        let timestamp = try await withCheckedThrowingContinuation { (request: CheckedContinuation<Date, Error>) in
+            stateLock.lock()
+            if running { freshFrameRequests.append(request); stateLock.unlock() }
+            else { stateLock.unlock(); request.resume(throwing: CancellationError()) }
+        }
+        try Task.checkCancellation()
+        return timestamp
+    }
+
     /// `0` removes the live-view 30 fps cap so stack capture can run at full readout.
     public func requestFrameLimit(_ fps: Int) {
         stateLock.lock()
@@ -114,6 +132,13 @@ public final class CaptureSession: @unchecked Sendable {
     }
 
     private func runLoop() {
+        defer {
+            stateLock.lock()
+            let pending = freshFrameRequests
+            freshFrameRequests = []
+            stateLock.unlock()
+            for request in pending { request.resume(throwing: CancellationError()) }
+        }
         stateLock.lock()
         let device = self.device
         stateLock.unlock()
@@ -140,8 +165,17 @@ public final class CaptureSession: @unchecked Sendable {
             pendingGain = nil
             let frameLimitRequest = pendingFrameLimit
             pendingFrameLimit = nil
+            let fresh = freshFrameRequests
+            freshFrameRequests = []
             stateLock.unlock()
-            if !keepGoing { break }
+            if !keepGoing {
+                for request in fresh { request.resume(throwing: CancellationError()) }
+                break
+            }
+            var freshAnswered = fresh.isEmpty
+            defer {
+                if !freshAnswered { for request in fresh { request.resume(throwing: CancellationError()) } }
+            }
 
             do {
                 if let exposure {
@@ -157,6 +191,19 @@ public final class CaptureSession: @unchecked Sendable {
                     capFPS = frameLimitRequest
                     device.applyFrameLimit(frameLimitRequest)
                     nextFrameDeadline = Date.distantPast
+                }
+                if !fresh.isEmpty {
+                    freshAnswered = true
+                    do {
+                        device.stopVideo()
+                        try device.startVideo()
+                        nextFrameDeadline = .distantPast
+                        let timestamp = Date()
+                        for request in fresh { request.resume(returning: timestamp) }
+                    } catch {
+                        for request in fresh { request.resume(throwing: error) }
+                        throw error
+                    }
                 }
                 if !device.descriptor.isSimulator, capFPS > 0 {
                     let now = Date()

@@ -13,21 +13,25 @@ public enum AutofocusError: Error, LocalizedError, Sendable {
     case invalidSlope
     case searchTravelLimit
     case searchNotImproving
+    case unstableFit
+    case recoveryFailed
 
     public var errorDescription: String? {
         switch self {
-        case .invalidRange: return "Autofocus needs room for five steps inward and four outward. Reduce the autofocus step or move away from the travel limit."
+        case .invalidRange: return "Autofocus needs room for the entire scan and outward take-up. Move away from the travel limit or change the scan range."
         case .noStar: return "Autofocus could not measure five fresh star frames. Check tracking, exposure, saturation and whether the whole star fits in the ROI."
         case .motionTimeout: return "Autofocus timed out waiting for the focuser to stop."
         case .positionMismatch: return "The focuser stopped before reaching the autofocus target."
         case .minimumNotBracketed: return "Autofocus could not bracket a focus minimum. Check the star and autofocus step."
         case .flatCurve: return "The autofocus curve has no clear minimum. Increase the autofocus step and try again."
-        case .verificationFailed: return "Focus verification was worse than the scan minimum. Check seeing, exposure and backlash, then try again."
+        case .verificationFailed: return "The legacy comparison routine rejected the final HFR."
         case .exposureLimit: return "The star is still saturated at minimum exposure. Reduce camera gain or star brightness and try autofocus again."
         case .unstableExposure: return "Autofocus could not stabilise the star exposure. Check changing illumination or camera gain and try again."
         case .invalidSlope: return "The best focus is at the scan edge, but the slope is too weak or inconsistent to follow. Check seeing and increase the autofocus step."
         case .searchTravelLimit: return "Autofocus reached the calibrated travel limit while following the focus slope. Move the optical focus within the focuser's range or reduce the autofocus step."
         case .searchNotImproving: return "The autofocus slope reversed or stopped improving after re-centering. Check seeing, star tracking and backlash, then try again."
+        case .unstableFit: return "The focus curve has excessive residuals or an unstable focus estimate. Check seeing and scan spacing."
+        case .recoveryFailed: return "The verification bracket contradicts the focus curve or remains inconclusive."
         }
     }
 }
@@ -37,16 +41,111 @@ public struct AutofocusSample: Equatable, Sendable, Codable {
     /// Half-flux radius in unbinned sensor pixels, measured on raw ADU.
     public let hfr: Double
     public let exposureMicroseconds: Int?
-    public init(position: Int, hfr: Double, exposureMicroseconds: Int? = nil) {
+    public var gain: Int?
+    public var readings: [AutofocusReading]?
+    public var startedAt: Date?
+    public var finishedAt: Date?
+    public var scatter: Double?
+    public var rejectedFrames: Int?
+    public var staleFrames: Int?
+    public var durationSeconds: Double?
+    public init(position: Int, hfr: Double, exposureMicroseconds: Int? = nil,
+                gain: Int? = nil, readings: [AutofocusReading]? = nil,
+                startedAt: Date? = nil, finishedAt: Date? = nil, rejectedFrames: Int? = nil) {
         self.position = position; self.hfr = hfr; self.exposureMicroseconds = exposureMicroseconds
+        self.gain = gain; self.readings = readings; self.startedAt = startedAt; self.finishedAt = finishedAt
+        self.rejectedFrames = rejectedFrames
+        if let startedAt, let finishedAt { durationSeconds = finishedAt.timeIntervalSince(startedAt) }
+        if let readings {
+            let values = readings.compactMap(\.hfr)
+            scatter = 1.4826 * AutofocusPlan.median(values.map { abs($0 - hfr) })
+        }
+    }
+
+    /// Scatter describes a block, not a standard error of five independent frames.
+    /// These policy floors are deliberately configurable, not camera constants.
+    public func uncertainty(settings: AutofocusSettings) -> Double {
+        max(settings.absoluteHFRFloor, max(settings.relativeHFRFloor * hfr, scatter ?? 0))
     }
 }
 
-/// A verified minimum, including the final accepted curve and the star's
+public struct AutofocusReading: Equatable, Sendable, Codable {
+    public let timestamp: Date
+    public let timestampUnixSeconds: Double
+    public let hfr: Double?
+    public let rejection: String?
+    public init(timestamp: Date, hfr: Double?, rejection: String? = nil) {
+        self.timestamp = timestamp; self.hfr = hfr; self.rejection = rejection
+        self.timestampUnixSeconds = timestamp.timeIntervalSince1970
+    }
+}
+
+public struct AutofocusSettings: Equatable, Sendable, Codable {
+    public var step: Int
+    public var takeUp: Int
+    public var settleSeconds: Double
+    public var discardFrames: Int
+    public var verificationInterval: Double
+    public var absoluteHFRFloor: Double
+    public var relativeHFRFloor: Double
+    public var gain: Int
+    public var framesPerPosition: Int
+    public var frameTimeout: Double
+    public var motionTimeout: Double
+    public var maximumRejectedFrames: Int
+    public init(step: Int = 1000, takeUp: Int = 4000, settleSeconds: Double = 1,
+                discardFrames: Int = 3, verificationInterval: Double = 1,
+                absoluteHFRFloor: Double = 0.05, relativeHFRFloor: Double = 0.03, gain: Int = 0,
+                frameTimeout: Double = 8, motionTimeout: Double = 60) {
+        self.step = step; self.takeUp = takeUp; self.settleSeconds = settleSeconds
+        self.discardFrames = discardFrames; self.verificationInterval = verificationInterval
+        self.absoluteHFRFloor = absoluteHFRFloor; self.relativeHFRFloor = relativeHFRFloor; self.gain = gain
+        self.framesPerPosition = 5; self.maximumRejectedFrames = 24
+        self.frameTimeout = frameTimeout; self.motionTimeout = motionTimeout
+    }
+}
+
+/// Only the opt-in hardware comparison selects legacy. Both apps use production.
+public enum AutofocusComparisonPolicy: Sendable { case production, legacy }
+
+/// A bounded diagnostic acquisition can fail without invalidating a fitted
+/// focus position. Preserve partial readings rather than inventing a final HFR.
+public struct AutofocusFinalMeasurementIssue: Equatable, Sendable, Codable {
+    public let position: Int
+    public let block: Int
+    public let startedAt: Date
+    public let finishedAt: Date
+    public let readings: [AutofocusReading]
+    public let reason: String
+}
+
+public struct AutofocusDiagnostics: Equatable, Sendable, Codable {
+    public var settings: AutofocusSettings
+    public var verificationPolicy: String?
+    public var baseline: AutofocusSample?
+    public var curves: [[AutofocusSample]] = []
+    public var fit: AutofocusFit?
+    public var verification: [AutofocusSample] = []
+    public var finalMeasurementIssues: [AutofocusFinalMeasurementIssue]?
+    public var recovery: [AutofocusSample] = []
+    public var recoveryOutcome: String?
+    public var recoveryFittedPosition: Int?
+    public var recoveryPredictionHFR: Double?
+    public var finalPosition: Int?
+    public var finalHFR: Double?
+    public var failure: String?
+    public var rejectedReadings: [AutofocusReading] = []
+    public init(settings: AutofocusSettings, verificationPolicy: String = "curve-fit-position-only") {
+        self.settings = settings; self.verificationPolicy = verificationPolicy
+    }
+}
+
+/// A supported minimum, including the final accepted curve and the star's
 /// measured location. Scalars are intentional across Windows async boundaries.
 public struct AutofocusResult: Equatable, Sendable, Codable {
     public let position: Int
-    public let hfr: Double
+    /// Diagnostic only. Nil when final-position HFR could not be measured.
+    public let hfr: Double?
     public let sensorX: Double
     public let sensorY: Double
     public let timestamp: Date
@@ -54,14 +153,17 @@ public struct AutofocusResult: Equatable, Sendable, Codable {
     public let samples: [AutofocusSample]
     public let exposureRetries: Int
     public let recenters: Int
+    public var diagnostics: AutofocusDiagnostics?
 
-    public init(position: Int, hfr: Double, sensorX: Double, sensorY: Double,
+    public init(position: Int, hfr: Double?, sensorX: Double, sensorY: Double,
                 timestamp: Date = Date(), exposureMicroseconds: Int,
-                samples: [AutofocusSample], exposureRetries: Int = 0, recenters: Int = 0) {
+                samples: [AutofocusSample], exposureRetries: Int = 0, recenters: Int = 0,
+                diagnostics: AutofocusDiagnostics? = nil) {
         self.position = position; self.hfr = hfr
         self.sensorX = sensorX; self.sensorY = sensorY; self.timestamp = timestamp
         self.exposureMicroseconds = exposureMicroseconds; self.samples = samples
         self.exposureRetries = exposureRetries; self.recenters = recenters
+        self.diagnostics = diagnostics
     }
 }
 
@@ -73,7 +175,10 @@ public enum AutofocusState: Equatable, Sendable {
     case moving(position: Int)
     case measuring(position: Int, frames: Int)
     case verifying(position: Int)
-    case complete(position: Int, hfr: Double)
+    case verificationBlock(position: Int, block: Int)
+    case recordingFinalHFR(position: Int, block: Int)
+    case recovering(position: Int)
+    case complete(position: Int, hfr: Double?)
     case cancelled
     case failed
 }
@@ -114,10 +219,13 @@ public struct AutofocusTiming: Sendable {
     public var motionTimeout: TimeInterval
     public var frameTimeout: TimeInterval
     public var settleSeconds: TimeInterval
-    public init(motionTimeout: TimeInterval = 60, frameTimeout: TimeInterval = 8, settleSeconds: TimeInterval = 0.3) {
+    public var verificationInterval: TimeInterval
+    public init(motionTimeout: TimeInterval = 60, frameTimeout: TimeInterval = 8, settleSeconds: TimeInterval = 1,
+                verificationInterval: TimeInterval = 1) {
         self.motionTimeout = motionTimeout
         self.frameTimeout = frameTimeout
         self.settleSeconds = settleSeconds
+        self.verificationInterval = verificationInterval
     }
 }
 
@@ -129,21 +237,34 @@ public struct AutofocusPlan: Sendable {
     public let positions: [Int]
     public let step: Int
     public let preloadPosition: Int
+    public let takeUp: Int
 
-    public init(position: Int, maximum: Int, step: Int) throws {
+    public init(position: Int, maximum: Int, step: Int, takeUp: Int = 4000) throws {
         // Division checks precede multiplication, including for Int.max input.
         guard position >= 0, maximum > 0, position <= maximum, step > 0,
-              step <= position / 5, step <= (maximum - position) / 4 else {
+              takeUp > 0, takeUp <= position,
+              step <= (position - takeUp) / 4, step <= (maximum - position) / 4 else {
             throw AutofocusError.invalidRange
         }
         self.step = step
-        preloadPosition = position - 5 * step
+        self.takeUp = takeUp
+        preloadPosition = position - 4 * step - takeUp
         positions = (-4...4).map { position + $0 * step }
     }
 
-    /// Interpolate HFR squared around the lowest point. Normalised coordinates
-    /// avoid ill-conditioned fits to large absolute ESATTO motor positions.
+    /// Fit the full weighted curve. Normalised coordinates avoid conditioning
+    /// problems at large absolute ESATTO motor positions.
     public func solution(samples: [AutofocusSample]) throws -> Int {
+        try fit(samples: samples).position
+    }
+
+    public func fit(samples: [AutofocusSample], settings: AutofocusSettings? = nil) throws -> AutofocusFit {
+        _ = try minimumIndex(samples: samples)
+        return try AutofocusFitter.fit(samples, settings: settings ?? AutofocusSettings(step: step, takeUp: takeUp))
+    }
+
+    /// Retained solely for the opt-in old/new hardware comparison.
+    public func legacySolution(samples: [AutofocusSample]) throws -> Int {
         let best = try minimumIndex(samples: samples)
         let low = samples[best].hfr
         guard samples.map(\.hfr).max()! > low * 1.05 else { throw AutofocusError.flatCurve }
@@ -191,9 +312,14 @@ public struct AutofocusPlan: Sendable {
         }
         // The current plan has already proved these multiplications safe.
         guard maximum >= positions.last! else { throw AutofocusError.searchTravelLimit }
-        let center = max(5 * step, min(maximum - 4 * step, positions[best]))
+        let center = max(4 * step + takeUp, min(maximum - 4 * step, positions[best]))
         guard center != positions[4] else { throw AutofocusError.searchTravelLimit }
-        return try AutofocusPlan(position: center, maximum: maximum, step: step)
+        return try AutofocusPlan(position: center, maximum: maximum, step: step, takeUp: takeUp)
+    }
+
+    public static func approach(target: Int, maximum: Int, takeUp: Int) throws -> [Int] {
+        guard takeUp > 0, target >= takeUp, target <= maximum else { throw AutofocusError.invalidRange }
+        return [target - takeUp, target]
     }
 
     public static func median(_ values: [Double]) -> Double {
@@ -202,7 +328,8 @@ public struct AutofocusPlan: Sendable {
         return sorted[sorted.count / 2]
     }
 
-    public static func verify(hfr: Double, samples: [AutofocusSample]) throws {
+    /// Historical behaviour, used only by the opt-in old-routine comparison.
+    public static func verifyLegacyHFR(hfr: Double, samples: [AutofocusSample]) throws {
         guard samples.allSatisfy({ $0.hfr.isFinite && $0.hfr > 0 }),
               let best = samples.map(\.hfr).min(), hfr.isFinite, hfr > 0,
               hfr <= best * 1.15 else { throw AutofocusError.verificationFailed }

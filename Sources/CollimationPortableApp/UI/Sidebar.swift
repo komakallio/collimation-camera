@@ -246,11 +246,17 @@ enum Sidebar {
             enabled: engine.canEditAutofocus, help: HelpText.autofocusStep
         ) { engine.autofocusStepSize = $0 }
         command(CommandCatalog.ID.focuserAutofocus, engine: engine, host: host)
+        integerInput(
+            SidebarText.autofocusTakeUp, value: engine.autofocusTakeUpSteps,
+            enabled: engine.canEditAutofocus, help: HelpText.autofocusTakeUp
+        ) { engine.autofocusTakeUpSteps = $0 }
         command(CommandCatalog.ID.focuserMeasureTilt, engine: engine, host: host)
         command(CommandCatalog.ID.focuserCancelTilt, engine: engine, host: host)
         if engine.isMeasuringTilt { secondary(TiltText.progress(engine.tiltProgress)) }
         else if let report = engine.tiltReport { for line in TiltText.summary(report) { secondary(line) } }
         secondary(MetricText.autofocus(engine.autofocusState, samples: engine.autofocusSamples.count))
+        if let uncertainty = MetricText.focusUncertainty(engine.autofocusDiagnostics?.fit) { secondary(uncertainty) }
+        if let warning = engine.autofocusRangeWarning { secondary(warning) }
     }
 
     private static func integerInput(

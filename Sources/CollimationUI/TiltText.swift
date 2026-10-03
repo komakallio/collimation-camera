@@ -21,7 +21,8 @@ public enum TiltText {
 
     public static func point(_ point: TiltPointResult, reference: Int?) -> String {
         guard let focus = point.focus, let reference else { return "\(point.label): focus unavailable" }
-        return String(format: "%@: %d (%+d steps)", point.label, focus.position, focus.position - reference)
+        let text = String(format: "%@: %d (%+d steps)", point.label, focus.position, focus.position - reference)
+        return text + (focus.diagnostics?.fit.map { String(format: "; fit uncertainty ~%.0f steps", $0.uncertaintySteps) } ?? "")
     }
 
     public static func summary(_ report: TiltMeasurementReport) -> [String] {

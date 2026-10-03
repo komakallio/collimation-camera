@@ -10,8 +10,9 @@ user sees updates this table, or explains the difference in Notes.
 Legend: ✅ shipped · ⏳ planned for a later milestone · — not applicable.
 
 The portable app column is shipped as of milestone 3 and verified on Windows
-with the simulator. Hardware, and the portable app on macOS, are still open;
-see Not yet verified at the end.
+with the simulator. Windows hardware evidence is recorded in
+`HARDWARE-CHECKLIST.md`; macOS execution and the remaining hardware checks
+are listed under Not yet verified.
 
 | Feature | macOS app | Portable app | Notes |
 |---|---|---|---|
@@ -19,7 +20,7 @@ see Not yet verified at the end.
 | Device list (Player One, ZWO, simulators) | ✅ | ✅ | One list; ZWO devices follow Player One. |
 | Exposure and gain | ✅ | ✅ | 100 µs to 100 ms. |
 | Auto exposure | ✅ | ✅ | `canAutoExpose`. |
-| ESATTO autofocus | ✅ | ✅ | Automatic exposure and saturation recovery; scan re-centering along a valid improving slope within calibrated travel; nine-point HFR scan at one exposure, five fresh frames per position, consistent-direction approach, verified minimum, Stop/disconnect cancellation. Windows simulation and real COM4/Xena optical run passed. macOS interface is wired but not executed here; acceptance details in `HARDWARE-CHECKLIST.md`. |
+| ESATTO autofocus | ✅ | ✅ | Independent take-up control (4000 steps), full weighted symmetric/asymmetric hyperbolic fit, approximate position uncertainty and leave-one-out sensitivity; fresh five-frame medians after settling and three discards; three final HFR diagnostic blocks with no HFR acceptance veto or correction. Acceptance uses curve support and position stability; missing final HFR remains diagnostic only. Shared saturation recovery, bounded re-centering, travel validation and Stop/disconnect cancellation. Windows acceptance evidence is in `HARDWARE-CHECKLIST.md`; macOS interface is wired but execution is untested here. |
 | Imaging-system tilt | ✅ | ✅ | Shared nine-position autofocus sequence, common-centre-focus mosaic, six-point minimum tilt/radial fit, embedded TIFF report, separate centre drift, partial results, whole-run interlocks and cancellation. Hardware acceptance details in `HARDWARE-CHECKLIST.md`. |
 | Auto stretch | ✅ | ✅ | Always enabled. |
 | MTF and arcsinh curves | ✅ | ✅ | Shader math must match `StretchParams.apply`; `stretch shader math` keeps the maths in step and `stretch shader copies` keeps the two MSL strings — `MetalRenderer.shaderSource` for this app, `ShaderSource.metal` for the portable one — from drifting apart. HLSL has no `asinh` and uses the log form. |
@@ -76,18 +77,29 @@ see Not yet verified at the end.
 
 ## Not yet verified
 
-The rows above are read from the code and from a Windows run against the
-simulator. These checks are still open, and a ✅ is a claim about the code
-until they pass:
+The rows above describe implementation parity. Windows simulator and
+hardware checks are recorded separately; a ✅ does not imply macOS execution.
+On 2-3 October 2026, the autofocus release passed 159 core checks, built all
+Windows products and rendered the portable sidebar successfully. Twenty
+interleaved 1000-step trials on Xena585M/COM4 had ten successes per policy:
+final-position SD was 82.4 steps old and 35.4 new. Both stopped mount axes
+on COM10 retained their counters, and the reference was restored through
+4000-step take-up. Smaller-spacing results and limitations are in
+`HARDWARE-CHECKLIST.md`. These checks are still open:
 
-- Hardware acceptance (§7.8): a Player One camera first, then a ZWO camera.
+- Remaining hardware acceptance (§7.8), including a ZWO camera; Player One
+  evidence is in `HARDWARE-CHECKLIST.md`.
 - The portable app on macOS, and the macOS half of the milestone 0 spike.
 - HUD geometry compared by overlaying screenshots of the two apps for the same
   simulator state (§9.8).
-- ESATTO physical In/Out moves, goto and Stop remain to be checked. On
-  1 October 2026, read-only queries on COM4 identified ESATTO30136 (ESATTO3,
-  firmware 3.05.28), position 317000, calibrated maximum 731000, motor stopped.
-  The application's native `--check-focuser COM4` also read and polled those
-  values successfully. Scripted tests cover command encoding, errors, limits,
-  startup retries, polling and connection cancellation. The macOS focuser
+- Interactive ESATTO Stop during a real motor move remains untested in this
+  session. The shared production Stop command was exercised during measured
+  motor travel, confirmed stopped and initiated no restoration; a separate
+  explicit cleanup restored the reference. One post-cancellation setup move
+  had an unresolved command/position mismatch, retained in the checklist.
+  Native GOTO, both movement directions, full outward approaches,
+  exact-position feedback and stopped restoration were exercised on COM4
+  (ESATTO30136, calibrated maximum 731000). Automated regressions cover Stop,
+  disconnect, cancellation in every autofocus phase, command encoding,
+  errors, travel limits, startup retries and polling. The macOS focuser
   interface has not been run here.

@@ -58,7 +58,7 @@ func testFocusMetric() throws {
 func testAutofocusPlan() throws {
     let plan = try AutofocusPlan(position: 319000, maximum: 731000, step: 1000)
     try expectUI(plan.positions == Array(stride(from: 315000, through: 323000, by: 1000)), "bounded nine-point scan")
-    try expectUI(plan.preloadPosition == 314000, "preload stays below first measurement")
+    try expectUI(plan.preloadPosition == 311000, "preload stays below first measurement")
     for (position, maximum, step) in [(0, 731000, 1000), (731000, 731000, 1000),
                                      (319000, 731000, 0), (319000, 731000, -1),
                                      (319000, 731000, Int.max), (Int.max, Int.max, Int.max)] {
@@ -79,8 +79,8 @@ func testAutofocusPlan() throws {
     let noisyFlat = plan.positions.enumerated().map { AutofocusSample(position: $0.element, hfr: $0.offset == 4 ? 1.99 : 2) }
     do { _ = try plan.solution(samples: noisyFlat); throw UIModelExpectation(description: "noise minimum accepted") }
     catch AutofocusError.flatCurve { }
-    try AutofocusPlan.verify(hfr: 2.1, samples: samples)
-    do { try AutofocusPlan.verify(hfr: 5, samples: samples); throw UIModelExpectation(description: "bad final focus accepted") }
+    try AutofocusPlan.verifyLegacyHFR(hfr: 2.1, samples: samples)
+    do { try AutofocusPlan.verifyLegacyHFR(hfr: 5, samples: samples); throw UIModelExpectation(description: "bad final focus accepted") }
     catch AutofocusError.verificationFailed { }
     let invalid = plan.positions.map { AutofocusSample(position: $0, hfr: .nan) }
     do { _ = try plan.solution(samples: invalid); throw UIModelExpectation(description: "NaN accepted") }
@@ -125,9 +125,9 @@ func testAutofocusRecenterPolicy() throws {
             throw UIModelExpectation(description: "unsupported edge slope was followed")
         } catch AutofocusError.invalidSlope { }
     }
-    let lower = try AutofocusPlan(position: 6000, maximum: 50000, step: 1000)
+    let lower = try AutofocusPlan(position: 9000, maximum: 50000, step: 1000)
     let lowerShift = try lower.recentered(samples: samples([2, 3, 4, 5, 6, 7, 8, 9, 10], for: lower), maximum: 50000)
-    try expectUI(lowerShift.positions[4] == 5000 && lowerShift.preloadPosition == 0,
+    try expectUI(lowerShift.positions[4] == 8000 && lowerShift.preloadPosition == 0,
                  "the last inward scan preserves room for preload")
     let upper = try AutofocusPlan(position: 43000, maximum: 50000, step: 1000)
     let upperShift = try upper.recentered(samples: samples([10, 9, 8, 7, 6, 5, 4, 3, 2], for: upper), maximum: 50000)
@@ -246,11 +246,16 @@ private final class FocusTestCamera: CameraDevice, @unchecked Sendable {
     private var permanentlyClipped = false
     private var bufferCount = 0
     private var bufferedExposures: [Int] = []
+    private var verificationMode = ""
+    private var verificationRestarts = 0
+    private var streamRestarts = 0
     private var exposureHistory: [Int] = []
     private let startingSigma: Double
     private let startingPosition: Int
     private let focusPosition: Int
     var exposures: [Int] { lock.withLock { exposureHistory } }
+    var restarts: Int { lock.withLock { streamRestarts } }
+    func configureVerification(_ mode: String) { lock.withLock { verificationMode = mode } }
     init(focuser: FocusTestFocuser, focusPosition: Int = 12350) {
         self.focuser = focuser
         self.focusPosition = focusPosition
@@ -279,27 +284,36 @@ private final class FocusTestCamera: CameraDevice, @unchecked Sendable {
     }
     func applyGain(_ value: Int) throws { lock.withLock { cameraControls.gain = value } }
     func applyROI(_ roi: ROI) throws { currentROI = roi }
-    func startVideo() throws { }
+    func startVideo() throws {
+        lock.withLock {
+            streamRestarts += 1
+            if focuser.moves.count == 14 { verificationRestarts += 1 }
+        }
+    }
     func stopVideo() { }
     func cancelGrab() { lock.withLock { stopped = true } }
     func grabFrame(timeoutMs: Int) throws -> Frame {
         preciseSleep(milliseconds: 25)
         let config = lock.withLock { frames += 1; return (stopped, oldFrames, missingStar, duplicateFrames, flat, frames, badVerification, edgeOutlier) }
         if config.0 { throw CameraError.timeout }
+        let verification = lock.withLock { (verificationMode, verificationRestarts) }
+        let finalMeasurement = focuser.moves.count >= 14
         let sigma = config.7 ? (focuser.position == startingPosition + 2000 ? 2.0 : 3.0)
             : config.4 ? 3 : sqrt(4 + pow(Double(focuser.position - focusPosition) / 450, 2))
         // Seeing occasionally broadens a frame; five-frame medians must survive.
-        let seeing = config.6 && focuser.moves.count == 12 ? 3.0 : config.5 % 7 == 0 ? 1.35 : 1.0
+        let spike = finalMeasurement && verification.0 == "spike" && verification.1 == 1
+        let seeing = finalMeasurement && verification.0 == "unstable" ? Double(verification.1)
+            : config.6 && finalMeasurement || spike ? 3.0 : config.5 % 7 == 0 ? 1.35 : 1.0
         let peak: Double = lock.withLock {
             let exposure = bufferedExposures.isEmpty ? cameraControls.exposureMicroseconds : bufferedExposures.removeFirst()
             if permanentlyClipped { return 100000 }
             guard exposureResponse else { return 30000 }
             let fluxScale = constantFlux ? pow(startingSigma / sigma, 2) : 1
-            let finalScale = verificationBrightness && focuser.moves.count >= 12 ? 5.0 : 1.0
+            let finalScale = verificationBrightness && focuser.moves.count >= 14 ? 5.0 : 1.0
             return 30000 * brightness * fluxScale * finalScale * Double(exposure) / 10000
         }
         let timestamp = config.1 ? Date.distantPast : config.3 ? Date(timeIntervalSince1970: 4_000_000_000) : Date()
-        return focusFrame(sigma: sigma * seeing, peak: config.2 ? 0 : peak, timestamp: timestamp)
+        return focusFrame(sigma: sigma * seeing, peak: config.2 || finalMeasurement && verification.0 == "missing" ? 0 : peak, timestamp: timestamp)
     }
 }
 
@@ -314,7 +328,7 @@ private func waitForFocus(_ condition: () -> Bool, timeout: TimeInterval = 15) a
 
 @MainActor
 private func focusTestEngine(_ suffix: String, position: Int = 12000, maximum: Int = 440000, opticalFocus: Int = 12350,
-                             timing: AutofocusTiming = AutofocusTiming(motionTimeout: 1, frameTimeout: 1, settleSeconds: 0.02)) async throws -> (CollimationEngine, FocusTestFocuser, FocusTestCamera, String) {
+                             timing: AutofocusTiming = AutofocusTiming(motionTimeout: 1, frameTimeout: 1, settleSeconds: 0.02, verificationInterval: 0.02)) async throws -> (CollimationEngine, FocusTestFocuser, FocusTestCamera, String) {
     let suite = "collimation-camera.tests.autofocus.\(suffix)"
     let defaults = UserDefaults(suiteName: suite)!
     defaults.removePersistentDomain(forName: suite)
@@ -332,7 +346,7 @@ private func focusTestEngine(_ suffix: String, position: Int = 12000, maximum: I
 
 @MainActor
 func testAutofocusEngineSuccess() async throws {
-    let (engine, focuser, _, suite) = try await focusTestEngine("success")
+    let (engine, focuser, camera, suite) = try await focusTestEngine("success")
     defer { engine.disconnect(); engine.disconnectFocuser(); engine.shutdown(); UserDefaults.standard.removePersistentDomain(forName: suite) }
     engine.startAutofocus()
     try expectUI(engine.isAutofocusing && !engine.canMoveFocuser && !engine.canAutoExpose && !engine.canSaveStacked && !engine.canAdjustCamera,
@@ -346,23 +360,37 @@ func testAutofocusEngineSuccess() async throws {
     guard case .complete(let position, let hfr) = engine.autofocusState else {
         throw UIModelExpectation(description: "autofocus did not complete: \(engine.errorMessage ?? "no error")")
     }
-    try expectUI(abs(position - 12350) < 120 && hfr > 0, "raw camera frames recover known optical focus")
+    try expectUI(abs(position - 12350) < 120 && (hfr ?? 0) > 0, "raw camera frames recover known optical focus")
     try expectUI(engine.autofocusSamples.count == 9, "all positions measured")
-    try expectUI(focuser.moves.count == 12 && focuser.moves.first == 9500, "one preload, nine points and two final-approach moves")
-    try expectUI(Array(focuser.moves.suffix(2)) == [position - 500, position], "final approach matches scan direction")
+    try expectUI(focuser.moves.count == 14 && focuser.moves.first == 8000, "directional baseline, one preload, nine points and final approach")
+    try expectUI(Array(focuser.moves.suffix(2)) == [position - 4000, position], "final approach matches scan direction")
+    try expectUI(engine.autofocusSamples.allSatisfy { sample in
+        sample.readings?.filter { $0.hfr != nil }.count == 5
+            && sample.readings?.filter { $0.rejection == "startup discard" }.count == 3
+            && sample.startedAt != nil && sample.finishedAt != nil && sample.scatter != nil
+    }, "every position retains five readings, three fresh discards and timing")
+    try expectUI(engine.autofocusDiagnostics?.verification.count == 3 && engine.autofocusResult?.diagnostics?.fit != nil,
+                 "supported result retains three diagnostic blocks and fitted uncertainty")
+    try expectUI(Array(focuser.moves.prefix(3)) == [8000, 12000, 6000],
+                 "baseline and first scan target each have a full outward approach")
+    try expectUI(camera.restarts >= 14, "camera worker acknowledges fresh capture at every acquisition")
     try expectUI(engine.canMoveFocuser && engine.canAutoExpose && engine.canAdjustCamera, "success releases interlocks")
 }
 
 @MainActor
 func testAutofocusRecenterSuccess() async throws {
     for (mode, start) in [("outward", 8000), ("inward", 17000), ("exposure", 8000)] {
-        let (engine, focuser, camera, suite) = try await focusTestEngine("recenter-\(mode)", position: start)
+        // Wide defocused blobs cost more to analyse than the near-focus
+        // fixtures. Allow scheduling headroom without changing production
+        // timing, frame counts or any curve/search acceptance criterion.
+        let timing = AutofocusTiming(motionTimeout: 1, frameTimeout: 2, settleSeconds: 0.02, verificationInterval: 0.02)
+        let (engine, focuser, camera, suite) = try await focusTestEngine("recenter-\(mode)", position: start, timing: timing)
         defer { engine.disconnect(); engine.disconnectFocuser(); engine.shutdown(); UserDefaults.standard.removePersistentDomain(forName: suite) }
         if mode == "exposure" { camera.configureExposure(constantFlux: true) }
         engine.startAutofocus()
-        try await waitForFocus({ !engine.isAutofocusing }, timeout: 40)
+        try await waitForFocus({ !engine.isAutofocusing }, timeout: 80)
         guard case .complete(let position, _) = engine.autofocusState else {
-            throw UIModelExpectation(description: "\(mode) re-centering failed: \(engine.errorMessage ?? "no error")")
+            throw UIModelExpectation(description: "\(mode) re-centering failed: \(engine.errorMessage ?? "no error"); moves \(focuser.moves); rejected \(engine.autofocusDiagnostics?.rejectedReadings.map { $0.rejection ?? "unknown" } ?? [])")
         }
         try expectUI(engine.autofocusRecenters == 2 && abs(position - 12350) < 120,
                      "\(mode) finds optical focus beyond the original scan after two shifts")
@@ -370,7 +398,7 @@ func testAutofocusRecenterSuccess() async throws {
                      "only the complete final window is retained")
         try expectUI(Set(engine.autofocusSamples.compactMap(\.exposureMicroseconds)).count == 1,
                      "re-centering and saturation recovery preserve exposure consistency")
-        try expectUI(Array(focuser.moves.suffix(2)) == [position - 500, position],
+        try expectUI(Array(focuser.moves.suffix(2)) == [position - 4000, position],
                      "final focus keeps the outward backlash approach")
         try expectUI(focuser.moves.allSatisfy({ (0...440000).contains($0) }), "all search moves respect calibrated travel")
         if mode == "exposure" { try expectUI(engine.autofocusExposureRetries > 0, "saturation recovery works during a re-centred search") }
@@ -379,7 +407,7 @@ func testAutofocusRecenterSuccess() async throws {
 
 @MainActor
 func testAutofocusRecenterTravelLimits() async throws {
-    for (mode, start, maximum, opticalFocus) in [("upper", 12000, 14000, 16000), ("lower", 3000, 440000, -500)] {
+    for (mode, start, maximum, opticalFocus) in [("upper", 12000, 14000, 16000), ("lower", 7000, 440000, 3000)] {
         let (engine, focuser, _, suite) = try await focusTestEngine("recenter-limit-\(mode)", position: start, maximum: maximum, opticalFocus: opticalFocus)
         defer { engine.disconnect(); engine.disconnectFocuser(); engine.shutdown(); UserDefaults.standard.removePersistentDomain(forName: suite) }
         engine.startAutofocus()
@@ -402,7 +430,7 @@ func testAutofocusRecenterInvalidSlope() async throws {
     try await waitForFocus { !engine.isAutofocusing }
     try expectUI(engine.autofocusState == .failed && engine.errorMessage == AutofocusError.invalidSlope.localizedDescription,
                  "one sharp edge outlier does not establish a focus slope")
-    try expectUI(engine.autofocusRecenters == 0 && focuser.moves.count == 10, "invalid slope cannot initiate another scan")
+    try expectUI(engine.autofocusRecenters == 0 && focuser.moves.count == 12, "invalid slope cannot initiate another scan")
 }
 
 @MainActor
@@ -410,7 +438,7 @@ func testAutofocusRecenterCancellation() async throws {
     let (engine, focuser, _, suite) = try await focusTestEngine("recenter-cancel", position: 8000)
     let gate = DispatchSemaphore(value: 0)
     defer { gate.signal(); engine.disconnect(); engine.disconnectFocuser(); engine.shutdown(); UserDefaults.standard.removePersistentDomain(forName: suite) }
-    focuser.configure(gate: gate, gateAtMove: 11)
+    focuser.configure(gate: gate, gateAtMove: 13)
     engine.startAutofocus()
     try await waitForFocus { focuser.gatedMoveEntered.wait(timeout: .now()) == .success }
     try expectUI(engine.autofocusRecenters == 1, "first re-centred approach has started")
@@ -418,7 +446,7 @@ func testAutofocusRecenterCancellation() async throws {
     gate.signal()
     try await waitForFocus { !engine.isFocuserBusy && focuser.stopCount > 0 }
     try await Task.sleep(for: .milliseconds(150))
-    try expectUI(engine.autofocusState == .cancelled && focuser.moves.count == 11 && engine.autofocusSamples.isEmpty,
+    try expectUI(engine.autofocusState == .cancelled && focuser.moves.count == 13 && engine.autofocusSamples.isEmpty,
                  "Stop during re-centering prevents the new baseline and scan moves")
 }
 
@@ -439,7 +467,7 @@ func testAutofocusExposureStartup() async throws {
         guard case .complete(let position, _) = engine.autofocusState else {
             throw UIModelExpectation(description: "\(mode) exposure failed: \(engine.errorMessage ?? "no error")")
         }
-        try expectUI(abs(position - 12350) < 120 && focuser.moves.count == 12, "\(mode) obtains verified focus without a restart")
+        try expectUI(abs(position - 12350) < 120 && focuser.moves.count == 14, "\(mode) obtains verified focus without a restart")
         try expectUI(engine.autofocusSamples.count == 9 && Set(engine.autofocusSamples.compactMap(\.exposureMicroseconds)).count == 1,
                      "all retained samples share the selected exposure")
     }
@@ -460,7 +488,7 @@ func testAutofocusExposureScanRecovery() async throws {
                  "a sharpening star triggers exposure recovery and verified focus")
     try expectUI(engine.autofocusSamples.count == 9 && Set(engine.autofocusSamples.compactMap(\.exposureMicroseconds)).count == 1,
                  "partial curves at old exposures are discarded")
-    try expectUI(engine.exposureMicroseconds < 4000 && focuser.moves.allSatisfy({ (10250...17000).contains($0) }),
+    try expectUI(engine.exposureMicroseconds < 4000 && focuser.moves.allSatisfy({ (7000...17000).contains($0) }),
                  "recovery keeps the shorter exposure and original travel bounds")
 }
 
@@ -474,10 +502,12 @@ func testAutofocusExposureVerificationRecovery() async throws {
     guard case .complete(let position, _) = engine.autofocusState else {
         throw UIModelExpectation(description: "verification saturation failed: \(engine.errorMessage ?? "no error")")
     }
-    try expectUI(engine.autofocusExposureRetries == 1 && abs(position - 12350) < 120,
-                 "clipped final verification restarts the whole curve")
+    try expectUI(engine.autofocusExposureRetries == 0 && abs(position - 12350) < 120,
+                 "clipped final diagnostics cannot restart or invalidate the fitted curve")
     try expectUI(engine.autofocusSamples.count == 9 && Set(engine.autofocusSamples.compactMap(\.exposureMicroseconds)).count == 1,
-                 "verification compares a complete curve at the new exposure")
+                 "the accepted curve keeps its original uniform exposure")
+    try expectUI(engine.autofocusResult?.hfr == nil && engine.autofocusDiagnostics?.finalMeasurementIssues?.count == 3,
+                 "saturated final HFR is unavailable with all three issues recorded")
 }
 
 @MainActor
@@ -535,13 +565,19 @@ func testAutofocusCancellation() async throws {
     engine.disconnect()
     try await waitForFocus { !engine.isFocuserBusy }
     try expectUI(!engine.isAutofocusing && !engine.isConnected && focuser.stopCount >= 2, "camera disconnect stops autofocus")
+    // The longer take-up may leave a cancelled move below the next legal scan
+    // centre. Explicit test setup, never an automatic cancellation restoration.
+    engine.focuserTargetPosition = 12000
+    engine.gotoFocuser()
+    try await waitForFocus { !engine.isFocuserBusy && engine.focuserSnapshot?.position == 12000 }
     engine.connect()
     try await waitForFocus { engine.canAutofocus }
     focuser.configure(gate: gate)
-    // Drain the notification from the earlier second run before the new move.
-    _ = focuser.moveEntered.wait(timeout: .now())
+    // Ordinary setup moves also signal moveEntered. Wait for the actual gated
+    // command so disconnect cannot race a stale setup notification.
+    while focuser.gatedMoveEntered.wait(timeout: .now()) == .success { }
     engine.startAutofocus()
-    try await waitForFocus { focuser.moveEntered.wait(timeout: .now()) == .success }
+    try await waitForFocus { focuser.gatedMoveEntered.wait(timeout: .now()) == .success }
     let movesBeforeDisconnect = focuser.moves.count
     engine.disconnectFocuser()
     gate.signal()
@@ -552,8 +588,8 @@ func testAutofocusCancellation() async throws {
 
 @MainActor
 func testAutofocusFailures() async throws {
-    for mode in ["stuck", "mismatch", "communication", "stale", "duplicate", "noStar", "flat", "verification"] {
-        let timing = AutofocusTiming(motionTimeout: 0.25, frameTimeout: 0.5, settleSeconds: 0.01)
+    for mode in ["stuck", "mismatch", "communication", "stale", "duplicate", "noStar", "flat"] {
+        let timing = AutofocusTiming(motionTimeout: 0.25, frameTimeout: 0.5, settleSeconds: 0.01, verificationInterval: 0.01)
         let (engine, focuser, camera, suite) = try await focusTestEngine(mode, timing: timing)
         defer { engine.disconnect(); engine.disconnectFocuser(); engine.shutdown(); UserDefaults.standard.removePersistentDomain(forName: suite) }
         focuser.configure(stuck: mode == "stuck", mismatch: mode == "mismatch", failed: mode == "communication")
@@ -564,7 +600,7 @@ func testAutofocusFailures() async throws {
         try await waitForFocus { !engine.isFocuserBusy }
         try expectUI(engine.autofocusState == .failed && engine.errorMessage != nil, "\(mode) reports failure")
         try expectUI(focuser.stopCount > 0, "\(mode) sends stop")
-        if mode != "flat" && mode != "verification" { try expectUI(focuser.moves.count <= 2, "\(mode) cannot continue scan") }
+        if mode != "flat" { try expectUI(focuser.moves.count <= 2, "\(mode) cannot continue scan") }
     }
 }
 
@@ -581,4 +617,76 @@ func testAutofocusSimulatorInterlock() async throws {
     try expectUI(!engine.canAutofocus, "unrelated simulator cannot drive a real focuser")
     engine.startAutofocus()
     try expectUI(focuser.moves.isEmpty, "disabled start sends no moves")
+}
+
+@MainActor
+func testAutofocusVerificationEngine() async throws {
+    for mode in ["spike", "persistent", "unstable", "missing"] {
+        let (engine, focuser, camera, suite) = try await focusTestEngine("final-diagnostic-\(mode)")
+        defer { engine.disconnect(); engine.disconnectFocuser(); engine.shutdown(); UserDefaults.standard.removePersistentDomain(forName: suite) }
+        if mode == "persistent" { camera.configure(badVerification: true) }
+        else { camera.configureVerification(mode) }
+        engine.startAutofocus()
+        engine.autofocusTakeUpSteps = 1; engine.autofocusStepSize = 100
+        try await waitForFocus({ !engine.isAutofocusing }, timeout: 25)
+        guard let result = engine.autofocusResult, let diagnostics = result.diagnostics, let fit = diagnostics.fit else {
+            throw UIModelExpectation(description: "\(mode) invalidated focus: \(engine.errorMessage ?? "no error")")
+        }
+        try expectUI(diagnostics.settings.takeUp == 4000 && diagnostics.settings.step == 500,
+                     "run settings are snapshotted")
+        try expectUI(result.position == fit.position && abs(result.position - 12350) < 120,
+                     "final HFR cannot change the supported fitted position")
+        try expectUI(result.samples.count == 9 && diagnostics.curves.count == 1 && diagnostics.recovery.isEmpty
+            && diagnostics.recoveryOutcome == nil && focuser.moves.count == 14,
+            "final HFR cannot cause recovery moves or a scan restart")
+        try expectUI(diagnostics.verificationPolicy == "curve-fit-position-only" && diagnostics.failure == nil,
+                     "diagnostics identify the position-only acceptance policy")
+        if mode == "missing" {
+            try expectUI(result.hfr == nil && diagnostics.verification.isEmpty && diagnostics.finalMeasurementIssues?.count == 3,
+                         "missing final HFR cannot invalidate the fit and is explicitly recorded")
+            try expectUI(diagnostics.finalMeasurementIssues!.allSatisfy { !$0.readings.isEmpty && $0.startedAt <= $0.finishedAt },
+                         "unavailable blocks retain partial readings and timestamps")
+            let encoder = JSONEncoder(), decoder = JSONDecoder()
+            try expectUI(try decoder.decode(AutofocusResult.self, from: encoder.encode(result)) == result,
+                         "a supported result without final HFR round trips")
+        } else {
+            try expectUI(result.hfr != nil && diagnostics.verification.count == 3,
+                         "all three final diagnostic blocks are retained")
+            if mode == "persistent" {
+                try expectUI(result.hfr! > fit.predict(at: result.position) * 1.15,
+                             "persistent final HFR above the old guard remains diagnostic only")
+            }
+            if mode == "unstable" {
+                let values = diagnostics.verification.map(\.hfr)
+                try expectUI(values.max()! > values.min()! * 1.15,
+                             "unstable final HFR cannot invalidate or correct focus")
+            }
+        }
+        try expectUI(Array(focuser.moves.suffix(2)) == [result.position - 4000, result.position] && engine.focuserSnapshot?.isMoving == false,
+                     "the fit is reached through full outward take-up and remains stopped")
+    }
+}
+
+@MainActor
+func testAutofocusPhaseCancellation() async throws {
+    for phase in ["settling", "collection", "final HFR", "final interval"] {
+        let timing = AutofocusTiming(motionTimeout: 1, frameTimeout: 1, settleSeconds: phase == "settling" ? 0.4 : 0.02, verificationInterval: phase == "final interval" ? 0.4 : 0.02)
+        let (engine, focuser, _, suite) = try await focusTestEngine("phase-cancel-\(phase)", timing: timing)
+        defer { engine.disconnect(); engine.disconnectFocuser(); engine.shutdown(); UserDefaults.standard.removePersistentDomain(forName: suite) }
+        engine.startAutofocus()
+        try await waitForFocus {
+            switch engine.autofocusState {
+            case .moving(let position): return phase == "settling" && position == 12000 && focuser.moves.count == 2
+            case .measuring(_, let frames): return phase == "collection" && frames > 0
+            case .recordingFinalHFR: return phase == "final HFR" || phase == "final interval" && engine.autofocusDiagnostics?.verification.count == 1
+            default: return false
+            }
+        }
+        engine.stopFocuser()
+        try await waitForFocus { !engine.isFocuserBusy }
+        let moves = focuser.moves
+        try await Task.sleep(for: .milliseconds(200))
+        try expectUI(engine.autofocusState == .cancelled && focuser.moves == moves && focuser.stopCount > 0,
+                     "cancellation in \(phase) stops promptly without restoration")
+    }
 }

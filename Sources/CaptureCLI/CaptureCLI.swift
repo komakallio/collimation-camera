@@ -75,7 +75,7 @@ struct CaptureCLI {
           capture-cli --list
           capture-cli [--simulator|--hardware] [--device <id>] [--output frame.tif]
           capture-cli --frames <n> [--device <id>] [--exposure <ms>] [--gain <n>] [--roi <px>]
-          capture-cli --autofocus <port> --device <id> [--focus-step <steps>] [--exposure <ms>]
+          capture-cli --autofocus <port> --device <id> [--focus-step <steps>] [--focus-take-up <steps>] [--exposure <ms>] [--focus-output <json>]
 
         Options:
           --frames <n>     grab n frames and report the rate, instead of writing one
@@ -86,6 +86,9 @@ struct CaptureCLI {
           --autofocus      move the focuser through a bounded scan and verify focus
                            on a real camera; uses the same engine as the application
           --focus-step     autofocus sample spacing in motor steps (default 1000)
+          --focus-take-up  outward approach distance in motor steps (default 4000)
+          --focus-output   write autofocus samples, fit and final HFR diagnostics as JSON
+                           final HFR is recorded only; it cannot reject focus
 
         Camera SDK libraries are loaded at run time from Vendor/PlayerOne and
         Vendor/ZWO, or from next to the executable. Without a camera, use

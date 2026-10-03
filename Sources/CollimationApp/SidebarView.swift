@@ -232,6 +232,11 @@ struct SidebarView: View {
                     .disabled(!engine.canEditAutofocus)
                     .help(HelpText.autofocusStep)
                 button(CommandCatalog.ID.focuserAutofocus)
+                Text(SidebarText.autofocusTakeUp).font(.caption)
+                TextField(SidebarText.autofocusTakeUp, value: $engine.autofocusTakeUpSteps, format: .number.grouping(.never))
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(!engine.canEditAutofocus)
+                    .help(HelpText.autofocusTakeUp)
                 button(CommandCatalog.ID.focuserMeasureTilt)
                 button(CommandCatalog.ID.focuserCancelTilt)
                 if engine.isMeasuringTilt {
@@ -243,6 +248,10 @@ struct SidebarView: View {
                 }
                 Text(MetricText.autofocus(engine.autofocusState, samples: engine.autofocusSamples.count))
                     .font(.caption).foregroundStyle(.secondary)
+                if let uncertainty = MetricText.focusUncertainty(engine.autofocusDiagnostics?.fit) {
+                    Text(uncertainty).font(.caption)
+                }
+                if let warning = engine.autofocusRangeWarning { Text(warning).font(.caption) }
             }
         }
     }

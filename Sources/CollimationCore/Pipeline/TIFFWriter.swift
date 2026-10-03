@@ -59,14 +59,14 @@ public enum MonoTIFF {
         }
         var description: Data?
         if let imageDescription {
-            guard imageDescription.count <= 256 * 1024, let text = String(data: imageDescription, encoding: .utf8) else {
+            guard imageDescription.count <= 2 * 1024 * 1024, let text = String(data: imageDescription, encoding: .utf8) else {
                 throw CameraError.unsupported("Invalid TIFF image description.")
             }
             // JSON Unicode escapes keep TIFF's ASCII tag valid, including
             // camera names and errors containing non-ASCII characters.
             let ascii = text.utf16.map { $0 < 128 ? String(UnicodeScalar($0)!) : String(format: "\\u%04x", Int($0)) }.joined()
             description = Data(ascii.utf8) + Data([0])
-            guard description!.count <= 256 * 1024 else { throw CameraError.unsupported("Tilt metadata is too large.") }
+            guard description!.count <= 2 * 1024 * 1024 else { throw CameraError.unsupported("Tilt metadata is too large.") }
         }
         return encodeStrip(strip, width: width, height: height, bitsPerSample: 32, sampleFormat: 3, description: description)
     }

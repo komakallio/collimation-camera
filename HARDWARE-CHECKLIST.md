@@ -179,11 +179,14 @@ below. Manual Stop, unplug and quit acceptance on real hardware remain pending.
   319000 / 731000 steps, stopped; identity and repeated status/position polls
   succeeded with the native application driver.
 - With a real camera tracking an artificial star, choose an
-  **Autofocus step** that changes HFR visibly and exceeds backlash. Confirm
-  there is room for five inward and four outward steps. Start Autofocus.
-- Confirm five initial frames precede motion, nine positions are sampled
-  outward, the fitted target is approached outward, and final HFR is within
-  15% of the scan minimum. Check the logged samples and inspect the star.
+  **Autofocus step** that samples a supported curve on both flanks. Keep
+  **Autofocus take-up** separate (initially 4000 steps), and confirm the
+  complete nine-position scan and full outward approaches fit within travel.
+- Confirm each measured approach settles for one second, discards three
+  fresh frames and measures five usable frames. Nine positions are sampled
+  outward and the supported fitted target is approached outward. Final HFR
+  is recorded in three blocks and cannot invalidate or change that position.
+  Check repeatability of focus positions, curve diagnostics and stopped status.
 - Stop during a move and during frame collection; no later scan moves may
   follow. Repeat with camera disconnect, focuser disconnect, USB removal and
   quitting. Confirm reconnect permits a new run.
@@ -272,8 +275,9 @@ seconds. The user also confirmed no visible movement. COM4 remained stopped.
 
 The first complete traversal used a 1000-step autofocus scan and 100-frame
 stacks. All nine common-focus images were captured; seven outer autofocus
-readings passed verification. SW was correctly skipped when final HFR was
-worse than the accepted scan minimum. The partial TIFF reopened with all
+readings passed the old HFR verification rule. SW's focus reading was excluded
+from the tilt fit because final HFR exceeded the scan minimum by more than
+15%. This followed the old software policy; it did not prove inaccurate focus. The partial TIFF reopened with all
 images and annotations. It reported **103.5 steps** of directional spread,
 **−244.4 steps** radial offset, **52.2 steps** residual RMS, and uncorrected
 centre drift of **+195 steps**. Initial centre focus was 316078; the return
@@ -550,6 +554,449 @@ The Windows release build, independent per-location summary checks and real
 were changed. Independent native-driver polls confirmed COM4 stopped at
 **316750** and both COM10 axes stopped with unchanged position counters over
 two seconds. No device-controlling test process remained running.
+
+### Production autofocus acquisition and fit policy
+
+Autofocus now separates sample spacing from **4000-step outward take-up**.
+The full first-position approach, every reversed baseline, re-centred scan,
+fitted focus, recovery target and tilt common-focus restoration must fit
+calibrated travel. Near a boundary the search may select a different fully
+valid window; it never shortens take-up. Controller compensation is unchanged.
+Both applications and `capture-cli --focus-take-up` use the shared engine.
+Settings are snapshotted for the whole autofocus or tilt run.
+
+Production acquisition confirms the exact stopped position, settles for one
+second, restarts capture on the camera worker, discards three fresh frames,
+and measures five usable raw-frame HFRs. Retrieval timestamps alone cannot
+identify old sensor exposures in an SDK queue, so the acknowledged restart
+is part of the freshness protocol. Timestamp gates also reject motion-era,
+duplicate and future frames. A block has a timeout and at most 24 rejected
+frames; rejected readings and high-resolution timestamps are retained.
+Exposure changes discard the entire curve. Gain remains fixed. No pixel
+stack is used for autofocus.
+
+The fit normalises motor coordinates about the middle sample by the scan
+half-span. It fits all nine positions with damped QR least squares and one
+Huber reweighting pass (2.5 block uncertainties, minimum robust weight 0.05).
+It does not iteratively remove points. Block uncertainty is the maximum of
+the scaled MAD, **0.05 px**, and **3% of that block's HFR**. These are initial
+policy floors, not universal camera constants. The baseline and middle
+sample revisit the same position; their absolute difference can raise the
+floor for that curve. Five adjacent readings are not assumed independent
+and their scatter is not divided by the square root of five.
+
+The symmetric model is `sqrt(h0^2 + k^2*u^2)`. The restrained asymmetric
+model adds `t*u`, with `|t/k| <= 0.45`; the implementation uses the actual
+minimum `centre - t*h0/(k*sqrt(k^2-t^2))`. Asymmetry requires an AICc
+improvement greater than six and stable leave-one-out estimates. Otherwise
+the symmetric model is preferred. Each fit needs two supporting points on
+both flanks, a rise exceeding both 5% of the fitted minimum and two block
+uncertainties, acceptable robust residuals, and a minimum inside the scan.
+At most one point may have robust weight below 0.5. Optimisation uses three
+fixed starting centres and at most 100 iterations per start. Each omission
+must move focus by at most 0.75 scan steps; the approximate position
+uncertainty must be at most one scan step. The reported uncertainty is the
+larger of linearised model sensitivity and jackknife sensitivity. It is
+**not an empirically calibrated confidence interval or a guaranteed 95%
+interval**. Diagnostics include predictions, residual RMS, block
+uncertainties, robust weights, downweighted indices and all nine omissions.
+The displayed fit uncertainty describes the nine-point position estimate.
+
+**Current policy: final HFR is diagnostic only.** Acceptance requires the
+supported curve, bounded residuals, stable leave-one-out position estimates,
+valid travel and confirmation that the focuser reached the fitted target and
+stopped. Three five-frame final blocks are recorded with approximately one
+second between them and no intervening movement. Their HFR level or variation
+cannot reject focus, request a bracket, change position, retune exposure or
+restart the curve. A saturated or unavailable final HFR is recorded explicitly
+with timestamps and partial readings; the supported result retains its position
+and has an optional final HFR. Cancellation, disconnect and motor errors still
+interrupt the run. Saturation during curve acquisition still restarts the
+complete curve at one exposure. Search remains limited to 16 re-centres,
+four saturation restarts and 24 curve attempts.
+
+Earlier recordings below used prediction/baseline HFR guards and one local
+recovery bracket. Those are historical results, not validation of the current
+policy. Recovery fields remain readable in old reports, but production no
+longer invokes a final-HFR-based bracket. The opt-in legacy comparison harness
+alone retains its historical 15% rejection rule for an old-routine baseline.
+
+Tilt schema 2 carries the acquisition settings and focus diagnostics while
+retaining exactly nine primary autofocus samples; recovery samples stay
+separate. Schema 1 reports remain readable. Plane fitting and its weighting
+are unchanged. Detailed TIFF metadata has a bounded 2 MiB capacity and the
+constellation file limit is 6 MiB to accommodate it.
+
+The opt-in comparison uses the production shared engine and retains the old
+three-point/one-step/single-verification policy only for comparison:
+
+```powershell
+core-tests.exe --autofocus-repeatability --device poa-0 --focuser-port COM4 --mount-port COM10 --focus-step 1000 --focus-take-up 4000 --half-span 2500 --trials 10 --exposure 0.5 --focus-output .build-win/autofocus-comparison-20261002.json
+python scripts/analyze-autofocus-repeatability.py .build-win/autofocus-comparison-20261002.json
+```
+
+It first reads hardware state and establishes a fresh production reference,
+then performs ten trials per policy with alternating starting sides and
+balanced interleaving. All attempted runs, failures, exposure changes,
+durations, verification and recovery are saved. A `.stop` file beside the
+output stops the current attempt and prevents restoration. Successful
+completion restores the recorded reference through full outward take-up and
+confirms COM10's stopped axes and unchanged counters. Smaller-spacing trials
+are separate; `--production-only --focus-step 500` skips the old policy.
+`--autofocus-preflight` performs hardware checks without a focus scan.
+
+### Autofocus implementation acceptance, 2-3 October 2026
+
+Record timestamps are UTC; final validation continued after local midnight
+in Helsinki. Files retain the date of their particular acquisition series.
+
+The original ignored recordings were preserved. Re-analysis in
+`.build-win/autofocus-historical-noise-analysis-20261002.json` confirms 14
+consecutive five-frame median increases above 15% in the stationary
+`focus-stability-center` recording, despite no motor movement. The two
+defocused stationary blocks had 2.80% and 1.76% relative SD; increasing to
+15 readings gave 2.70% and 1.73%. Twenty alternating visits per flank with
+4000-step take-up had absolute SD 0.0577 and 0.0551 px. These describe this
+setup and acquisition period, and do not calibrate focus-position confidence.
+
+Preflight identified **Xena585M / poa-0**, **ESATTO30136 / COM4**, stopped at
+**316750**, with calibrated maximum **731000**. COM10's raw axis status and
+counter responses were `=101`, `=301`, `=EA5177`, `=4F1799`, unchanged over
+two seconds. No ESATTO controller compensation was changed.
+
+An initial engineering reference attempt is retained in
+`.build-win/autofocus-comparison-20261002.json`: its global symmetric fit was
+316186 with approximate uncertainty 50 steps, but stable verification HFR
+1.007/1.022/1.019 exceeded the model minimum 0.868. It failed its narrow
+recovery bracket. This led to including the observed residual envelope in
+verification, with a regression test for that exact recording.
+
+The next balanced experiment is retained in
+`.build-win/autofocus-comparison-20261002-final.json` and its `-analysis.json`
+and `-attempts.csv` companions. Despite the filename, this is the **initial
+verification policy**, before independent local-prediction recovery. A fresh
+reference attempt succeeded at 316040 with one 52-step correction. Ten old
+and ten initial-production trials alternated starts at 313540 and 318540;
+ordering was balanced within pairs. Both used 1000-step spacing. Requested
+exposure was 0.5 ms and gain 0; actual curve exposures were 0.567-1.418 ms
+for old and 0.569-3.335 ms for initial production, including saturation
+restarts. Every attempt was retained.
+
+| Initial-policy comparison | Old | Initial production |
+|---|---:|---:|
+| Successes / attempts | 10 / 10 | 6 / 10 |
+| Successful-position mean (steps) | 316038.4 | 316079.7 |
+| Successful-position SD (steps) | 97.0 | 98.0 |
+| Range (steps) | 315916-316243 | 315897-316174 |
+| High-start minus low-start mean (steps) | -77.6 | -120.5 |
+| Recovery attempts / successes | 0 / 0 | 4 / 0 |
+| Mean run duration (seconds) | 44.6 | 83.1 |
+| Approximate fitted uncertainty, mean (steps) | unavailable | 92.5 |
+| Descriptive time slope (steps/minute) | -8.1 | -11.6 |
+
+This series **does not establish improvement**. Initial-production successes
+were censored by four verification failures, and starting-side success counts
+were unequal (two low, four high). Detrended SD was 75.7 old and 26.5 initial
+production, but subtracting a fitted trend from such a small series does not
+prove better repeatability. The near-focus HFR mismatch motivated the bounded
+local-prediction recovery tested in the next series.
+
+This experiment restored **316040**, confirmed the focuser stopped, and
+confirmed the same four COM10 responses and unchanged counters over two
+seconds. The cancelled path is tested separately and never starts restoration.
+
+An intermediate local-prediction policy was tested in a separate balanced
+series, `.build-win/autofocus-comparison-local-recovery-20261002.json`, with
+its analysis and CSV companions. Its source is archived under
+`.build-win/autofocus-policy-v2-source` and its source/binary hashes are in
+`.build-win/autofocus-local-recovery-manifest-20261002.json`. Both policies
+used 1000-step spacing, with starts 2500 steps either side of fresh reference
+316062. All ten attempts per policy were retained.
+
+| Intermediate-policy comparison | Old | Intermediate production |
+|---|---:|---:|
+| Successes / attempts | 10 / 10 | 7 / 10 |
+| Successful-position mean (steps) | 316100.9 | 316048.9 |
+| Successful-position SD (steps) | 121.4 | 104.8 |
+| Range (steps) | 315938-316359 | 315887-316214 |
+| High-start minus low-start mean (steps) | -162.2 | 135.0 |
+| Recovery attempts / successes | 0 / 0 | 6 / 3 |
+| Mean run duration (seconds) | 41.4 | 99.3 |
+| Approximate fitted uncertainty, mean (steps) | unavailable | 50.5 |
+| Descriptive time slope (steps/minute) | 0.8 | -8.0 |
+
+Actual curve exposures were 0.478-1.106 ms old and 0.462-3.751 ms production,
+gain 0. This series also **does not establish improved repeatability**:
+three production failures censored the successful-position statistics, and
+fit uncertainty understated their observed spread. Attempt 10 independently
+supported position 316082 with bracket HFR 1.2504/0.8919/1.3574, but stable
+return blocks 1.0696/1.0722/1.0711 failed the local centre's 15% guard.
+Another bracket had inadequate right-flank slope. Those observations led to
+the then-current flank-advantage recovery check and stronger bracket spacing,
+with a regression test retaining the exact false-rejection values. The
+intermediate series restored 316062, confirmed the focuser stopped and the
+same four COM10 responses unchanged over two seconds.
+
+The earlier flank-advantage policy completed a fresh balanced comparison in
+`.build-win/autofocus-comparison-position-verification-20261003.json`, with
+`-analysis.json`, `-attempts.csv`, `-exposure-history.json` and console log
+companions. Preflight read stopped position 316062; a new production
+reference succeeded at **316049**. Twenty trials alternated starts at
+**313549 / 318549**, with ten attempts per policy, **1000-step spacing**,
+requested 0.5 ms exposure and gain 0. Ordering was old-first in six pairs and
+new-first in four, balanced within the two starting-side strata.
+
+| Earlier same-spacing comparison | Old | Flank-advantage production |
+|---|---:|---:|
+| Successes / attempts | 10 / 10 | 10 / 10 |
+| Successful-position mean (steps) | 315986.6 | 316033.2 |
+| Successful-position SD (steps) | 82.4 | 35.4 |
+| Range (steps) | 315881-316155 | 315979-316073 |
+| High-start minus low-start mean (steps) | -128.8 | 20.8 |
+| Failures | 0 | 0 |
+| Recovery checks / successful runs after a check | 0 / 0 | 4 / 4 |
+| Mean run duration (seconds) | 41.6 | 80.4 |
+| Duration range (seconds) | 29.0-54.5 | 50.5-119.1 |
+| Approximate fitted uncertainty, mean (steps) | unavailable | 65.6 |
+| Descriptive time slope (steps/minute) | -2.7 | 0.4 |
+
+Two recovery brackets supported the original position; two permitted one
+bounded correction. Original fitted positions, including the corrected
+runs, had SD 41.5 steps. Actual configured scan exposures were
+**0.460-3.793 ms old** and **0.499-3.606 ms production**, including restarts.
+Old JSON retained only completed curves (0.460-1.275 ms); its console and
+exposure-history companion preserve partial-scan medians and control events.
+Production retains partial curves with their individual readings.
+
+The final production series had **57% lower observed position SD** and a
+smaller starting-side difference. All trials succeeded, so its spread is
+not censored by failures. Both policies had zero failures in this particular
+comparison; it cannot establish a lower population failure rate. The exact
+previous false rejection is covered by a regression test and the revised
+recovery criterion. Mean model uncertainty 65.6 steps exceeded the observed
+35.4-step SD here, whereas the intermediate policy underestimated spread in
+its separate recording. It remains an approximate estimate, not a calibrated
+confidence interval.
+
+Old first/second-half position means were 316016.0 / 315957.2; production
+means were 316032.8 / 316033.6. Descriptive detrended SDs were 80.0 / 35.3
+steps. This provides evidence of improved positional repeatability in this
+series, with little production time trend; ten attempts per policy cannot
+separate all temporal, acquisition and model effects or establish absolute
+optical-focus accuracy. A lower final HFR is not the acceptance evidence.
+
+Record validation checked **335 five-frame blocks**, including baselines:
+medians, ordered high-resolution timestamps, three startup discards in
+production, uniform gain/exposure within each curve, actual model minima,
+and separate primary/recovery samples. The harness restored **316049**
+through the full 4000-step outward approach, confirmed the focuser stopped,
+and confirmed both mount axes and the same counters unchanged over two
+seconds. The smaller-spacing experiment is recorded separately below.
+
+The separate **500-step, production-only** series is retained in
+`.build-win/autofocus-smaller-spacing-20261003.json` and its analysis, CSV
+and log companions. It established fresh reference **315969**, then retained
+all ten alternating trials from **313469 / 318469** with the same 4000-step
+take-up and acquisition settings.
+
+| Smaller-spacing result | Production, 500 steps |
+|---|---:|
+| Successes / attempts | 6 / 10 |
+| Inconclusive recovery brackets | 4 |
+| Successful-position mean / SD (steps) | 315922.7 / 44.7 |
+| Successful-position range (steps) | 315865-315985 |
+| High-start minus low-start mean (steps) | -74.8 |
+| Successful low / high starts | 1 / 5 |
+| Recovery checks / successful runs after a check | 4 / 0 |
+| Mean duration / range (seconds), all attempts | 103.0 / 79.8-140.0 |
+| Mean approximate fitted uncertainty (steps), successes | 67.9 |
+| Original fitted-position SD (steps), all attempts | 51.2 |
+| Descriptive time slope (steps/minute), successes | -3.1 |
+
+Actual curve exposures were 0.563-3.683 ms, gain 0. In the first failed
+bracket, the centre was 1.121 px and the two flanks only 1.139 / 1.163 px:
+their 0.018 / 0.042 px rises did not support a local minimum above the
+measurement floor. Its original fit was 315974 with approximate uncertainty
+51.3 steps and residual RMS 0.053 px. All four failures remain recorded;
+they were not replaced. The success-only spread and side difference are
+censored, and this time-separated series has no old 500-step control. It
+**does not demonstrate an advantage from smaller spacing**. These four
+failures came from the earlier HFR-triggered bracket policy and do not
+predict acceptance under the current diagnostic-only policy. Its 500-step
+position repeatability has not been revalidated; 1000-step spacing remains
+the initial sampling choice, with separately configured 4000-step take-up.
+The change of reference and mean between series cannot by itself separate
+temporal drift from scan-range/model effects or establish optical accuracy.
+
+Validation checked **297 five-frame blocks**, including baselines, uniform
+curve exposure/gain, fresh discards and high-resolution timestamps. The
+harness restored **315969** through full outward take-up, confirmed stopped
+focus and both stopped mount axes with unchanged counters over two seconds.
+
+Additional cancellation checks are separate from the repeatability trials.
+The first active-command cancellation, in
+`.build-win/autofocus-motion-cancel-20261003.json`, stopped before measurable
+travel and left 315969 unchanged. No automatic restoration was recorded.
+A subsequent travel-check setup, retained as
+`.build-win/autofocus-motion-cancel-travel-20261003.json`, failed before
+autofocus began: MOVE_ABS 311969 was acknowledged, but stopped feedback was
+316002. The harness bounded the wait, issued Stop and did not continue the
+experiment. The cause of that isolated post-cancellation command/position
+mismatch remains unresolved. It is not counted as a successful cancellation
+test or omitted from the recordings. An explicit native cleanup restored
+315969 through full take-up before one bounded repeat.
+
+That repeat exercised the **production shared engine's Stop during measured
+travel**. The motion started at 315969 toward 307969; cancellation was
+triggered with BUSY=1 at 312205. Subsequent native preflight confirmed
+**312002, stopped**, with the same COM10 status/counters. The console contains
+no MOVE_ABS after the Stop, and the cancelled record contains no restoration.
+Its expected cancellation exit was 1, rather than a successful autofocus
+exit. Evidence is in `.build-win/autofocus-motion-cancel-repeat-20261003.json`,
+its `.stop-trigger.json`, `-proof.json`, console and stopped-preflight files.
+
+Only after that stopped-state/no-restoration check, a separate explicit test
+cleanup held 312002 fixed for eight seconds (240 frames), then restored
+**315969** using **311969 -> 315969**. It is recorded in
+`.build-win/autofocus-final-cleanup-20261003.json`. Final native preflight in
+`.build-win/autofocus-final-state-20261003.json` confirmed 315969 stopped,
+maximum 731000, and unchanged stopped COM10 axes/counters over two seconds.
+The cleanup was a separate test command; cancellation itself initiated no
+restoration. Hardware disconnect during motion and interactive UI Stop clicks
+were not exercised here; their shared-core regressions passed.
+
+The final Windows release `core-tests` passed **159 checks** in
+`.build-win/autofocus-position-policy-core-suite.log` (exit 0). This includes analytical
+symmetric/asymmetric minima, unequal scatter/outliers, bounded failure,
+large coordinates/travel bounds, startup discards/stale exclusion, repeated
+verification, significant correction versus preserving a supported position,
+exposure recovery/re-centering, cancellation in every phase, interlocks,
+disconnect, Windows async coordinates, simulated tilt sequencing, and old/new
+metadata round trips. The simulated tilt camera now evaluates its Gaussian
+at sensor pixel centres, matching the pipeline; the same 32-pixel centering
+tolerance remains in force. No production mount or tilt plane algorithm was
+changed for that fixture correction.
+
+Release `capture-cli` and `CollimationCamera` built through `scripts/win.cmd`.
+The import check, CLI help and analysis-script regression passed. Runtime
+files were staged through `scripts/stage-win.ps1`. The portable sidebar was
+rendered at 1280x1200 into `.build-win/autofocus-position-policy-sidebar.png`, inspected,
+and exited **0** with no widget ID conflict; the separate 4000-step control
+is visible. Both sidebar integrations are source-tested. **macOS compilation
+and execution were not performed in this session.** Real hardware acceptance
+uses the centre ROI and shared production engine; no full hardware tilt
+traversal is repeated. That policy was validated by the earlier comparison above; the
+intermediate recordings are retained, rather than pooled across policies.
+Source/binary hashes for that earlier policy are retained in
+`.build-win/autofocus-position-policy-manifest-20261003.json`, with source
+copies under `.build-win/autofocus-policy-v3-source`. The fit regression,
+engine verification, metadata, CLI help, import and analysis checks have
+separate `autofocus-position-policy-*` logs. Build logs use the same prefix.
+
+
+### Final HFR as diagnostics only, 3 October 2026
+
+The current production policy is **`curve-fit-position-only`**. Final HFR
+cannot invalidate a supported fit, initiate a bracket/correction, change
+exposure or restart the curve. A bounded diagnostic acquisition may return
+unavailable HFR; the focus result and tilt reading retain their position.
+Travel validation, stopped-target confirmation, curve support/residuals,
+leave-one-out sensitivity and cancellation remain enforced. Old report fields
+named `verification` and `recovery` remain readable; production uses the former
+for diagnostic blocks and leaves recovery empty. The opt-in legacy comparison
+alone retains its old HFR rejection rule.
+
+Windows release core-tests, capture-cli and CollimationCamera builds passed.
+The complete core suite passed **158 checks**, including persistently high,
+variable, missing and saturated final HFR without a focus veto or extra
+movement; scan exposure recovery; re-centering; cancellation during settling,
+collection, final diagnostic collection and the inter-block interval; interlocks,
+disconnect; Windows async-coordinate regression; both UI integrations; and
+old/new tilt metadata round trips, including absent final HFR. The first full
+suite had one one-second acquisition timeout in the inward re-centering
+fixture, before any final measurement. The isolated re-centering check passed;
+the wide-star fixture was given two seconds of scheduling headroom without
+changing production timing, counts or optical acceptance. Its diagnostic log
+and the initially failing suite are retained. The final complete suite passed
+in `.build-win/autofocus-diagnostic-only-final-core-suite.log`.
+
+The import check, CLI help, missing-HFR analysis regression and `git diff
+--check` passed. Runtime staging was repeated successfully after the test
+process exited. The portable sidebar rendered at 1280x1200 into
+`.build-win/autofocus-diagnostic-only-sidebar.png`, was inspected and exited
+**0**, with the 1000-step sampling and separate 4000-step take-up controls
+visible and no widget ID conflict. Both apps use the shared help/status and
+engine. **macOS compilation and execution were not performed here.**
+
+Real hardware used Xena585M `poa-0`, centre 512-pixel ROI, gain 0, COM4 focus
+and COM10 mount. Native preflight read **315969 / 731000**, stopped, with
+unchanged mount status/counters over two seconds. A new shared-production
+reference was **312265**, rather than reusing the previous session's focus.
+Twenty old/new trials alternated starts at **309765 / 314765**, five on each
+side per policy, with old-first in six pairs and new-first in four. All trials
+used 1000-step spacing and requested 0.5 ms exposure; production take-up was
+4000 steps. Every attempt, including failure, remains recorded in
+`.build-win/autofocus-diagnostic-only-comparison-20261003.json`, with console
+log, `-analysis.json`, `-attempts.csv` and `-exposure-history.json` companions.
+
+| Interleaved same-spacing comparison | Old | Diagnostic-only production |
+|---|---:|---:|
+| Successful attempts / attempted | 9 / 10 | 10 / 10 |
+| Mean successful position (steps) | 312269.3 | 312245.6 |
+| Successful-position SD (steps) | 104.2 | 56.5 |
+| Successful-position range (steps) | 312152-312530 | 312169-312343 |
+| High-start minus low-start mean (steps) | -87.6 | -21.2 |
+| Successful low / high starts | 4 / 5 | 5 / 5 |
+| All measured final targets SD, including rejected target (steps) | 98.7 | 56.5 |
+| HFR-based rejections | 1 | 0 |
+| Recovery moves | 0 | 0 |
+| Mean duration / range (seconds), all attempts | 42.2 / 28.4-55.2 | 69.2 / 50.6-95.8 |
+| Mean approximate fitted uncertainty (steps) | unavailable | 51.2 |
+| Descriptive time slope (steps/minute) | -10.2 | -5.9 |
+| SD after subtracting descriptive linear trend (steps) | 77.3 | 41.0 |
+
+Production finished at its original fitted position in every attempt. Four
+production runs (attempts 4, 10, 12 and 15) had saturated final frames and
+therefore unavailable final HFR; all three diagnostic issues, timestamps and
+partial readings were retained in each. These results were **not rejected or
+corrected**. The old routine rejected attempt 14 after reaching **312239**:
+its final median was **1.1163 px**, compared with a lowest scan median of
+**0.9484 px**, a **17.7%** increase. That is a rejection under the old software
+policy, not independent proof of inaccurate focus.
+
+Selected exposure settings ranged **0.550-5.721 ms** old and
+**0.676-5.361 ms** production, including exposure-recovery periods. Stored
+complete/partial-curve sample exposures ranged 0.550-1.144 ms old and
+0.676-3.507 ms production. Legacy partial-scan raw readings are unavailable;
+its partial medians and exposure-control events are preserved in the console
+and companion history. Production preserves its partial curves and readings.
+Validation checked **305 completed five-frame blocks**, including baselines,
+uniform curve exposure/gain, medians, fresh discards and high-resolution
+timestamps; all ten production results matched the actual fitted minimum and
+had no recovery measurements. The final diagnostic issues remain separate
+from the nine primary samples.
+
+Observed successful-position SD was **46% lower**; including the old rejected
+final target gives a **43% lower** position SD. This is position evidence,
+not a conclusion based on lower final HFR. It is a small descriptive sample,
+with one censored old success and a downward trend in both series: first/second
+half means were 312331/312220 old and 312280.2/312211 production. Interleaving
+reduces time-order bias but cannot establish population failure rates,
+absolute optical accuracy or a causal attribution to one component. Approximate
+fit uncertainty (mean 51.2 steps) is of the same order as observed SD (56.5),
+but is **not an empirically calibrated confidence interval**. The 500-step
+spacing experiment above used the earlier bracket policy; current 500-step
+repeatability has not been revalidated.
+
+The harness restored **312265** using **308265 -> 312265**, confirmed stopped
+focus and both stopped mount axes with the original counters over two seconds.
+A separate native preflight in
+`.build-win/autofocus-diagnostic-only-final-state-20261003.json` again read
+**312265**, stopped. COM10 responses remained exactly
+`=101`, `=301`, `=EA5177`, `=4F1799`. No full hardware tilt traversal was
+repeated. Source/binary hashes and source copies are retained in
+`.build-win/autofocus-diagnostic-only-manifest-20261003.json` and
+`.build-win/autofocus-policy-v4-source`.
 
 ## 7. The filter wheel
 
