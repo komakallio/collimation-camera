@@ -33,23 +33,27 @@ public struct ConstellationTile: Sendable {
 public struct ConstellationResult: Sendable {
     public let id = UUID()
     public let tiles: [ConstellationTile]
+    public let layout: ConstellationLayout
     public let sourceURL: URL
     public let histogram: Histogram
     public let tiltReport: TiltMeasurementReport?
     public let metadataWarning: String?
 
-    public init(tiles: [ConstellationTile], sourceURL: URL, tiltReport: TiltMeasurementReport? = nil, metadataWarning: String? = nil) throws {
+    public init(tiles: [ConstellationTile], sourceURL: URL, layout: ConstellationLayout = .circular, tiltReport: TiltMeasurementReport? = nil, metadataWarning: String? = nil) throws {
         let cell = CaptureLayout.stackingCropSize
-        guard tiles.count == 9, Set(tiles.map { $0.row * 3 + $0.column }).count == 9,
+        guard tiles.count == layout.positionCount,
+              Set(tiles.map { $0.row * layout.columnCount + $0.column }).count == layout.positionCount,
+              tiltReport == nil || layout == .circular,
               tiles.allSatisfy({
-                  (0..<3).contains($0.row) && (0..<3).contains($0.column)
+                  (0..<layout.rowCount).contains($0.row) && (0..<layout.columnCount).contains($0.column)
                       && $0.image.width == cell && $0.image.height == cell
                       && $0.image.pixels.count == cell * cell
                       && $0.image.pixels.allSatisfy { $0.isFinite && $0 >= 0 }
               }) else {
-            throw CameraError.unsupported("A constellation must contain nine 256×256 float star images.")
+            throw CameraError.unsupported("A constellation must contain \(layout.positionCount) 256×256 float star images in a \(layout.columnCount)×\(layout.rowCount) grid.")
         }
-        self.tiles = tiles.sorted { $0.row * 3 + $0.column < $1.row * 3 + $1.column }
+        self.layout = layout
+        self.tiles = tiles.sorted { $0.row * layout.columnCount + $0.column < $1.row * layout.columnCount + $1.column }
         self.sourceURL = sourceURL
         self.tiltReport = tiltReport
         self.metadataWarning = metadataWarning
@@ -70,10 +74,13 @@ public struct ConstellationResult: Sendable {
     public static func load(from url: URL) throws -> ConstellationResult {
         let document = try MonoTIFF.readConstellationWithMetadata(from: url)
         let mosaic = document.image
+        guard let layout = ConstellationLayout.forMosaic(width: mosaic.width, height: mosaic.height) else {
+            throw CameraError.unsupported("Unsupported constellation layout.")
+        }
         let cell = CaptureLayout.stackingCropSize
         var tiles: [ConstellationTile] = []
-        for row in 0..<3 {
-            for column in 0..<3 {
+        for row in 0..<layout.rowCount {
+            for column in 0..<layout.columnCount {
                 var pixels: [Float] = []
                 pixels.reserveCapacity(cell * cell)
                 for y in 0..<cell {
@@ -86,7 +93,10 @@ public struct ConstellationResult: Sendable {
                 )))
             }
         }
-        return try ConstellationResult(tiles: tiles, sourceURL: url, tiltReport: document.report, metadataWarning: document.warning)
+        let report = layout == .circular ? document.report : nil
+        let warning = layout != .circular && document.report != nil
+            ? "Tilt metadata does not match the constellation layout; the image is still available." : document.warning
+        return try ConstellationResult(tiles: tiles, sourceURL: url, layout: layout, tiltReport: report, metadataWarning: warning)
     }
 }
 

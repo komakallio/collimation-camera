@@ -17,7 +17,7 @@ They drive the same engine and take every label, shortcut, and HUD from the same
 - ROI sizes 256 / 512 / 1024 / 2048 / full, plus display zoom (25%–800%, pinch/scroll)
 - Auto-center the ROI on the star; full-frame binned search if it leaves the ROI
 - Manual and auto stretch (histogram percentiles)
-- Constellation results: nine star stacks with shared, star-centred zoom and independent display stretch; reopen saved float TIFF mosaics
+- Constellation capture: nine circular samples or a denser 7×5 rectangular grid across the full camera field; review and reopen float TIFF mosaics with shared, star-centred zoom and independent display stretch
 - Numeric coma: concentricity of the outer ring vs. the secondary shadow, plus sector asymmetry
 - Simulator camera so you can develop and test without hardware
 - Player One and ZWO cameras through one device list, both loaded at run time
@@ -27,18 +27,27 @@ They drive the same engine and take every label, shortcut, and HUD from the same
 ## Constellation results
 
 After **Save Constellation** succeeds, the app displays the nine stacks in their
-sensor layout, without position labels. Use **Camera** and **Constellation Results**
+sensor layout, without position labels. **Save Grid Constellation** captures 35
+stacks on a 7×5 rectangular grid spanning the sensor width and height, including
+the four corners. The outer positions keep a 128-pixel margin so the 256×256
+star crops fit inside the sensor. It captures the centre first, then sweeps
+across alternating rows, and saves a 1792×1280 float TIFF. Both captures require
+a calibrated mount and use the selected frame count at every position; the
+grid collects about four times as many frames as the circular capture.
+
+Use **Camera** and **Constellation Results**
 at the top of the sidebar to switch views. Camera capture continues while
 reviewing results, and disconnecting preserves the current result.
 
 **Open Constellation…** (Ctrl+Shift+O on Windows, ⌘⇧O on macOS) opens an existing
-768×768, uncompressed 32-bit float mono constellation TIFF saved by this app.
+768×768 circular or 1792×1280 grid, uncompressed 32-bit float mono constellation
+TIFF saved by this app.
 Each new result starts fitted, with an automatic stretch. The shared **Results
-zoom** slider magnifies all nine stars from 1× to 8× around their own centres;
+zoom** slider magnifies all stars from 1× to 8× around their own centres;
 **Fit** resets it. The wheel, and pinch on macOS, update that same zoom.
 
 The results histogram and MTF/Arcsinh, black, white, midtones/factor and auto
-stretch controls apply the same stretch to all nine original float images.
+stretch controls apply the same stretch to all original float images.
 These settings are independent of the camera. A cell whose star cannot be
 detected uses the crop midpoint and displays **Centre not detected**.
 

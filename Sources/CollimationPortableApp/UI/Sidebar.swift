@@ -172,6 +172,7 @@ enum Sidebar {
         }
 
         command(CommandCatalog.ID.cameraSaveConstellation, engine: engine, host: host)
+        command(CommandCatalog.ID.cameraSaveGridConstellation, engine: engine, host: host)
     }
 
     private static func filterWheelSection(engine: CollimationEngine, host: any UIHost) {

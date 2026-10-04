@@ -1,6 +1,20 @@
 import Foundation
 
-/// One star placement in the constellation: sensor target and 3×3 mosaic cell.
+public enum ConstellationLayout: CaseIterable, Equatable, Sendable {
+    case circular
+    case rectangularGrid
+
+    public var columnCount: Int { self == .circular ? 3 : 7 }
+    public var rowCount: Int { self == .circular ? 3 : 5 }
+    public var positionCount: Int { columnCount * rowCount }
+
+    public static func forMosaic(width: Int, height: Int) -> Self? {
+        let cell = CaptureLayout.stackingCropSize
+        return allCases.first { width == $0.columnCount * cell && height == $0.rowCount * cell }
+    }
+}
+
+/// One star placement in the constellation: sensor target and mosaic cell.
 public struct ConstellationPosition: Equatable, Sendable {
     public var label: String
     /// Mosaic row, 0 = top.
@@ -17,14 +31,17 @@ public struct ConstellationPosition: Equatable, Sendable {
     }
 }
 
-/// Center plus eight points on a circle whose diameter is 80% of the sensor height.
+/// Circular sampling or a denser grid spanning the usable rectangular sensor field.
 public enum ConstellationCapture {
     public static let gridSize = 3
     public static let positionCount = gridSize * gridSize
     public static let circleDiameterFraction = 0.80
 
-    /// Capture order: center, then clockwise from north.
-    public static func positions(sensorWidth: Int, sensorHeight: Int) -> [ConstellationPosition] {
+    /// Centre first, then clockwise from north or alternating rectangular rows.
+    public static func positions(sensorWidth: Int, sensorHeight: Int, layout: ConstellationLayout = .circular) -> [ConstellationPosition] {
+        if layout == .rectangularGrid {
+            return rectangularPositions(sensorWidth: sensorWidth, sensorHeight: sensorHeight, layout: layout)
+        }
         let center = MountGuide.frameCenter(width: sensorWidth, height: sensorHeight)
         let radius = circleDiameterFraction / 2 * Double(max(sensorHeight, 1))
         let margin = Double(CaptureLayout.stackingCropSize) / 2
@@ -57,8 +74,31 @@ public enum ConstellationCapture {
         return result
     }
 
-    /// Pack stacked tiles into a 3×3 mosaic. Missing cells stay zero.
-    public static func mosaic(_ tiles: [(row: Int, column: Int, image: StackedImage)]) throws -> StackedImage {
+    /// Keep a full stacking crop inside every edge, including the four corners.
+    /// After the centre, alternate row directions to avoid crossing the full field between rows.
+    private static func rectangularPositions(sensorWidth: Int, sensorHeight: Int, layout: ConstellationLayout) -> [ConstellationPosition] {
+        func coordinate(_ index: Int, count: Int, dimension: Int) -> Double {
+            let last = Double(max(dimension, 1) - 1)
+            let margin = min(Double(CaptureLayout.stackingCropSize) / 2, last / 2)
+            return margin + (last - 2 * margin) * Double(index) / Double(count - 1)
+        }
+        let middleRow = layout.rowCount / 2, middleColumn = layout.columnCount / 2
+        var result = [ConstellationPosition(label: "C", row: middleRow, column: middleColumn,
+            sensorPoint: MountGuide.frameCenter(width: sensorWidth, height: sensorHeight))]
+        for row in 0..<layout.rowCount {
+            for offset in 0..<layout.columnCount {
+                let column = row.isMultiple(of: 2) ? offset : layout.columnCount - 1 - offset
+                if row == middleRow && column == middleColumn { continue }
+                result.append(ConstellationPosition(label: "R\(row + 1)C\(column + 1)", row: row, column: column,
+                    sensorPoint: SIMD2(coordinate(column, count: layout.columnCount, dimension: sensorWidth),
+                                       coordinate(row, count: layout.rowCount, dimension: sensorHeight))))
+            }
+        }
+        return result
+    }
+
+    /// Pack stacked tiles into their sensor layout. Missing cells stay zero.
+    public static func mosaic(_ tiles: [(row: Int, column: Int, image: StackedImage)], layout: ConstellationLayout = .circular) throws -> StackedImage {
         guard let first = tiles.first else {
             throw CameraError.unsupported("No constellation tiles to combine.")
         }
@@ -68,15 +108,19 @@ public enum ConstellationCapture {
             throw CameraError.unsupported("Constellation tiles are empty.")
         }
         for tile in tiles {
-            guard tile.image.width == cellWidth, tile.image.height == cellHeight else {
+            guard tile.image.width == cellWidth, tile.image.height == cellHeight,
+                  tile.image.pixels.count == cellWidth * cellHeight else {
                 throw CameraError.unsupported("Constellation tiles must share the same size.")
             }
-            guard (0..<gridSize).contains(tile.row), (0..<gridSize).contains(tile.column) else {
-                throw CameraError.unsupported("Constellation tile is outside the 3×3 grid.")
+            guard (0..<layout.rowCount).contains(tile.row), (0..<layout.columnCount).contains(tile.column) else {
+                throw CameraError.unsupported("Constellation tile is outside the \(layout.columnCount)×\(layout.rowCount) grid.")
             }
         }
-        let width = cellWidth * gridSize
-        let height = cellHeight * gridSize
+        guard Set(tiles.map { $0.row * layout.columnCount + $0.column }).count == tiles.count else {
+            throw CameraError.unsupported("Constellation tiles must occupy different cells.")
+        }
+        let width = cellWidth * layout.columnCount
+        let height = cellHeight * layout.rowCount
         var pixels = [Float](repeating: 0, count: width * height)
         for tile in tiles {
             let x0 = tile.column * cellWidth

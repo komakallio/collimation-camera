@@ -18,6 +18,9 @@ struct CoreTests {
         }
         if CommandLine.arguments.contains("--constellation-only") {
             var failures = 0
+            failures += run("constellation layout", testConstellationLayout)
+            failures += run("constellation stack crops at sensor edges", testConstellationStackCrops)
+            failures += run("rectangular constellation", testRectangularConstellation)
             failures += run("constellation TIFF reading", testConstellationTIFFReading)
             failures += run("constellation centred zoom", testConstellationCenteredZoom)
             failures += await runAsync("constellation viewer state", testConstellationViewerState)
@@ -140,6 +143,7 @@ struct CoreTests {
         failures += run("stack seed async transfer", testStackSeedAsyncTransfer)
         failures += run("constellation stack crops at sensor edges", testConstellationStackCrops)
         failures += run("constellation layout", testConstellationLayout)
+        failures += run("rectangular constellation", testRectangularConstellation)
         failures += run("constellation TIFF reading", testConstellationTIFFReading)
         failures += run("constellation centred zoom", testConstellationCenteredZoom)
         failures += await runAsync("constellation viewer state", testConstellationViewerState)
@@ -2433,7 +2437,13 @@ private func testStackSeedAsyncTransfer() throws {
 }
 
 private func testConstellationStackCrops() throws {
-    let positions = ConstellationCapture.positions(sensorWidth: 3856, sensorHeight: 2180)
+    for layout in ConstellationLayout.allCases {
+        try checkConstellationStackCrops(layout: layout)
+    }
+}
+
+private func checkConstellationStackCrops(layout: ConstellationLayout) throws {
+    let positions = ConstellationCapture.positions(sensorWidth: 3856, sensorHeight: 2180, layout: layout)
     var tiles: [(row: Int, column: Int, image: StackedImage)] = []
     for position in positions {
         let roi = Alignment.centeredROI(around: position.sensorPoint, size: 2048,
@@ -2445,7 +2455,7 @@ private func testConstellationStackCrops() throws {
             for sx in (x - 4)...(x + 4) { pixels[sy * roi.width + sx] = 30_000 }
         }
         let frame = Frame(width: roi.width, height: roi.height, pixels: pixels, roi: roi)
-        if position.row == 2 {
+        if layout == .circular && position.row == 2 {
             try expect(CaptureLayout.stackingFrame(from: frame).pixels.max() == 200,
                        "fixture reproduces a blank centre crop for \(position.label)")
         }
@@ -2467,9 +2477,9 @@ private func testConstellationStackCrops() throws {
         try expect(stack.pixels.max() == 30_000, "star preserved in \(position.label)")
         tiles.append((position.row, position.column, stack))
     }
-    let mosaic = try ConstellationCapture.mosaic(tiles)
-    for row in 0..<3 {
-        for column in 0..<3 {
+    let mosaic = try ConstellationCapture.mosaic(tiles, layout: layout)
+    for row in 0..<layout.rowCount {
+        for column in 0..<layout.columnCount {
             let center = (row * 256 + 128) * mosaic.width + column * 256 + 128
             try expect(mosaic.pixels[center] == 30_000, "star in mosaic tile \(row),\(column)")
         }

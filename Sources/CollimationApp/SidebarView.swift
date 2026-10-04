@@ -299,6 +299,7 @@ struct SidebarView: View {
                 }
                 .help(HelpText.stackedSave)
                 button(CommandCatalog.ID.cameraSaveConstellation)
+                button(CommandCatalog.ID.cameraSaveGridConstellation)
             }
         }
     }

@@ -39,7 +39,8 @@ are listed under Not yet verified.
 | Save TIFF | ✅ | ✅ | `canSaveSnapshot`. Native save panel on macOS, `SDL_ShowSaveFileDialog` in the portable app. |
 | Save stacked | ✅ | ✅ | `canSaveStacked`. |
 | Save constellation | ✅ | ✅ | `canSaveConstellation`. |
-| Constellation results | ✅ | ✅ | Nine float stacks, shared star-centred 1×–8× zoom, independent histogram and stretch, and Open Constellation. Windows rendering and saved files verified; native macOS UI needs runtime verification. |
+| Save grid constellation | ✅ | ✅ | Separate 35-position 7×5 rectangular capture across the sensor width and height, including corners with a 128-pixel crop margin. Centre first, then alternating rows. Uses `canSaveConstellation`; mount capture needs hardware verification. |
+| Constellation results | ✅ | ✅ | Nine circular or 35 rectangular float stacks, shared star-centred 1×–8× zoom, independent histogram and stretch, and Open Constellation. Both mosaic layouts are supported; native macOS UI needs runtime verification. |
 | Mount connect | ✅ | ✅ | `canConnectMount`. Tightened at milestone 2: the macOS menu item was ungated. |
 | Mount calibrate | ✅ | ✅ | `canCalibrateMount`. Tightened at milestone 2: the menu item now also needs a connected camera and no stack in flight. |
 | Center star | ✅ | ✅ | `canCenterStar`. Same tightening as calibrate. |

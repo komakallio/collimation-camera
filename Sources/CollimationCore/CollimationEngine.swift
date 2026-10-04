@@ -599,20 +599,20 @@ public final class CollimationEngine {
         return MonoTIFF.suggestedFileName(width: size, height: size, label: label)
     }
 
-    public func suggestedConstellationName() -> String {
+    public func suggestedConstellationName(layout: ConstellationLayout = .circular) -> String {
         let frames = FrameStacker.clampedCount(stackFrameCount)
         let cell = CaptureLayout.stackingCropSize
-        let side = cell * ConstellationCapture.gridSize
-        let label = "constellation-stack\(frames)"
+        let width = cell * layout.columnCount, height = cell * layout.rowCount
+        let label = layout == .circular ? "constellation-stack\(frames)" : "constellation-grid-stack\(frames)"
         if let frame = frameSlot.peek()?.frame {
             return MonoTIFF.suggestedFileName(
-                width: side,
-                height: side,
+                width: width,
+                height: height,
                 date: frame.timestamp,
                 label: label
             )
         }
-        return MonoTIFF.suggestedFileName(width: side, height: side, label: label)
+        return MonoTIFF.suggestedFileName(width: width, height: height, label: label)
     }
 
     public func saveSnapshot(to url: URL) {
@@ -641,16 +641,16 @@ public final class CollimationEngine {
         stackTask = Task { await self.runStackedSnapshot(to: url, frameCount: target) }
     }
 
-    public func saveConstellation(to url: URL) {
+    public func saveConstellation(to url: URL, layout: ConstellationLayout = .circular) {
         guard canSaveConstellation else { return }
         errorMessage = nil
         stackTask?.cancel()
         isStacking = true
-        let steps = ConstellationCapture.positionCount
+        let steps = layout.positionCount
         stackWork = .constellationMoving(step: 1, steps: steps)
         applyPipelineConfig()
         statusText = "Constellation 1/\(steps)…"
-        stackTask = Task { await self.runConstellation(to: url) }
+        stackTask = Task { await self.runConstellation(to: url, layout: layout) }
     }
 
     private func runStackedSnapshot(to url: URL, frameCount: Int) async {
@@ -674,9 +674,9 @@ public final class CollimationEngine {
         }
     }
 
-    private func runConstellation(to url: URL) async {
+    private func runConstellation(to url: URL, layout: ConstellationLayout) async {
         let frameCount = FrameStacker.clampedCount(stackFrameCount)
-        let steps = ConstellationCapture.positionCount
+        let steps = layout.positionCount
         var startedMount = false
         var completedResult: ConstellationResult?
         defer {
@@ -700,7 +700,8 @@ public final class CollimationEngine {
             }
             let positions = ConstellationCapture.positions(
                 sensorWidth: sensorWidth,
-                sensorHeight: sensorHeight
+                sensorHeight: sensorHeight,
+                layout: layout
             )
             try beginMountWork(
                 "Constellation 1/\(steps)…",
@@ -751,12 +752,12 @@ public final class CollimationEngine {
 
             stackWork = .constellationCombining
             statusText = "Combining constellation…"
-            let mosaic = try ConstellationCapture.mosaic(tiles)
+            let mosaic = try ConstellationCapture.mosaic(tiles, layout: layout)
             try MonoTIFF.write(mosaic, to: url)
             completedResult = try await Task.detached(priority: .userInitiated) {
                 try ConstellationResult(
                     tiles: tiles.map { ConstellationTile(row: $0.row, column: $0.column, image: $0.image) },
-                    sourceURL: url
+                    sourceURL: url, layout: layout
                 )
             }.value
             statusText = "Saved \(url.lastPathComponent)"

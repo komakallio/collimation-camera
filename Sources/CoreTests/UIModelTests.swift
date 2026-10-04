@@ -62,6 +62,7 @@ func testCommandCatalogEnablement() throws {
         CommandCatalog.ID.cameraSaveTIFF,
         CommandCatalog.ID.cameraSaveStacked,
         CommandCatalog.ID.cameraSaveConstellation,
+        CommandCatalog.ID.cameraSaveGridConstellation,
         CommandCatalog.ID.mountCalibrate,
         CommandCatalog.ID.mountCenter,
         CommandCatalog.ID.mountConnect,
@@ -96,6 +97,7 @@ func testCommandCatalogEnablement() throws {
     try expectUI(!(try enabled(CommandCatalog.ID.mountCenter)), "center off while stacking")
     try expectUI(!(try enabled(CommandCatalog.ID.cameraAutoExpose)), "auto exposure off while stacking")
     try expectUI(!(try enabled(CommandCatalog.ID.cameraSaveTIFF)), "save TIFF off while stacking")
+    try expectUI(!(try enabled(CommandCatalog.ID.cameraSaveGridConstellation)), "grid capture off while stacking")
     try expectUI(!engine.canSelectStackCount, "the frame count is locked while stacking")
     engine.setStackingForTesting(false)
 }

@@ -21,9 +21,10 @@ public struct ConstellationCell: Sendable {
 public enum ConstellationScene {
     public static func cells(result: ConstellationResult, size: SIMD2<Double>, zoom: Double) -> [ConstellationCell] {
         let padding = 12.0, gap = 8.0, titleHeight = 28.0
-        let side = max(1, min((size.x - 2 * padding - 2 * gap) / 3,
-                              (size.y - 2 * padding - titleHeight - 2 * gap) / 3))
-        let grid = SIMD2(repeating: 3 * side + 2 * gap)
+        let columns = Double(result.layout.columnCount), rows = Double(result.layout.rowCount)
+        let side = max(1, min((size.x - 2 * padding - (columns - 1) * gap) / columns,
+                              (size.y - 2 * padding - titleHeight - (rows - 1) * gap) / rows))
+        let grid = SIMD2(columns * side + (columns - 1) * gap, rows * side + (rows - 1) * gap)
         let start = SIMD2(max(padding, (size.x - grid.x) / 2),
                           padding + titleHeight + max(0, (size.y - 2 * padding - titleHeight - grid.y) / 2))
         var extent = 1.0

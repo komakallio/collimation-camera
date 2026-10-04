@@ -2,9 +2,9 @@ import CollimationCore
 import CollimationUI
 import Foundation
 
-private func resultFixture() throws -> ConstellationResult {
+private func resultFixture(layout: ConstellationLayout = .circular) throws -> ConstellationResult {
     let side = 256
-    let tiles = (0..<9).map { index in
+    let tiles = (0..<layout.positionCount).map { index in
         let center = SIMD2(100.25 + Double(index) * 3, 119.75 - Double(index))
         var pixels = [Float](repeating: 200.25 + Float(index), count: side * side)
         for y in 0..<side {
@@ -13,12 +13,73 @@ private func resultFixture() throws -> ConstellationResult {
                 pixels[y * side + x] += Float(12000 * exp(-pow(r - 24, 2) / 8))
             }
         }
-        return ConstellationTile(row: index / 3, column: index % 3, image: StackedImage(
+        return ConstellationTile(row: index / layout.columnCount, column: index % layout.columnCount, image: StackedImage(
             width: side, height: side, pixels: pixels, roi: ROI(x: 0, y: 0, width: side, height: side),
             referenceCentroid: center
         ))
     }
-    return try ConstellationResult(tiles: tiles.reversed(), sourceURL: URL(fileURLWithPath: "fixture.tif"))
+    return try ConstellationResult(tiles: tiles.reversed(), sourceURL: URL(fileURLWithPath: "fixture.tif"), layout: layout)
+}
+
+func testRectangularConstellation() throws {
+    let layout = ConstellationLayout.rectangularGrid
+    for (width, height) in [(6252, 4176), (3856, 2180), (2180, 3856), (512, 512), (100, 80)] {
+        let positions = ConstellationCapture.positions(sensorWidth: width, sensorHeight: height, layout: layout)
+        try expectUI(positions.count == 35, "35 rectangular placements")
+        try expectUI(Set(positions.map { $0.row * 7 + $0.column }).count == 35, "each rectangular cell sampled once")
+        try expectUI(positions[0].label == "C" && positions[0].row == 2 && positions[0].column == 3,
+                     "rectangular centre captured first")
+        try expectUI(positions[0].sensorPoint == MountGuide.frameCenter(width: width, height: height), "exact sensor centre")
+        for point in positions {
+            try expectUI(point.sensorPoint.x >= 0 && point.sensorPoint.x < Double(width)
+                && point.sensorPoint.y >= 0 && point.sensorPoint.y < Double(height), "placement inside sensor")
+            if width >= 257 && height >= 257 {
+                try expectUI(point.sensorPoint.x >= 128 && point.sensorPoint.x <= Double(width - 129)
+                    && point.sensorPoint.y >= 128 && point.sensorPoint.y <= Double(height - 129), "full crop fits at every placement")
+            }
+        }
+        if width >= 257 && height >= 257 {
+            let ordered = positions.sorted { $0.row * 7 + $0.column < $1.row * 7 + $1.column }
+            try expectUI(ordered.first?.sensorPoint == SIMD2(128, 128), "top-left field corner sampled")
+            try expectUI(ordered.last?.sensorPoint == SIMD2(Double(width - 129), Double(height - 129)), "bottom-right field corner sampled")
+            let dx = Double(width - 257) / 6, dy = Double(height - 257) / 4
+            for point in ordered {
+                try expectUI(abs(point.sensorPoint.x - (128 + Double(point.column) * dx)) < 1e-9
+                    && abs(point.sensorPoint.y - (128 + Double(point.row) * dy)) < 1e-9, "uniform sampling of both sensor axes")
+            }
+        }
+        let sweep = Array(positions.dropFirst())
+        for row in 0..<5 {
+            let columns = sweep.filter { $0.row == row }.map(\.column)
+            try expectUI(columns == (row.isMultiple(of: 2) ? columns.sorted() : columns.sorted(by: >)), "alternating sweep direction")
+        }
+    }
+    let result = try resultFixture(layout: layout)
+    let mosaic = try ConstellationCapture.mosaic(result.tiles.map { ($0.row, $0.column, $0.image) }, layout: layout)
+    try expectUI(mosaic.width == 1792 && mosaic.height == 1280, "rectangular float mosaic dimensions")
+    let data = try MonoTIFF.encode(floats: mosaic.pixels, width: mosaic.width, height: mosaic.height)
+    try expectUI(data.count > 6 * 1024 * 1024, "fixture exceeds old reader limit")
+    let decoded = try MonoTIFF.decodeConstellation(data)
+    try expectUI(decoded.pixels == mosaic.pixels, "rectangular TIFF round trip retains every float sample")
+    for tile in result.tiles {
+        let start = tile.row * 256 * mosaic.width + tile.column * 256
+        try expectUI(decoded.pixels[start] == tile.image.pixels[0], "sensor cell retained in rectangular mosaic")
+    }
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent("grid-constellation-\(UUID()).tif")
+    defer { try? FileManager.default.removeItem(at: file) }
+    try data.write(to: file)
+    let reopened = try ConstellationResult.load(from: file)
+    try expectUI(reopened.layout == layout && reopened.tiles.count == 35, "rectangular layout inferred on reopen")
+    try expectUI(reopened.tiles.map { $0.image.pixels } == result.tiles.map { $0.image.pixels }, "all reopened cells match their originals")
+    try expectUI(reopened.histogram.sampleCount == 35 * 256 * 256, "grid histogram covers all 35 tiles")
+    do {
+        _ = try ConstellationResult(tiles: Array(result.tiles.dropLast()), sourceURL: file, layout: layout)
+        throw UIModelExpectation(description: "incomplete grid accepted")
+    } catch is CameraError {}
+    do {
+        _ = try ConstellationResult(tiles: Array(repeating: result.tiles[0], count: 35), sourceURL: file, layout: layout)
+        throw UIModelExpectation(description: "duplicate grid cells accepted")
+    } catch is CameraError {}
 }
 
 func testConstellationTIFFReading() throws {
@@ -65,23 +126,34 @@ func testConstellationTIFFReading() throws {
 }
 
 func testConstellationCenteredZoom() throws {
-    let result = try resultFixture()
-    try expectUI(result.tiles.map { $0.row * 3 + $0.column } == Array(0..<9), "display order follows mosaic")
-    try expectUI(result.histogram.sampleCount == 9 * 256 * 256, "histogram covers all full crops")
+    for layout in ConstellationLayout.allCases {
+        try checkConstellationCenteredZoom(layout: layout)
+    }
+}
+
+private func checkConstellationCenteredZoom(layout: ConstellationLayout) throws {
+    let result = try resultFixture(layout: layout)
+    try expectUI(result.tiles.map { $0.row * layout.columnCount + $0.column } == Array(0..<layout.positionCount), "display order follows mosaic")
+    try expectUI(result.histogram.sampleCount == layout.positionCount * 256 * 256, "histogram covers all full crops")
     try expectUI(result.histogram.bins.reduce(0, +) == UInt32(result.histogram.sampleCount), "histogram samples counted once")
     for size in [SIMD2(980.0, 796.0), SIMD2(480.0, 576.0), SIMD2(1960.0, 1592.0)] {
         let fitted = ConstellationScene.cells(result: result, size: size, zoom: 1)
         for zoom in [1.0, 2.0, 8.0] {
             let cells = ConstellationScene.cells(result: result, size: size, zoom: zoom)
+            try expectUI(cells.count == layout.positionCount, "every cell rendered")
             for (i, cell) in cells.enumerated() {
+                try expectUI(cell.origin.x >= 0 && cell.origin.y >= 0
+                    && cell.origin.x + cell.size.x <= size.x && cell.origin.y + cell.size.y <= size.y, "grid fits inside view")
                 try expectUI(cell.viewPoint(for: cell.tile.center) == cell.origin + cell.size / 2, "star anchor stays centred")
-                try expectUI(abs(cell.scale - cells[0].scale) < 1e-12, "all nine share pixel scale")
+                try expectUI(abs(cell.scale - cells[0].scale) < 1e-12, "all cells share pixel scale")
                 try expectUI(abs(cell.scale / fitted[i].scale - zoom) < 1e-12, "shared zoom multiplier")
                 let sampledCenter = (cell.uvOrigin + cell.uvSize / 2) * SIMD2(256.0, 256.0) - SIMD2(repeating: 0.5)
                 try expectUI(abs(sampledCenter.x - cell.tile.center.x) < 1e-9 && abs(sampledCenter.y - cell.tile.center.y) < 1e-9, "GPU UV anchors match geometry")
                 if zoom == 1 {
-                    try expectUI(cell.uvOrigin.x <= 0 && cell.uvOrigin.y <= 0, "fit includes top left")
-                    try expectUI((cell.uvOrigin + cell.uvSize).x >= 1 && (cell.uvOrigin + cell.uvSize).y >= 1, "fit includes bottom right")
+                    // Dividing the fitted scale back into pixels can round a boundary past zero or one.
+                    let tolerance = 1e-12
+                    try expectUI(cell.uvOrigin.x <= tolerance && cell.uvOrigin.y <= tolerance, "fit includes top left")
+                    try expectUI((cell.uvOrigin + cell.uvSize).x >= 1 - tolerance && (cell.uvOrigin + cell.uvSize).y >= 1 - tolerance, "fit includes bottom right")
                 }
             }
         }
@@ -121,12 +193,16 @@ func testConstellationViewerState() async throws {
     try expectUI(engine.constellationResult?.id == result.id && engine.constellationZoom == 8, "failed load preserves previous view")
     let valid = FileManager.default.temporaryDirectory.appendingPathComponent("valid-constellation-\(UUID()).tif")
     defer { try? FileManager.default.removeItem(at: valid) }
-    let mosaic = try ConstellationCapture.mosaic(result.tiles.map { ($0.row, $0.column, $0.image) })
+    let grid = try resultFixture(layout: .rectangularGrid)
+    let mosaic = try ConstellationCapture.mosaic(grid.tiles.map { ($0.row, $0.column, $0.image) }, layout: grid.layout)
     try MonoTIFF.write(mosaic, to: valid)
     engine.openConstellation(from: valid)
     let loadDeadline = Date().addingTimeInterval(10)
     while engine.isLoadingConstellation && Date() < loadDeadline { try await Task.sleep(nanoseconds: 10_000_000) }
     try expectUI(!engine.isLoadingConstellation && engine.constellationResult?.sourceURL == valid && engine.errorMessage == nil, "valid file replaces result asynchronously")
+    try expectUI(engine.constellationResult?.layout == .rectangularGrid && engine.constellationResult?.tiles.count == 35, "grid opens through engine")
+    try expectUI(engine.suggestedConstellationName().contains("768x768-constellation-stack"), "original suggested filename preserved")
+    try expectUI(engine.suggestedConstellationName(layout: .rectangularGrid).contains("1792x1280-constellation-grid-stack"), "grid suggested filename identifies layout")
     engine.displayConstellation(result)
     try expectUI(engine.constellationZoom == 1 && engine.showingConstellation, "new result opens fitted")
 }
@@ -160,7 +236,7 @@ func testSavedConstellationFiles() throws {
     var missingCenters = 0
     for file in files {
         let result = try ConstellationResult.load(from: file)
-        try expectUI(result.tiles.count == 9, "nine tiles in \(file.lastPathComponent)")
+        try expectUI(result.tiles.count == result.layout.positionCount, "all tiles in \(file.lastPathComponent)")
         missingCenters += result.tiles.filter { !$0.centerDetected }.count
     }
     print("  Verified \(files.count) saved constellation TIFFs; \(missingCenters) cells used midpoint fallback")

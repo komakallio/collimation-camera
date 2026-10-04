@@ -28,8 +28,13 @@ final class GPUConstellationRenderer {
         guard let result = state.result, uploadedID != result.id else { return }
         let side = CaptureLayout.stackingCropSize
         let tileBytes = side * side * 4
-        if textures.isEmpty {
-            for _ in 0..<9 {
+        if textures.count != result.tiles.count {
+            for texture in textures { SDL_ReleaseGPUTexture(device, texture) }
+            textures = []
+            if let transfer { SDL_ReleaseGPUTransferBuffer(device, transfer) }
+            transfer = nil
+            uploadedID = nil
+            for _ in result.tiles {
                 var info = SDL_GPUTextureCreateInfo()
                 info.type = SDL_GPU_TEXTURETYPE_2D
                 info.format = CSDL3_TEXTUREFORMAT_R32_FLOAT
@@ -51,7 +56,7 @@ final class GPUConstellationRenderer {
         if transfer == nil {
             var info = SDL_GPUTransferBufferCreateInfo()
             info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD
-            info.size = UInt32(tileBytes * 9)
+            info.size = UInt32(tileBytes * result.tiles.count)
             transfer = SDL_CreateGPUTransferBuffer(device, &info)
         }
         guard let transfer, let mapped = SDL_MapGPUTransferBuffer(device, transfer, true) else { return }
@@ -62,7 +67,7 @@ final class GPUConstellationRenderer {
         }
         SDL_UnmapGPUTransferBuffer(device, transfer)
         guard let copy = SDL_BeginGPUCopyPass(commandBuffer) else { return }
-        for i in 0..<9 {
+        for i in result.tiles.indices {
             var source = SDL_GPUTextureTransferInfo()
             source.transfer_buffer = transfer
             source.offset = UInt32(i * tileBytes)
@@ -81,7 +86,7 @@ final class GPUConstellationRenderer {
 
     func draw(state: ConstellationRenderState, pass: OpaquePointer, commandBuffer: OpaquePointer,
               origin: SIMD2<Double>, size: SIMD2<Double>, windowSize: SIMD2<Double>) {
-        guard let result = state.result, uploadedID == result.id, textures.count == 9 else { return }
+        guard let result = state.result, uploadedID == result.id, textures.count == result.tiles.count else { return }
         SDL_BindGPUGraphicsPipeline(pass, pipeline)
         for (i, cell) in ConstellationScene.cells(result: result, size: size, zoom: state.zoom).enumerated() {
             let ndc = ImageLayout.ndcRect((x: origin.x + cell.origin.x, y: origin.y + cell.origin.y,

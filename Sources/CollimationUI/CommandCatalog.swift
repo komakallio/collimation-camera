@@ -37,6 +37,15 @@ public enum CommandCatalog {
     }
 
     @MainActor
+    static func gridConstellationDialog(_ engine: CollimationEngine) -> (title: String, message: String, name: String) {
+        (
+            "Save grid constellation TIFF",
+            "Moves the star to 35 positions on a 7×5 rectangular grid across the full sensor, including the corners. Keeps a 128-pixel crop margin, stacks \(engine.stackFrameCount) frames at each position, and writes a 1792×1280 float mosaic.",
+            engine.suggestedConstellationName(layout: .rectangularGrid)
+        )
+    }
+
+    @MainActor
     private static func save(
         _ engine: CollimationEngine,
         _ host: any UIHost,
@@ -65,6 +74,7 @@ public enum CommandCatalog {
         public static let cameraSaveTIFF = "camera.saveTIFF"
         public static let cameraSaveStacked = "camera.saveStacked"
         public static let cameraSaveConstellation = "camera.saveConstellation"
+        public static let cameraSaveGridConstellation = "camera.saveGridConstellation"
         public static let viewOpenConstellation = "view.openConstellation"
         public static let viewCamera = "view.camera"
         public static let viewConstellation = "view.constellation"
@@ -247,6 +257,17 @@ public enum CommandCatalog {
             }
         ),
         Command(
+            id: ID.cameraSaveGridConstellation,
+            menu: .camera,
+            title: "Save Grid Constellation…",
+            shortTitle: "Save Grid Constellation",
+            help: "Sample the full camera field with 35 star placements on a 7×5 rectangular grid, including the corners. Stack each 256 crop and save a float mosaic. Requires a calibrated mount.",
+            isEnabled: { $0.canSaveConstellation },
+            perform: { engine, host in
+                save(engine, host, gridConstellationDialog(engine)) { $0.saveConstellation(to: $1, layout: .rectangularGrid) }
+            }
+        ),
+        Command(
             id: ID.cameraStabilize,
             menu: .camera,
             kind: .toggle(get: { $0.stabilize }, set: { $0.stabilize = $1 }),
@@ -257,7 +278,7 @@ public enum CommandCatalog {
         ),
         Command(
             id: ID.viewOpenConstellation, menu: .view, title: SidebarText.openConstellation,
-            help: "Open a saved 3×3 float constellation TIFF", shortcuts: [.primaryShift("o")],
+            help: "Open a saved 3×3 or 7×5 float constellation TIFF", shortcuts: [.primaryShift("o")],
             isEnabled: { $0.canOpenConstellation },
             perform: { engine, host in
                 host.presentOpenConstellationDialog(directory: engine.snapshotDirectory) { url in
