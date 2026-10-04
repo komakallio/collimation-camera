@@ -16,6 +16,23 @@ struct CoreTests {
             print("Hardware acceptance failed: \(error)")
             exit(1)
         }
+        if CommandLine.arguments.contains("--focus-constellation-only") || CommandLine.arguments.contains("--focus-constellation-viewer-only") {
+            var failures = 0
+            failures += run("focus constellation range and backlash", testFocusConstellationPlan)
+            failures += run("focus constellation TIFF storage", testFocusConstellationTIFF)
+            failures += await runAsync("focus constellation viewer", testFocusConstellationViewer)
+            if !CommandLine.arguments.contains("--focus-constellation-viewer-only") {
+                failures += await runAsync("focus constellation optical sequence", testFocusConstellationEngine)
+                failures += await runAsync("focus constellation cancellation and faults", testFocusConstellationCancellation)
+            }
+            failures += run("tilt TIFF metadata", testTiltTIFFMetadata)
+            failures += run("command catalog enablement", testCommandCatalogEnablement)
+            failures += run("command catalog coverage", testCommandCatalogCoverage)
+            failures += run("command reachability", testCommandReachability)
+            failures += run("ui glyph coverage", testUIGlyphCoverage)
+            print(failures == 0 ? "All focus constellation tests passed." : "\(failures) test(s) failed.")
+            exit(failures == 0 ? 0 : 1)
+        }
         if CommandLine.arguments.contains("--constellation-only") {
             var failures = 0
             failures += run("constellation layout", testConstellationLayout)
@@ -144,6 +161,11 @@ struct CoreTests {
         failures += run("constellation stack crops at sensor edges", testConstellationStackCrops)
         failures += run("constellation layout", testConstellationLayout)
         failures += run("rectangular constellation", testRectangularConstellation)
+        failures += run("focus constellation range and backlash", testFocusConstellationPlan)
+        failures += run("focus constellation TIFF storage", testFocusConstellationTIFF)
+        failures += await runAsync("focus constellation viewer", testFocusConstellationViewer)
+        failures += await runAsync("focus constellation optical sequence", testFocusConstellationEngine)
+        failures += await runAsync("focus constellation cancellation and faults", testFocusConstellationCancellation)
         failures += run("constellation TIFF reading", testConstellationTIFFReading)
         failures += run("constellation centred zoom", testConstellationCenteredZoom)
         failures += await runAsync("constellation viewer state", testConstellationViewerState)

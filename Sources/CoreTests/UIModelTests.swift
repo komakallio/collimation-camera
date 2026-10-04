@@ -50,6 +50,7 @@ func testCommandCatalogEnablement() throws {
         CommandCatalog.ID.viewOverlay,
         CommandCatalog.ID.viewSensorMarks,
         CommandCatalog.ID.cameraStabilize,
+        CommandCatalog.ID.cameraConstellationFocusSweep,
         CommandCatalog.ID.mountRefreshPorts,
         CommandCatalog.ID.filterWheelRefresh,
         CommandCatalog.ID.viewFitToWindow,
@@ -63,6 +64,7 @@ func testCommandCatalogEnablement() throws {
         CommandCatalog.ID.cameraSaveStacked,
         CommandCatalog.ID.cameraSaveConstellation,
         CommandCatalog.ID.cameraSaveGridConstellation,
+        CommandCatalog.ID.cameraCancelFocusConstellation,
         CommandCatalog.ID.mountCalibrate,
         CommandCatalog.ID.mountCenter,
         CommandCatalog.ID.mountConnect,
@@ -98,8 +100,12 @@ func testCommandCatalogEnablement() throws {
     try expectUI(!(try enabled(CommandCatalog.ID.cameraAutoExpose)), "auto exposure off while stacking")
     try expectUI(!(try enabled(CommandCatalog.ID.cameraSaveTIFF)), "save TIFF off while stacking")
     try expectUI(!(try enabled(CommandCatalog.ID.cameraSaveGridConstellation)), "grid capture off while stacking")
+    try expectUI(!(try enabled(CommandCatalog.ID.cameraConstellationFocusSweep)), "focus capture option locked while stacking")
     try expectUI(!engine.canSelectStackCount, "the frame count is locked while stacking")
     engine.setStackingForTesting(false)
+    let toggle = CommandCatalog.command(CommandCatalog.ID.cameraConstellationFocusSweep)!
+    if case .toggle(_, let set) = toggle.kind { set(engine, true) }
+    try expectUI(engine.recordConstellationFocusSweep && !engine.canRecordConstellation, "toggle requires mount and autofocus")
 }
 
 @MainActor

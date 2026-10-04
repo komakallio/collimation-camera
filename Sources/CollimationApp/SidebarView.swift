@@ -111,6 +111,15 @@ struct SidebarView: View {
                         set: { engine.constellationZoom = engine.clampedConstellationZoom(LogSlider.value($0)) }
                     ), range: LogSlider.range(1...8), format: MetricText.constellationZoom(engine.constellationZoom))
                     button(CommandCatalog.ID.constellationFit)
+                    if let result = engine.constellationResult, result.focusRecording != nil {
+                        Text(SidebarText.resultsFocus + "   " + MetricText.constellationFocus(result))
+                            .font(.caption.monospacedDigit())
+                        Slider(value: Binding(get: { Double(engine.constellationFocusIndex) },
+                            set: { engine.selectConstellationFocus(Int($0.rounded())) }), in: 0...32, step: 1)
+                        if engine.isLoadingConstellationFocus {
+                            Text(SidebarText.loadingConstellationFocus).font(.caption)
+                        }
+                    }
                     if let report = engine.constellationResult?.tiltReport {
                         ForEach(Array(TiltText.summary(report).enumerated()), id: \.offset) { _, line in
                             Text(line).font(.caption.monospacedDigit())
@@ -298,8 +307,10 @@ struct SidebarView: View {
                     .help(HelpText.stackCount)
                 }
                 .help(HelpText.stackedSave)
+                toggle(CommandCatalog.ID.cameraConstellationFocusSweep)
                 button(CommandCatalog.ID.cameraSaveConstellation)
                 button(CommandCatalog.ID.cameraSaveGridConstellation)
+                if engine.isCapturingFocusConstellation { button(CommandCatalog.ID.cameraCancelFocusConstellation) }
             }
         }
     }

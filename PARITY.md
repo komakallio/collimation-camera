@@ -38,9 +38,10 @@ are listed under Not yet verified.
 | Status chip | ✅ | ✅ | |
 | Save TIFF | ✅ | ✅ | `canSaveSnapshot`. Native save panel on macOS, `SDL_ShowSaveFileDialog` in the portable app. |
 | Save stacked | ✅ | ✅ | `canSaveStacked`. |
-| Save constellation | ✅ | ✅ | `canSaveConstellation`. |
-| Save grid constellation | ✅ | ✅ | Separate 35-position 7×5 rectangular capture across the sensor width and height, including corners with a 128-pixel crop margin. Centre first, then alternating rows. Uses `canSaveConstellation`; mount capture needs hardware verification. |
-| Constellation results | ✅ | ✅ | Nine circular or 35 rectangular float stacks, shared star-centred 1×–8× zoom, independent histogram and stretch, and Open Constellation. Both mosaic layouts are supported; native macOS UI needs runtime verification. |
+| Save constellation | ✅ | ✅ | `canRecordConstellation`; focus sweep additionally requires autofocus. |
+| Save grid constellation | ✅ | ✅ | Separate 35-position 7×5 rectangular capture across the sensor width and height, including corners with a 128-pixel crop margin. Centre first, then alternating rows. Uses `canRecordConstellation`; mount capture needs hardware verification. |
+| Constellation focus sweep | ✅ | ✅ | Optional for both layouts: centre autofocus, shared ±4000-step range at 250-step increments (33 positions), mount outer loop, focuser inner loop, increasing backlash-compensated approaches. Streaming multi-page float TIFF; cancel, Stop and disconnect stop both devices. Simulated capture is tested; real mount/focuser capture needs hardware verification. |
+| Constellation results | ✅ | ✅ | Nine circular or 35 rectangular float stacks, shared star-centred 1×–8× zoom, independent histogram and stretch, and Open Constellation. Focus recordings add a recorded-position slider that preserves zoom/stretch, loads float strips in bulk, and caches the eight most recent layers. No popup help on the focus slider. Native macOS UI needs runtime verification. |
 | Mount connect | ✅ | ✅ | `canConnectMount`. Tightened at milestone 2: the macOS menu item was ungated. |
 | Mount calibrate | ✅ | ✅ | `canCalibrateMount`. Tightened at milestone 2: the menu item now also needs a connected camera and no stack in flight. |
 | Center star | ✅ | ✅ | `canCenterStar`. Same tightening as calibrate. |

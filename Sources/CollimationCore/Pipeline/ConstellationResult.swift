@@ -38,10 +38,13 @@ public struct ConstellationResult: Sendable {
     public let histogram: Histogram
     public let tiltReport: TiltMeasurementReport?
     public let metadataWarning: String?
+    public let focusRecording: FocusConstellationRecording?
+    public let focusIndex: Int
 
-    public init(tiles: [ConstellationTile], sourceURL: URL, layout: ConstellationLayout = .circular, tiltReport: TiltMeasurementReport? = nil, metadataWarning: String? = nil) throws {
+    public init(tiles: [ConstellationTile], sourceURL: URL, layout: ConstellationLayout = .circular, tiltReport: TiltMeasurementReport? = nil, metadataWarning: String? = nil, focusRecording: FocusConstellationRecording? = nil, focusIndex: Int = 0) throws {
         let cell = CaptureLayout.stackingCropSize
         guard tiles.count == layout.positionCount,
+              focusRecording == nil || (focusRecording!.metadata.layout == layout && focusRecording!.metadata.positions.indices.contains(focusIndex)),
               Set(tiles.map { $0.row * layout.columnCount + $0.column }).count == layout.positionCount,
               tiltReport == nil || layout == .circular,
               tiles.allSatisfy({
@@ -57,6 +60,7 @@ public struct ConstellationResult: Sendable {
         self.sourceURL = sourceURL
         self.tiltReport = tiltReport
         self.metadataWarning = metadataWarning
+        self.focusRecording = focusRecording; self.focusIndex = focusIndex
         var bins = [UInt32](repeating: 0, count: Histogram.binCount)
         var peak: Float = 0
         var samples = 0
@@ -72,6 +76,9 @@ public struct ConstellationResult: Sendable {
     }
 
     public static func load(from url: URL) throws -> ConstellationResult {
+        if let recording = try FocusConstellationRecording.openIfSupported(from: url) {
+            return try recording.loadLayer(index: FocusConstellationPlan.centerIndex)
+        }
         let document = try MonoTIFF.readConstellationWithMetadata(from: url)
         let mosaic = document.image
         guard let layout = ConstellationLayout.forMosaic(width: mosaic.width, height: mosaic.height) else {

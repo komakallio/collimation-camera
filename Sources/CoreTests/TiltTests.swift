@@ -147,16 +147,21 @@ private final class TiltTestFocuser: FocuserDevice, @unchecked Sendable {
     private let lock = NSLock()
     private var value = FocuserSnapshot(serialNumber: "TILT-TEST", position: 30000, maxPosition: 100000, isMoving: false)
     private var moveHistory: [Int] = []
+    private var observedPositions: [MountCentroidSample] = []
+    private let observeMove: (@Sendable () -> MountCentroidSample)?
     private var stops = 0
     var fault = false
+    init(observeMove: (@Sendable () -> MountCentroidSample)? = nil) { self.observeMove = observeMove }
     var position: Int { lock.withLock { value.position } }
     var moves: [Int] { lock.withLock { moveHistory } }
+    var mountPositions: [MountCentroidSample] { lock.withLock { observedPositions } }
     var stopCount: Int { lock.withLock { stops } }
     func connect(path: String) throws -> FocuserSnapshot { lock.withLock { value } }
     func snapshot() throws -> FocuserSnapshot { lock.withLock { value } }
     func move(to position: Int) throws -> FocuserSnapshot {
         try lock.withLock {
             if fault { throw FocuserError.timeout }
+            if let observeMove { observedPositions.append(observeMove()) }
             moveHistory.append(position); value.position = position; return value
         }
     }
@@ -172,6 +177,7 @@ private final class TiltTestMount: MountDevice, @unchecked Sendable {
     private var updated = Date()
     private var starts = 0
     private var halts = 0
+    init(x: Double = 511.5, y: Double = 511.5) { self.x = x; self.y = y }
     var isConnected: Bool { lock.withLock { connected } }
     let protocolName = "Test mount"
     let calibrationRAMultiple = 8.0
@@ -206,8 +212,11 @@ private final class TiltTestCamera: CameraDevice, @unchecked Sendable {
     private var stopped = false
     private let mount: TiltTestMount
     private let focuser: TiltTestFocuser
+    private let frameDelay: Int
     private var flatNorth = false
-    init(mount: TiltTestMount, focuser: TiltTestFocuser) { self.mount = mount; self.focuser = focuser }
+    init(mount: TiltTestMount, focuser: TiltTestFocuser, frameDelay: Int = 12) {
+        self.mount = mount; self.focuser = focuser; self.frameDelay = frameDelay
+    }
     var controls: CameraControls { lock.withLock { control } }
     var currentROI: ROI { lock.withLock { roi } }
     func makeNorthFlat() { lock.withLock { flatNorth = true } }
@@ -220,7 +229,7 @@ private final class TiltTestCamera: CameraDevice, @unchecked Sendable {
     func startVideo() throws { }
     func stopVideo() { }
     func grabFrame(timeoutMs: Int) throws -> Frame {
-        preciseSleep(milliseconds: 12)
+        preciseSleep(milliseconds: frameDelay)
         let config = lock.withLock { (self.roi, stopped, control.exposureMicroseconds, flatNorth) }
         if config.1 { throw CameraError.timeout }
         let (sx, sy) = mount.position()
@@ -359,4 +368,115 @@ func testTiltCancellationAndFaults() async throws {
     }
     try expectUI(!CollimationEngine.isRecoverableTiltOpticalError(AutofocusError.motionTimeout) &&
                  !CollimationEngine.isRecoverableTiltOpticalError(AutofocusError.positionMismatch), "motor failures cannot be skipped")
+}
+
+@MainActor
+func testFocusConstellationEngine() async throws {
+    let mount = TiltTestMount(x: 600, y: 560)
+    let focus = TiltTestFocuser(observeMove: {
+        let (x, y) = mount.position()
+        return MountCentroidSample(SIMD2(x, y))
+    })
+    let camera = TiltTestCamera(mount: mount, focuser: focus, frameDelay: 1)
+    let suite = "collimation-camera.tests.focus-constellation.\(UUID())"
+    let defaults = UserDefaults(suiteName: suite)!
+    let engine = CollimationEngine(defaults: defaults, serialPortPaths: { ["COM4", "COM10"] },
+        focuser: focus, mount: mount, cameraFactory: { _ in camera },
+        autofocusTiming: AutofocusTiming(motionTimeout: 1, frameTimeout: 2, settleSeconds: 0.01, verificationInterval: 0.01),
+        initialCalibration: GuideCalibration(eastRate: SIMD2(0.05, 0), northRate: SIMD2(0, 0.05), sampleDurationMs: 3000),
+        mountSettleMilliseconds: 30)
+    let output = FileManager.default.temporaryDirectory.appendingPathComponent("focus-sequence-\(UUID()).tif")
+    defer {
+        engine.disconnect(); engine.disconnectFocuser(); engine.disconnectMount(); engine.shutdown()
+        defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: output)
+    }
+    engine.selectedFocuserPort = "COM4"; engine.selectedSerialPort = "COM10"
+    engine.autofocusStepSize = 500; engine.stackFrameCount = 10; engine.recordConstellationFocusSweep = true
+    engine.connect(); engine.connectFocuser(); engine.connectMount()
+    try await waitForTilt { engine.canRecordConstellation }
+    engine.saveConstellation(to: output)
+    engine.autofocusStepSize = 111; engine.autofocusTakeUpSteps = 222
+    try expectUI(!engine.canAdjustCamera && !engine.canMoveFocuser && !engine.canAutofocus && !engine.canSelectFilter
+        && !engine.canSelectStackCount && !engine.canSelectConstellationFocusSweep && !engine.canRecordConstellation,
+        "whole sweep owns competing controls")
+    try expectUI(engine.canConnectMount && engine.canConnectFocuser && engine.canStopFocuser, "disconnect and Stop remain available")
+    try await waitForTilt({ !engine.isCapturingFocusConstellation }, timeout: 360)
+    guard let result = engine.constellationResult, let recording = result.focusRecording else {
+        throw UIModelExpectation(description: "focus capture failed: \(engine.errorMessage ?? engine.statusText)")
+    }
+    let metadata = recording.metadata
+    try expectUI(metadata.frameCount == 10 && camera.controls.exposureMicroseconds == metadata.exposureMicroseconds
+        && camera.controls.gain == metadata.gain, "all layers use the selected stack count and centre autofocus exposure/gain")
+    try expectUI(engine.focusConstellationProgress.recordedImages == 9 * 33 && result.focusIndex == 16, "complete nine-star sweep opens best focus")
+    try expectUI(metadata.takeUp == 4000 && metadata.autofocus?.diagnostics?.settings.step == 500,
+                 "autofocus and backlash settings frozen at start")
+    try expectUI(abs(metadata.bestFocus - 30000) < 70, "centre star determines shared reference")
+    let moves = focus.moves, mountPositions = focus.mountPositions
+    let plan = try FocusConstellationPlan(bestFocus: metadata.bestFocus, maximum: metadata.maximum, takeUp: metadata.takeUp)
+    guard let first = moves.firstIndex(of: metadata.bestFocus - 8000) else {
+        throw UIModelExpectation(description: "missing first sweep preload")
+    }
+    let perStar = [metadata.bestFocus - 8000] + plan.positions + [metadata.bestFocus - 4000, metadata.bestFocus]
+    try expectUI(Array(moves[first...]) == Array(repeating: perStar, count: 9).flatMap { $0 },
+                 "mount outer loop, exact 33-position inner loop, full backlash at every reversal")
+    for star in metadata.targets.indices {
+        let target = metadata.targets[star]
+        for i in (first + star * perStar.count)..<(first + (star + 1) * perStar.count) {
+            let point = mountPositions[i]
+            try expectUI(hypot(point.x - target.x, point.y - target.y) <= MountGuide.doneRadiusSensorPixels + 0.2,
+                         "mount remains at the same field position throughout each focus sweep")
+        }
+    }
+    try expectUI(mountPositions.prefix(first).allSatisfy { hypot($0.x - 511.5, $0.y - 511.5) <= MountGuide.doneRadiusSensorPixels + 0.2 },
+                 "star centred before the first autofocus move")
+    let (x, y) = mount.position()
+    try expectUI(hypot(x - 511.5, y - 511.5) <= MountGuide.doneRadiusSensorPixels && focus.position == metadata.bestFocus,
+                 "completed capture restores centre star and centre best focus")
+    try expectUI(engine.canMoveFocuser && !engine.isAutofocusing && !engine.isMountBusy && !engine.isStacking, "completion releases interlocks")
+    for index in [0, 16, 32] {
+        let layer = try recording.loadLayer(index: index)
+        try expectUI(layer.tiles.count == 9 && layer.tiles.allSatisfy { $0.centerDetected }, "recorded focus layer has all stars")
+    }
+}
+
+@MainActor
+func testFocusConstellationCancellation() async throws {
+    for mode in ["immediate", "stop", "disconnect", "fault"] {
+        let mount = TiltTestMount(), focus = TiltTestFocuser()
+        let camera = TiltTestCamera(mount: mount, focuser: focus, frameDelay: 1)
+        let suite = "collimation-camera.tests.focus-cancel.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        let engine = CollimationEngine(defaults: defaults, serialPortPaths: { ["COM4", "COM10"] }, focuser: focus, mount: mount,
+            cameraFactory: { _ in camera }, autofocusTiming: AutofocusTiming(motionTimeout: 1, frameTimeout: 2, settleSeconds: 0.01, verificationInterval: 0.01),
+            initialCalibration: GuideCalibration(eastRate: SIMD2(0.05, 0), northRate: SIMD2(0, 0.05), sampleDurationMs: 3000), mountSettleMilliseconds: 30)
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent("focus-cancel-\(UUID()).tif")
+        let original = Data("previous capture".utf8)
+        try original.write(to: output)
+        defer {
+            engine.disconnect(); engine.disconnectFocuser(); engine.disconnectMount(); engine.shutdown()
+            defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: output)
+        }
+        engine.selectedFocuserPort = "COM4"; engine.selectedSerialPort = "COM10"
+        engine.autofocusStepSize = 500; engine.stackFrameCount = 10; engine.recordConstellationFocusSweep = true
+        engine.connect(); engine.connectFocuser(); engine.connectMount()
+        try await waitForTilt { engine.canRecordConstellation }
+        if mode == "fault" { focus.fault = true }
+        engine.saveConstellation(to: output, layout: .rectangularGrid)
+        if mode == "immediate" { engine.cancelFocusConstellation() }
+        else if mode == "stop" || mode == "disconnect" {
+            try await waitForTilt { engine.focusConstellationProgress.recordedImages >= 1 || !engine.isCapturingFocusConstellation }
+            try expectUI(engine.focusConstellationProgress.recordedImages >= 1, "cancellation exercises recorded sweep: \(engine.errorMessage ?? engine.statusText)")
+            if mode == "stop" { engine.stopFocuser() } else { engine.disconnectMount() }
+        }
+        try await waitForTilt { !engine.isCapturingFocusConstellation }
+        let moves = focus.moves.count, nudges = mount.startCount
+        try await Task.sleep(for: .milliseconds(150))
+        try expectUI(focus.moves.count == moves && mount.startCount == nudges, "no stale motions after sweep termination")
+        try expectUI(try Data(contentsOf: output) == original, "cancel/fault preserves previous recording")
+        try expectUI(!engine.isStacking && !engine.isMountBusy && !engine.isAutofocusing && mount.haltCount > 0 && focus.stopCount > 0,
+                     "termination stops both motors and releases controls")
+        if mode == "immediate" { try expectUI(moves == 0 && nudges == 0, "cancel before start has no motion") }
+        if mode == "fault" { try expectUI(engine.errorMessage != nil, "motor error reported") }
+        else { try expectUI(engine.mountStatus == "Focus constellation cancelled", "cancellation reported after live tracking resumes") }
+    }
 }

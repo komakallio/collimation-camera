@@ -69,6 +69,14 @@ enum Sidebar {
                 display: MetricText.constellationZoom(engine.constellationZoom),
                 onChange: { engine.constellationZoom = engine.clampedConstellationZoom($0) }, onCommit: {})
             command(CommandCatalog.ID.constellationFit, engine: engine, host: host)
+            if let result = engine.constellationResult, result.focusRecording != nil {
+                secondary(SidebarText.resultsFocus + "   " + MetricText.constellationFocus(result))
+                var focusIndex = Int32(engine.constellationFocusIndex)
+                if igSliderInt("##recordedConstellationFocus", &focusIndex, 0, 32, "", 0) {
+                    engine.selectConstellationFocus(Int(focusIndex))
+                }
+                if engine.isLoadingConstellationFocus { secondary(SidebarText.loadingConstellationFocus) }
+            }
             if let report = engine.constellationResult?.tiltReport {
                 for line in TiltText.summary(report) { secondary(line) }
             }
@@ -171,8 +179,10 @@ enum Sidebar {
             if let count = Int(value) { engine.stackFrameCount = count }
         }
 
+        command(CommandCatalog.ID.cameraConstellationFocusSweep, engine: engine, host: host)
         command(CommandCatalog.ID.cameraSaveConstellation, engine: engine, host: host)
         command(CommandCatalog.ID.cameraSaveGridConstellation, engine: engine, host: host)
+        if engine.isCapturingFocusConstellation { command(CommandCatalog.ID.cameraCancelFocusConstellation, engine: engine, host: host) }
     }
 
     private static func filterWheelSection(engine: CollimationEngine, host: any UIHost) {

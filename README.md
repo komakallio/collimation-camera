@@ -17,7 +17,7 @@ They drive the same engine and take every label, shortcut, and HUD from the same
 - ROI sizes 256 / 512 / 1024 / 2048 / full, plus display zoom (25%–800%, pinch/scroll)
 - Auto-center the ROI on the star; full-frame binned search if it leaves the ROI
 - Manual and auto stretch (histogram percentiles)
-- Constellation capture: nine circular samples or a denser 7×5 rectangular grid across the full camera field; review and reopen float TIFF mosaics with shared, star-centred zoom and independent display stretch
+- Constellation capture: nine circular samples or a denser 7×5 rectangular grid across the full camera field, with optional 33-position focus sweeps; review and reopen float TIFFs with shared, star-centred zoom, recorded-focus selection and independent display stretch
 - Numeric coma: concentricity of the outer ring vs. the secondary shadow, plus sector asymmetry
 - Simulator camera so you can develop and test without hardware
 - Player One and ZWO cameras through one device list, both loaded at run time
@@ -35,6 +35,25 @@ across alternating rows, and saves a 1792×1280 float TIFF. Both captures requir
 a calibrated mount and use the selected frame count at every position; the
 grid collects about four times as many frames as the circular capture.
 
+Enable **Record focus sweep** before either save command to record every star
+at 33 focus positions. The app centres the star and runs autofocus once, then
+uses that centre best focus −4000 through +4000 steps, inclusive, in 250-step
+increments for every field position. It moves the mount to a star, records the
+entire focus sweep there, and then moves to the next star. Each sweep starts
+below its first position by the configured autofocus take-up distance and
+advances in increasing focuser position to compensate for backlash. It restores
+centre best focus with the same approach before moving the mount. The complete
+range, including take-up, must fit within calibrated focuser travel.
+
+Focus capture requires a connected focuser with autofocus available. It holds
+the centre autofocus exposure and gain for all stacks, and uses the selected
+frame count for each image. **Cancel focus capture**, focuser **Stop**, or a
+device disconnect aborts the capture and discards the incomplete file. A full
+circular sweep records 297 stacks; the grid records 1,155. The single multi-page
+32-bit float TIFF contains one 256×256 star crop per page, ordered by star then
+focus, with the focus scale and autofocus result in its metadata. Images stream
+to disk during capture (about 78 MB circular or 303 MB grid).
+
 Use **Camera** and **Constellation Results**
 at the top of the sidebar to switch views. Camera capture continues while
 reviewing results, and disconnecting preserves the current result.
@@ -42,6 +61,14 @@ reviewing results, and disconnecting preserves the current result.
 **Open Constellation…** (Ctrl+Shift+O on Windows, ⌘⇧O on macOS) opens an existing
 768×768 circular or 1792×1280 grid, uncompressed 32-bit float mono constellation
 TIFF saved by this app.
+It also opens focus constellation TIFFs at the centre best-focus layer. The
+additional **Recorded focus** slider selects the same recorded position for
+every star and shows its absolute position and offset from centre best focus.
+It preserves zoom and stretch and loads only the selected layer. The eight most
+recently viewed layers stay cached so returning to them needs no file read or
+star analysis (up to about 74 MB of float pixels for the grid). The focus slider
+has no popup tooltip over the images. Viewing a
+recording does not move the focuser or require connected hardware.
 Each new result starts fitted, with an automatic stretch. The shared **Results
 zoom** slider magnifies all stars from 1× to 8× around their own centres;
 **Fit** resets it. The wheel, and pinch on macOS, update that same zoom.
@@ -63,6 +90,12 @@ The core test runner also supports `--constellation-only`. Set
 to include them in the checks. The optional `--mount-port COM10` connects the
 mount and verifies that viewing results leaves it idle; it uses the normal
 mount connection, which stops tracking, and does not slew or capture a new mosaic.
+`--focus-constellation-only` checks sweep ranges, backlash, TIFF round trips for
+both layouts, viewer selection, a complete simulated optical capture and
+cancellation/fault handling. Set `COLLIMATION_FOCUS_CONSTELLATION_FIXTURE_DIR`
+to save its synthetic focus TIFFs for viewer checks.
+`--focus-constellation-viewer-only` runs the storage, viewer and shared UI checks
+without the simulated motor/capture sequence.
 
 ## ESATTO focuser
 

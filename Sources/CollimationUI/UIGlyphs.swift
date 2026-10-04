@@ -35,8 +35,10 @@ public enum UIGlyphs {
     /// — on Windows it spells out Ctrl, Shift, Alt, and Enter.
     public static let prose: [Glyph] = [
         Glyph("section sign", 0x00A7),
+        Glyph("plus-minus", 0x00B1),
         Glyph("greek small alpha", 0x03B1),
         Glyph("leftwards arrow with hook", 0x21A9),
+        Glyph("minus", 0x2212),
         Glyph("upwards white arrow", 0x21E7),
         Glyph("place of interest sign", 0x2318),
         Glyph("option key", 0x2325),

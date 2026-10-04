@@ -29,7 +29,8 @@ public enum CommandCatalog {
 
     @MainActor
     static func constellationDialog(_ engine: CollimationEngine) -> (title: String, message: String, name: String) {
-        (
+        if engine.recordConstellationFocusSweep { return focusConstellationDialog(engine, layout: .circular) }
+        return (
             "Save constellation TIFF",
             "Moves the star to the sensor center and eight points on a circle 80% of the frame height, stacks \(engine.stackFrameCount) frames at each 256 crop, and writes a 3×3 mosaic.",
             engine.suggestedConstellationName()
@@ -38,11 +39,19 @@ public enum CommandCatalog {
 
     @MainActor
     static func gridConstellationDialog(_ engine: CollimationEngine) -> (title: String, message: String, name: String) {
-        (
+        if engine.recordConstellationFocusSweep { return focusConstellationDialog(engine, layout: .rectangularGrid) }
+        return (
             "Save grid constellation TIFF",
             "Moves the star to 35 positions on a 7×5 rectangular grid across the full sensor, including the corners. Keeps a 128-pixel crop margin, stacks \(engine.stackFrameCount) frames at each position, and writes a 1792×1280 float mosaic.",
             engine.suggestedConstellationName(layout: .rectangularGrid)
         )
+    }
+
+    @MainActor
+    static func focusConstellationDialog(_ engine: CollimationEngine, layout: ConstellationLayout) -> (title: String, message: String, name: String) {
+        ("Save focus constellation TIFF",
+         "Centres the star and autofocuses, then records \(layout.positionCount) star placements at 33 common focus positions: centre best focus ±4000 steps in 250-step increments. Stacks \(engine.stackFrameCount) frames at each position. Uses the autofocus take-up setting for backlash, and saves all focus layers in one TIFF.",
+         engine.suggestedConstellationName(layout: layout))
     }
 
     @MainActor
@@ -75,6 +84,8 @@ public enum CommandCatalog {
         public static let cameraSaveStacked = "camera.saveStacked"
         public static let cameraSaveConstellation = "camera.saveConstellation"
         public static let cameraSaveGridConstellation = "camera.saveGridConstellation"
+        public static let cameraConstellationFocusSweep = "camera.constellationFocusSweep"
+        public static let cameraCancelFocusConstellation = "camera.cancelFocusConstellation"
         public static let viewOpenConstellation = "view.openConstellation"
         public static let viewCamera = "view.camera"
         public static let viewConstellation = "view.constellation"
@@ -251,7 +262,7 @@ public enum CommandCatalog {
             title: "Save Constellation…",
             shortTitle: "Save Constellation",
             help: "Move the star to the sensor center and eight points on an 80% circle, stack each 256 crop, and save a 3×3 mosaic.",
-            isEnabled: { $0.canSaveConstellation },
+            isEnabled: { $0.canRecordConstellation },
             perform: { engine, host in
                 save(engine, host, constellationDialog(engine)) { $0.saveConstellation(to: $1) }
             }
@@ -262,10 +273,23 @@ public enum CommandCatalog {
             title: "Save Grid Constellation…",
             shortTitle: "Save Grid Constellation",
             help: "Sample the full camera field with 35 star placements on a 7×5 rectangular grid, including the corners. Stack each 256 crop and save a float mosaic. Requires a calibrated mount.",
-            isEnabled: { $0.canSaveConstellation },
+            isEnabled: { $0.canRecordConstellation },
             perform: { engine, host in
                 save(engine, host, gridConstellationDialog(engine)) { $0.saveConstellation(to: $1, layout: .rectangularGrid) }
             }
+        ),
+        Command(
+            id: ID.cameraConstellationFocusSweep, menu: .camera,
+            kind: .toggle(get: { $0.recordConstellationFocusSweep }, set: { $0.recordConstellationFocusSweep = $1 }),
+            title: "Record Constellation Focus Sweep", shortTitle: "Record focus sweep",
+            help: HelpText.constellationFocusSweep,
+            isEnabled: { $0.canSelectConstellationFocusSweep }
+        ),
+        Command(
+            id: ID.cameraCancelFocusConstellation, menu: .camera, title: "Cancel Focus Constellation",
+            shortTitle: "Cancel focus capture", help: "Stop both motors and cancel the focus constellation recording.",
+            isEnabled: { $0.isCapturingFocusConstellation },
+            perform: { engine, _ in engine.cancelFocusConstellation() }
         ),
         Command(
             id: ID.cameraStabilize,
@@ -278,7 +302,7 @@ public enum CommandCatalog {
         ),
         Command(
             id: ID.viewOpenConstellation, menu: .view, title: SidebarText.openConstellation,
-            help: "Open a saved 3×3 or 7×5 float constellation TIFF", shortcuts: [.primaryShift("o")],
+            help: "Open a saved circular, grid or focus-sweep float constellation TIFF", shortcuts: [.primaryShift("o")],
             isEnabled: { $0.canOpenConstellation },
             perform: { engine, host in
                 host.presentOpenConstellationDialog(directory: engine.snapshotDirectory) { url in

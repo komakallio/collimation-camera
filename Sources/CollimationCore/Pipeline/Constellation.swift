@@ -1,6 +1,6 @@
 import Foundation
 
-public enum ConstellationLayout: CaseIterable, Equatable, Sendable {
+public enum ConstellationLayout: String, CaseIterable, Equatable, Codable, Sendable {
     case circular
     case rectangularGrid
 

@@ -27,6 +27,8 @@ public enum SidebarText {
     public static let openConstellation = "Open Constellation…"
     public static let resultsStretchSection = "Results stretch"
     public static let resultsZoom = "Results zoom"
+    public static let resultsFocus = "Recorded focus"
+    public static let loadingConstellationFocus = "Loading recorded focus…"
     public static let centerNotDetected = "Centre not detected"
     public static let loadingConstellation = "Loading constellation…"
     public static let constellationEmpty = "Open a saved constellation or save a new capture."
