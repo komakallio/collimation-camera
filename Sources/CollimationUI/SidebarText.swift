@@ -51,6 +51,8 @@ public enum SidebarText {
 
     public static let exposure = "Exposure"
     public static let gain = "Gain"
+    public static let constellationFocusSweepRange = "Sweep range (± steps)"
+    public static let constellationFocusSweepStep = "Sweep step size"
     public static let zoom = "Zoom"
     public static let black = "Black"
     public static let white = "White"

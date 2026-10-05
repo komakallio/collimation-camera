@@ -5,7 +5,7 @@ import Foundation
 func testFocusConstellationPlan() throws {
     let plan = try FocusConstellationPlan(bestFocus: 30000, maximum: 100000, takeUp: 4000)
     try expectUI(plan.positions == Array(stride(from: 26000, through: 34000, by: 250)), "33 inclusive absolute positions")
-    try expectUI(plan.positions[FocusConstellationPlan.centerIndex] == plan.bestFocus, "middle layer is centre best focus")
+    try expectUI(plan.positions[plan.settings.centerIndex] == plan.bestFocus, "middle layer is centre best focus")
     try expectUI(plan.moves(for: 0) == [22000, 26000], "take up backlash below the first exposure")
     for i in 1..<33 {
         try expectUI(plan.moves(for: i) == [plan.positions[i]] && plan.positions[i] - plan.positions[i - 1] == 250,
@@ -19,17 +19,35 @@ func testFocusConstellationPlan() throws {
             throw UIModelExpectation(description: "unsafe sweep range accepted")
         } catch is CameraError {}
     }
+    let custom = try FocusConstellationSettings(range: 2000, step: 500)
+    let shorter = try FocusConstellationPlan(bestFocus: 6000, maximum: 8000, takeUp: 4000, settings: custom)
+    try expectUI(shorter.positions == Array(stride(from: 4000, through: 8000, by: 500))
+        && shorter.positions[custom.centerIndex] == 6000 && shorter.moves(for: 0) == [0, 4000],
+        "custom range and step retain both endpoints, best focus and backlash at travel boundaries")
+    let nearMaximum = try FocusConstellationPlan(bestFocus: Int.max - 2000, maximum: Int.max,
+        takeUp: 4000, settings: custom)
+    try expectUI(nearMaximum.positions.last == Int.max, "large safe positions do not overflow")
+    for (range, step) in [(0, 250), (-1000, 250), (4000, 0), (4000, -250), (4000, 300),
+                          (250, 500), (Int.max, 1), (7250, 250)] {
+        do {
+            _ = try FocusConstellationSettings(range: range, step: step)
+            throw UIModelExpectation(description: "invalid sweep settings accepted")
+        } catch is CameraError {}
+    }
+    try expectUI(try FocusConstellationSettings(range: 7000, step: 250).count == 57,
+                 "largest supported recording has 57 focus positions")
 }
 
-private func focusMetadata(_ layout: ConstellationLayout) throws -> FocusConstellationMetadata {
-    FocusConstellationMetadata(plan: try FocusConstellationPlan(bestFocus: 30000, maximum: 100000, takeUp: 4000),
+private func focusMetadata(_ layout: ConstellationLayout,
+                           settings: FocusConstellationSettings = try! FocusConstellationSettings()) throws -> FocusConstellationMetadata {
+    FocusConstellationMetadata(plan: try FocusConstellationPlan(bestFocus: 30000, maximum: 100000, takeUp: 4000, settings: settings),
         maximum: 100000, layout: layout, sensorWidth: 3856, sensorHeight: 2180, frameCount: 100,
         exposureMicroseconds: 10000, gain: 120)
 }
 
-private func focusFixtureImages() -> [StackedImage] {
-    (0..<33).map { index in
-        let radius = 2 + Double(abs(index - 16)) * 2
+private func focusFixtureImages(count: Int = 33) -> [StackedImage] {
+    (0..<count).map { index in
+        let radius = 2 + Double(abs(index - count / 2)) * 2
         var pixels = [Float](repeating: 200.25, count: 256 * 256)
         for y in 80..<176 { for x in 80..<176 {
             let r = hypot(Double(x) - 127.5, Double(y) - 127.5)
@@ -39,10 +57,11 @@ private func focusFixtureImages() -> [StackedImage] {
     }
 }
 
-private func writeFocusFixture(to url: URL, layout: ConstellationLayout) throws {
-    let metadata = try focusMetadata(layout)
+private func writeFocusFixture(to url: URL, layout: ConstellationLayout,
+                               settings: FocusConstellationSettings = try! FocusConstellationSettings()) throws {
+    let metadata = try focusMetadata(layout, settings: settings)
     let writer = try FocusConstellationWriter(to: url, metadata: metadata)
-    let images = focusFixtureImages()
+    let images = focusFixtureImages(count: settings.count)
     for star in metadata.targets.indices {
         for index in metadata.positions.indices {
             var image = images[index]
@@ -58,6 +77,7 @@ func testFocusConstellationTIFF() throws {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     for layout in ConstellationLayout.allCases {
+        let settings = try FocusConstellationSettings(range: layout == .circular ? 4000 : 5000, step: 250)
         let url = directory.appendingPathComponent("\(layout.rawValue).tif")
         let oldFile = Data("previous completed recording".utf8)
         try oldFile.write(to: url)
@@ -72,12 +92,12 @@ func testFocusConstellationTIFF() throws {
         let remaining = try FileManager.default.contentsOfDirectory(atPath: directory.path)
         try expectUI(!remaining.contains(where: { $0.hasPrefix(".focus-") }),
                      "cancelled writer removes its temporary file")
-        try writeFocusFixture(to: url, layout: layout)
+        try writeFocusFixture(to: url, layout: layout, settings: settings)
         guard let recording = try FocusConstellationRecording.openIfSupported(from: url) else {
             throw UIModelExpectation(description: "recording not recognised")
         }
-        try expectUI(recording.metadata == focusMetadata(layout), "complete metadata round trip")
-        for index in 0..<33 {
+        try expectUI(recording.metadata == focusMetadata(layout, settings: settings), "complete metadata round trip")
+        for index in 0..<settings.count {
             let result = try recording.loadLayer(index: index)
             try expectUI(result.layout == layout && result.focusIndex == index && result.focusRecording?.id == recording.id,
                          "layer keeps recording identity and focus coordinate")
@@ -87,9 +107,9 @@ func testFocusConstellationTIFF() throws {
             }
         }
         let reopened = try ConstellationResult.load(from: url)
-        try expectUI(reopened.focusIndex == 16 && reopened.tiles.count == layout.positionCount, "reopening selects best-focus layer")
+        try expectUI(reopened.focusIndex == settings.centerIndex && reopened.tiles.count == layout.positionCount, "reopening selects best-focus layer")
         try expectUI(MetricText.constellationFocus(reopened) == "30000 (+0 steps)", "absolute and relative focus label")
-        try expectUI(MetricText.constellationFocus(try recording.loadLayer(index: 0)) == "26000 (-4000 steps)", "negative focus label")
+        try expectUI(MetricText.constellationFocus(try recording.loadLayer(index: 0)) == "\(30000 - settings.range) (-\(settings.range) steps)", "negative focus label")
         if let fixtureDirectory = ProcessInfo.processInfo.environment["COLLIMATION_FOCUS_CONSTELLATION_FIXTURE_DIR"] {
             let targetDirectory = URL(fileURLWithPath: fixtureDirectory)
             try FileManager.default.createDirectory(at: targetDirectory, withIntermediateDirectories: true)

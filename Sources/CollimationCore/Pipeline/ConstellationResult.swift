@@ -77,7 +77,7 @@ public struct ConstellationResult: Sendable {
 
     public static func load(from url: URL) throws -> ConstellationResult {
         if let recording = try FocusConstellationRecording.openIfSupported(from: url) {
-            return try recording.loadLayer(index: FocusConstellationPlan.centerIndex)
+            return try recording.loadLayer(index: recording.metadata.positions.count / 2)
         }
         let document = try MonoTIFF.readConstellationWithMetadata(from: url)
         let mosaic = document.image

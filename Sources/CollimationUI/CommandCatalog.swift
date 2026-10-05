@@ -49,8 +49,9 @@ public enum CommandCatalog {
 
     @MainActor
     static func focusConstellationDialog(_ engine: CollimationEngine, layout: ConstellationLayout) -> (title: String, message: String, name: String) {
-        ("Save focus constellation TIFF",
-         "Centres the star and autofocuses, then records \(layout.positionCount) star placements at 33 common focus positions: centre best focus ±4000 steps in 250-step increments. Stacks \(engine.stackFrameCount) frames at each position. Uses the autofocus take-up setting for backlash, and saves all focus layers in one TIFF.",
+        let count = engine.constellationFocusSweepSettings?.count ?? 0
+        return ("Save focus constellation TIFF",
+         "Centres the star and autofocuses, then records \(layout.positionCount) star placements at \(count) common focus positions: centre best focus ±\(engine.constellationFocusSweepRange) steps in \(engine.constellationFocusSweepStep)-step increments. Stacks \(engine.stackFrameCount) frames at each position. Uses the autofocus take-up setting for backlash, and saves all focus layers in one TIFF.",
          engine.suggestedConstellationName(layout: layout))
     }
 

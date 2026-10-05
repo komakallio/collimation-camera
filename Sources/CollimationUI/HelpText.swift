@@ -7,7 +7,9 @@ import Foundation
 /// pickers, sections, and HUD widgets. Both apps show them: `.help` on macOS,
 /// `igSetItemTooltip` after the item in ImGui.
 public enum HelpText {
-    public static let constellationFocusSweep = "Centre the star and autofocus, then record every constellation star from centre best focus −4000 to +4000 steps at 250-step intervals. Move the mount once per star and sweep focus upwards after backlash take-up. Uses the selected stacking count at all 33 focus positions. Requires a connected focuser and calibrated mount."
+    public static let constellationFocusSweep = "Centre the star and autofocus, then record every constellation star across the configured sweep range and step size. Move the mount once per star and sweep focus upwards after backlash take-up. Uses the selected stacking count at every focus position. Requires a connected focuser and calibrated mount."
+    public static let constellationFocusSweepRange = "Distance in motor steps on each side of centre best focus. Default ±4000. Must be positive and a multiple of the sweep step size. The full range and autofocus take-up must fit focuser travel."
+    public static let constellationFocusSweepStep = "Spacing in motor steps between recorded focus positions. Default 250. Must be positive and divide the sweep range exactly, including centre best focus and both endpoints. At most \(FocusConstellationSettings.maximumCount) positions per star."
     public static let focuser = "ESATTO USB focuser. In decreases the position; Out increases it. Moves use the device's calibrated travel range."
     public static let focuserStepSize = "Distance in motor steps for each In or Out move."
     public static let focuserTarget = "Absolute position in motor steps. Enter a target, then press Go to."

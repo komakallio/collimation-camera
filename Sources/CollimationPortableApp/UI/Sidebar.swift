@@ -180,6 +180,15 @@ enum Sidebar {
         }
 
         command(CommandCatalog.ID.cameraConstellationFocusSweep, engine: engine, host: host)
+        integerInput(
+            SidebarText.constellationFocusSweepRange, value: engine.constellationFocusSweepRange,
+            enabled: engine.recordConstellationFocusSweep && engine.canSelectConstellationFocusSweep, help: HelpText.constellationFocusSweepRange
+        ) { engine.constellationFocusSweepRange = $0 }
+        integerInput(
+            SidebarText.constellationFocusSweepStep, value: engine.constellationFocusSweepStep,
+            enabled: engine.recordConstellationFocusSweep && engine.canSelectConstellationFocusSweep, help: HelpText.constellationFocusSweepStep
+        ) { engine.constellationFocusSweepStep = $0 }
+        if engine.recordConstellationFocusSweep, let warning = engine.constellationFocusSweepWarning { secondary(warning) }
         command(CommandCatalog.ID.cameraSaveConstellation, engine: engine, host: host)
         command(CommandCatalog.ID.cameraSaveGridConstellation, engine: engine, host: host)
         if engine.isCapturingFocusConstellation { command(CommandCatalog.ID.cameraCancelFocusConstellation, engine: engine, host: host) }

@@ -308,6 +308,21 @@ struct SidebarView: View {
                 }
                 .help(HelpText.stackedSave)
                 toggle(CommandCatalog.ID.cameraConstellationFocusSweep)
+                Group {
+                    Text(SidebarText.constellationFocusSweepRange).font(.caption)
+                    TextField(SidebarText.constellationFocusSweepRange, value: $engine.constellationFocusSweepRange, format: .number.grouping(.never))
+                        .textFieldStyle(.roundedBorder)
+                        .help(HelpText.constellationFocusSweepRange)
+                    Text(SidebarText.constellationFocusSweepStep).font(.caption)
+                    TextField(SidebarText.constellationFocusSweepStep, value: $engine.constellationFocusSweepStep, format: .number.grouping(.never))
+                        .textFieldStyle(.roundedBorder)
+                        .help(HelpText.constellationFocusSweepStep)
+                    if engine.recordConstellationFocusSweep, let warning = engine.constellationFocusSweepWarning {
+                        Text(warning).font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .disabled(!engine.recordConstellationFocusSweep || !engine.canSelectConstellationFocusSweep)
                 button(CommandCatalog.ID.cameraSaveConstellation)
                 button(CommandCatalog.ID.cameraSaveGridConstellation)
                 if engine.isCapturingFocusConstellation { button(CommandCatalog.ID.cameraCancelFocusConstellation) }

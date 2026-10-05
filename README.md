@@ -17,7 +17,7 @@ They drive the same engine and take every label, shortcut, and HUD from the same
 - ROI sizes 256 / 512 / 1024 / 2048 / full, plus display zoom (25%–800%, pinch/scroll)
 - Auto-center the ROI on the star; full-frame binned search if it leaves the ROI
 - Manual and auto stretch (histogram percentiles)
-- Constellation capture: nine circular samples or a denser 7×5 rectangular grid across the full camera field, with optional 33-position focus sweeps; review and reopen float TIFFs with shared, star-centred zoom, recorded-focus selection and independent display stretch
+- Constellation capture: nine circular samples or a denser 7×5 rectangular grid across the full camera field, with configurable focus sweeps; review and reopen float TIFFs with shared, star-centred zoom, recorded-focus selection and independent display stretch
 - Numeric coma: concentricity of the outer ring vs. the secondary shadow, plus sector asymmetry
 - Simulator camera so you can develop and test without hardware
 - Player One and ZWO cameras through one device list, both loaded at run time
@@ -35,10 +35,15 @@ across alternating rows, and saves a 1792×1280 float TIFF. Both captures requir
 a calibrated mount and use the selected frame count at every position; the
 grid collects about four times as many frames as the circular capture.
 
-Enable **Record focus sweep** before either save command to record every star
-at 33 focus positions. The app centres the star and runs autofocus once, then
-uses that centre best focus −4000 through +4000 steps, inclusive, in 250-step
-increments for every field position. It moves the mount to a star, records the
+Enable **Record focus sweep** before either save command, then set **Sweep range
+(± steps)** and **Sweep step size** in the Camera panel. Range is the distance
+on each side of centre best focus; the defaults are ±4000 steps with 250-step
+spacing (33 positions). Both values must be positive and the range must be a
+multiple of the step size, so centre best focus and both endpoints are recorded.
+Up to 57 positions per star fit within the recording size limit. Invalid values
+show an explanation and disable focus capture; controls are locked during capture.
+The app centres the star and runs autofocus once, then uses the selected range
+and step size for every field position. It moves the mount to a star, records the
 entire focus sweep there, and then moves to the next star. Each sweep starts
 below its first position by the configured autofocus take-up distance and
 advances in increasing focuser position to compensate for backlash. It restores
@@ -49,10 +54,10 @@ Focus capture requires a connected focuser with autofocus available. It holds
 the centre autofocus exposure and gain for all stacks, and uses the selected
 frame count for each image. **Cancel focus capture**, focuser **Stop**, or a
 device disconnect aborts the capture and discards the incomplete file. A full
-circular sweep records 297 stacks; the grid records 1,155. The single multi-page
+circular sweep with the default settings records 297 stacks; the grid records 1,155. The single multi-page
 32-bit float TIFF contains one 256×256 star crop per page, ordered by star then
 focus, with the focus scale and autofocus result in its metadata. Images stream
-to disk during capture (about 78 MB circular or 303 MB grid).
+to disk during capture (about 78 MB circular or 303 MB grid with the defaults).
 
 Use **Camera** and **Constellation Results**
 at the top of the sidebar to switch views. Camera capture continues while

@@ -392,10 +392,17 @@ func testFocusConstellationEngine() async throws {
     }
     engine.selectedFocuserPort = "COM4"; engine.selectedSerialPort = "COM10"
     engine.autofocusStepSize = 500; engine.stackFrameCount = 10; engine.recordConstellationFocusSweep = true
+    engine.constellationFocusSweepRange = 2000; engine.constellationFocusSweepStep = 500
     engine.connect(); engine.connectFocuser(); engine.connectMount()
     try await waitForTilt { engine.canRecordConstellation }
+    engine.constellationFocusSweepStep = 0
+    try expectUI(!engine.canRecordConstellation && engine.constellationFocusSweepWarning != nil,
+                 "invalid sweep settings prevent capture before any motor moves")
+    engine.constellationFocusSweepStep = 500
+    try expectUI(engine.suggestedConstellationName().contains("-focus9-"), "filename uses the configured focus count")
     engine.saveConstellation(to: output)
     engine.autofocusStepSize = 111; engine.autofocusTakeUpSteps = 222
+    engine.constellationFocusSweepRange = 4000; engine.constellationFocusSweepStep = 250
     try expectUI(!engine.canAdjustCamera && !engine.canMoveFocuser && !engine.canAutofocus && !engine.canSelectFilter
         && !engine.canSelectStackCount && !engine.canSelectConstellationFocusSweep && !engine.canRecordConstellation,
         "whole sweep owns competing controls")
@@ -407,18 +414,21 @@ func testFocusConstellationEngine() async throws {
     let metadata = recording.metadata
     try expectUI(metadata.frameCount == 10 && camera.controls.exposureMicroseconds == metadata.exposureMicroseconds
         && camera.controls.gain == metadata.gain, "all layers use the selected stack count and centre autofocus exposure/gain")
-    try expectUI(engine.focusConstellationProgress.recordedImages == 9 * 33 && result.focusIndex == 16, "complete nine-star sweep opens best focus")
+    try expectUI(engine.focusConstellationProgress.recordedImages == 9 * 9 && result.focusIndex == 4
+        && engine.focusConstellationProgress.focusCount == 9, "custom nine-position sweep opens best focus and reports correct progress")
     try expectUI(metadata.takeUp == 4000 && metadata.autofocus?.diagnostics?.settings.step == 500,
                  "autofocus and backlash settings frozen at start")
     try expectUI(abs(metadata.bestFocus - 30000) < 70, "centre star determines shared reference")
     let moves = focus.moves, mountPositions = focus.mountPositions
-    let plan = try FocusConstellationPlan(bestFocus: metadata.bestFocus, maximum: metadata.maximum, takeUp: metadata.takeUp)
-    guard let first = moves.firstIndex(of: metadata.bestFocus - 8000) else {
+    let sweep = try FocusConstellationSettings(range: 2000, step: 500)
+    let plan = try FocusConstellationPlan(bestFocus: metadata.bestFocus, maximum: metadata.maximum, takeUp: metadata.takeUp, settings: sweep)
+    try expectUI(metadata.positions == plan.positions, "sweep settings frozen at capture start")
+    guard let first = moves.firstIndex(of: metadata.bestFocus - 6000) else {
         throw UIModelExpectation(description: "missing first sweep preload")
     }
-    let perStar = [metadata.bestFocus - 8000] + plan.positions + [metadata.bestFocus - 4000, metadata.bestFocus]
+    let perStar = [metadata.bestFocus - 6000] + plan.positions + [metadata.bestFocus - 4000, metadata.bestFocus]
     try expectUI(Array(moves[first...]) == Array(repeating: perStar, count: 9).flatMap { $0 },
-                 "mount outer loop, exact 33-position inner loop, full backlash at every reversal")
+                 "mount outer loop, configured nine-position inner loop, full backlash at every reversal")
     for star in metadata.targets.indices {
         let target = metadata.targets[star]
         for i in (first + star * perStar.count)..<(first + (star + 1) * perStar.count) {
@@ -433,7 +443,7 @@ func testFocusConstellationEngine() async throws {
     try expectUI(hypot(x - 511.5, y - 511.5) <= MountGuide.doneRadiusSensorPixels && focus.position == metadata.bestFocus,
                  "completed capture restores centre star and centre best focus")
     try expectUI(engine.canMoveFocuser && !engine.isAutofocusing && !engine.isMountBusy && !engine.isStacking, "completion releases interlocks")
-    for index in [0, 16, 32] {
+    for index in [0, 4, 8] {
         let layer = try recording.loadLayer(index: index)
         try expectUI(layer.tiles.count == 9 && layer.tiles.allSatisfy { $0.centerDetected }, "recorded focus layer has all stars")
     }

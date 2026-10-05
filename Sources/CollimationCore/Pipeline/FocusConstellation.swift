@@ -4,27 +4,50 @@ public struct FocusConstellationProgress: Equatable, Sendable {
     public var star = 0
     public var stars = 0
     public var focusIndex = 0
+    public var focusCount = 0
     public var focusPosition: Int?
     public var recordedImages = 0
     public init() {}
 }
 
+public struct FocusConstellationSettings: Equatable, Sendable {
+    public static let defaultRange = 4000
+    public static let defaultStep = 250
+    // 35 stars × 57 float crops, including TIFF overhead, fit the reader's 512 MiB limit.
+    public static let maximumCount = 57
+    public let range: Int
+    public let step: Int
+    public var centerIndex: Int { range / step }
+    public var count: Int { centerIndex * 2 + 1 }
+
+    public init(range: Int = Self.defaultRange, step: Int = Self.defaultStep) throws {
+        guard range > 0, step > 0, range % step == 0 else {
+            throw CameraError.unsupported("Sweep range and step size must be positive, and range must be a multiple of step size.")
+        }
+        guard range / step <= (Self.maximumCount - 1) / 2 else {
+            throw CameraError.unsupported("Use a larger sweep step size or smaller range: at most \(Self.maximumCount) focus positions fit in one recording.")
+        }
+        self.range = range; self.step = step
+    }
+}
+
 public struct FocusConstellationPlan: Equatable, Sendable {
-    public static let radius = 4000
-    public static let increment = 250
-    public static let count = 33
-    public static let centerIndex = 16
+    public let settings: FocusConstellationSettings
     public let bestFocus: Int
     public let takeUp: Int
     public let positions: [Int]
 
-    public init(bestFocus: Int, maximum: Int, takeUp: Int) throws {
-        guard takeUp > 0, maximum >= Self.radius, bestFocus >= Self.radius,
-              takeUp <= bestFocus - Self.radius, bestFocus <= maximum - Self.radius else {
-            throw CameraError.unsupported("The full focus sweep and backlash take-up must fit within focuser travel: best focus −4000 − take-up through best focus +4000 steps.")
+    public init(bestFocus: Int, maximum: Int, takeUp: Int,
+                settings: FocusConstellationSettings = try! FocusConstellationSettings()) throws {
+        let range = settings.range
+        guard takeUp > 0, maximum >= range, bestFocus >= range,
+              takeUp <= bestFocus - range, bestFocus <= maximum - range else {
+            throw CameraError.unsupported("The full focus sweep and backlash take-up must fit within focuser travel: best focus −\(range) − take-up through best focus +\(range) steps.")
         }
+        self.settings = settings
         self.bestFocus = bestFocus; self.takeUp = takeUp
-        positions = (0..<Self.count).map { bestFocus - Self.radius + $0 * Self.increment }
+        // Offset from centre to avoid overflowing when valid positions are near Int.max.
+        positions = (-settings.centerIndex...settings.centerIndex).map { bestFocus + $0 * settings.step }
     }
 
     public func moves(for index: Int) -> [Int] {
@@ -75,7 +98,13 @@ public struct FocusConstellationMetadata: Codable, Equatable, Sendable {
     }
 
     public func validate() throws {
-        let plan = try FocusConstellationPlan(bestFocus: bestFocus, maximum: maximum, takeUp: takeUp)
+        guard positions.count >= 3, positions.count <= FocusConstellationSettings.maximumCount,
+              positions.count % 2 == 1, let first = positions.first, let last = positions.last,
+              first >= 0, first < bestFocus, positions[1] > first, bestFocus < last, last <= maximum else {
+            throw CameraError.unsupported("Invalid focus constellation metadata.")
+        }
+        let settings = try FocusConstellationSettings(range: bestFocus - first, step: positions[1] - first)
+        let plan = try FocusConstellationPlan(bestFocus: bestFocus, maximum: maximum, takeUp: takeUp, settings: settings)
         guard kind == "collimation-focus-constellation", schemaVersion == 1, positions == plan.positions,
               sensorWidth > 0, sensorWidth <= 100000, sensorHeight > 0, sensorHeight <= 100000,
               frameCount > 0, exposureMicroseconds > 0,
@@ -113,7 +142,8 @@ public final class FocusConstellationRecording: Sendable {
         let invalid = CameraError.unsupported("Invalid or incomplete focus constellation TIFF.")
         while offset != 0 {
             try Task.checkCancellation()
-            guard offset >= 8, visited.insert(offset).inserted, strips.count < 35 * FocusConstellationPlan.count else { throw invalid }
+            guard offset >= 8, visited.insert(offset).inserted,
+                  strips.count < (metadata.map { $0.targets.count * $0.positions.count } ?? 35 * FocusConstellationSettings.maximumCount) else { throw invalid }
             let count = Int(u16(try read(file, at: offset, count: 2, size: size), 0))
             guard count <= 64 else { throw invalid }
             let directory = try read(file, at: offset + 2, count: count * 12 + 4, size: size)

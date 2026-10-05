@@ -84,6 +84,17 @@ public final class CollimationEngine {
     public var showingConstellation = false
     public private(set) var isLoadingConstellation = false
     public var recordConstellationFocusSweep = false
+    public var constellationFocusSweepRange = FocusConstellationSettings.defaultRange
+    public var constellationFocusSweepStep = FocusConstellationSettings.defaultStep
+    public var constellationFocusSweepSettings: FocusConstellationSettings? {
+        try? FocusConstellationSettings(range: constellationFocusSweepRange, step: constellationFocusSweepStep)
+    }
+    public var constellationFocusSweepWarning: String? {
+        do {
+            _ = try FocusConstellationSettings(range: constellationFocusSweepRange, step: constellationFocusSweepStep)
+            return nil
+        } catch { return error.localizedDescription }
+    }
     public private(set) var isCapturingFocusConstellation = false
     public private(set) var focusConstellationProgress = FocusConstellationProgress()
     public private(set) var isLoadingConstellationFocus = false
@@ -423,7 +434,9 @@ public final class CollimationEngine {
     }
     public var canCenterStar: Bool { canCalibrateMount && isMountCalibrated }
     public var canSaveConstellation: Bool { canCenterStar && !isLoadingConstellation }
-    public var canRecordConstellation: Bool { canSaveConstellation && (!recordConstellationFocusSweep || canAutofocus) }
+    public var canRecordConstellation: Bool {
+        canSaveConstellation && (!recordConstellationFocusSweep || (canAutofocus && constellationFocusSweepSettings != nil))
+    }
     public var canConnectMount: Bool { isMountConnected || (!serialPorts.isEmpty && !isAutofocusing && !isMeasuringTilt && !isCapturingFocusConstellation && !isMountBusy) }
     public var canSelectSerialPort: Bool { !isMountConnected && !isMountBusy }
     public var canRefreshSerialPorts: Bool { canSelectSerialPort }
@@ -674,7 +687,8 @@ public final class CollimationEngine {
         let cell = CaptureLayout.stackingCropSize
         let width = cell * layout.columnCount, height = cell * layout.rowCount
         let pattern = layout == .circular ? "constellation" : "constellation-grid"
-        let label = "\(pattern)\(recordConstellationFocusSweep ? "-focus33" : "")-stack\(frames)"
+        let focus = recordConstellationFocusSweep ? "-focus\(constellationFocusSweepSettings?.count ?? 0)" : ""
+        let label = "\(pattern)\(focus)-stack\(frames)"
         if let frame = frameSlot.peek()?.frame {
             return MonoTIFF.suggestedFileName(
                 width: width,
@@ -848,12 +862,14 @@ public final class CollimationEngine {
     }
 
     private func startFocusConstellation(to url: URL, layout: ConstellationLayout) {
+        guard let sweep = constellationFocusSweepSettings else { return }
         let cancellation = AutofocusCancellation()
         let settings = snapshotAutofocusSettings()
         let frameCount = FrameStacker.clampedCount(stackFrameCount)
         focusConstellationCancellation = cancellation
         focusConstellationProgress = FocusConstellationProgress()
         focusConstellationProgress.stars = layout.positionCount
+        focusConstellationProgress.focusCount = sweep.count
         isCapturingFocusConstellation = true; isStacking = true
         errorMessage = nil; showingConstellation = false
         focuserGeneration &+= 1
@@ -861,7 +877,7 @@ public final class CollimationEngine {
         statusText = "Focus constellation — centring star…"
         applyPipelineConfig()
         stackTask = Task { await runFocusConstellation(to: url, layout: layout, frameCount: frameCount,
-            settings: settings, cancellation: cancellation) }
+            settings: settings, sweep: sweep, cancellation: cancellation) }
     }
 
     public func cancelFocusConstellation() {
@@ -875,7 +891,8 @@ public final class CollimationEngine {
     }
 
     private func runFocusConstellation(to url: URL, layout: ConstellationLayout, frameCount: Int,
-                                      settings: AutofocusSettings, cancellation: AutofocusCancellation) async {
+                                      settings: AutofocusSettings, sweep: FocusConstellationSettings,
+                                      cancellation: AutofocusCancellation) async {
         var startedMount = false
         var completedResult: ConstellationResult?
         defer {
@@ -895,7 +912,8 @@ public final class CollimationEngine {
             let best = try await tiltFocus(cancellation: cancellation, settings: settings)
             autofocusResult = best
             let state = try await autofocusOperation(cancellation: cancellation) { try $0.snapshot() }
-            let plan = try FocusConstellationPlan(bestFocus: best.position, maximum: state.maxPosition, takeUp: settings.takeUp)
+            let plan = try FocusConstellationPlan(bestFocus: best.position, maximum: state.maxPosition,
+                                                 takeUp: settings.takeUp, settings: sweep)
             let metadata = FocusConstellationMetadata(plan: plan, maximum: state.maxPosition, layout: layout,
                 sensorWidth: sensorWidth, sensorHeight: sensorHeight, frameCount: frameCount,
                 exposureMicroseconds: best.exposureMicroseconds, gain: settings.gain, autofocus: best)
@@ -969,7 +987,7 @@ public final class CollimationEngine {
 
     private func focusConstellationStatus(_ action: String) -> String {
         let p = focusConstellationProgress
-        return "Constellation \(p.star)/\(p.stars) · focus \(p.focusIndex + 1)/33 (\(p.focusPosition ?? 0)) — \(action)"
+        return "Constellation \(p.star)/\(p.stars) · focus \(p.focusIndex + 1)/\(p.focusCount) (\(p.focusPosition ?? 0)) — \(action)"
     }
 
     private func prepareFocusConstellationFrames(cancellation: AutofocusCancellation) async throws {
